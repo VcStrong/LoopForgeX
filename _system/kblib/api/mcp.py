@@ -35,6 +35,7 @@ from kblib.plugins.builds import builds_text
 from kblib.tasks.memo import task_item_set, task_items
 from kblib.stack.plan import stack_change_add, stack_plan_submit
 from kblib.stack.dev import stack_report, stack_review
+from kblib.stack.launch import stack_release_submit
 from kblib.infra.hosts import repo_read
 from kblib.steward.chat import propose_push, steward_rule
 from kblib.steward.intake import anr_intake_text
@@ -100,7 +101,8 @@ INSTRUCTIONS = """本地知识库（按「期」管理需求 / 设计图 / 接�
    只读，不要触发构建。崩溃日志版本没有 mapping 时，kb_builds 里同版本构建的 mapping 地址可以下载后用 kb_anr_mapping 归档。
 16. 全栈：一期可以挂多个端（服务端 / Web / iOS / Android / 鸿蒙 / 小程序 / 桌面端，也可以是自定义的端如 Unity）的仓库，仓库可能在远程机器（地址形如 user@host:/path），用 kb_repo_read 只读查看。
    各端开发会话做完用 kb_stack_report 汇报，审查会话用 kb_stack_review 交结论；做的过程中发现要别的端配合、要改需求或契约，用 kb_stack_change 提，不要自己改别的端。
-   网页「出方案」启动的会话最后用 kb_stack_plan 交回需求规格、设计对照、影响分析和接口契约；拍板只能用户本人在网页上点。"""
+   网页「出方案」启动的会话最后用 kb_stack_plan 交回需求规格、设计对照、影响分析和接口契约；拍板只能用户本人在网页上点。
+   新产品（还没有代码）的期：「出发布清单」启动的会话最后用 kb_stack_release 交回发布清单，勾选只能用户在网页上做。"""
 
 S = lambda **props: {'type': 'object', 'properties': props}
 STR = lambda d: {'type': 'string', 'description': d}
@@ -241,8 +243,12 @@ TOOLS = [
      S(iteration=STR('事项名'), item=STR('条目键，如 anr:6c8592be、bug:82613、E001'),
        status=STR('已解决 / 没解决 / 待确认 / 推动中'), conclusion=STR('结论一两句：根因、改了什么、提交号')), ['iteration']),
     ('kb_stack_plan', '全栈方案会话交回「需求规格 + 设计对照 + 影响分析 + 接口契约」（网页「出方案」启动的会话最后调用一次）。交回后等用户在网页上拍板，不要自己拍板。',
-     S(iteration=STR('期名'), plan=STR('方案 JSON 字符串：{摘要, 需求:[{编号 REQ-001, 标题, 描述, 验收:[…], 端, 设计, 来源}], 设计对照:{缺设计, 设计多出, 缺状态, 端不一致, 无法核对}, 各端:[{端, 涉及, 原因, 改动:[…], 工作量, 风险}], 接口:[{方法, 路径, 说明, 类型, 调用端}], 数据:[…], 待确认:[{问题, 建议}]}'),
+     S(iteration=STR('期名'), plan=STR('方案 JSON 字符串：{摘要, 需求:[{编号 REQ-001, 标题, 描述, 验收:[…], 端, 设计, 来源}], 设计对照:{缺设计, 设计多出, 缺状态, 端不一致, 无法核对}, 各端:[{端, 涉及, 原因, 改动:[…], 工作量, 风险, 技术栈/目录/脚手架（新产品模式）}], 工程名（新产品模式）, 接口:[{方法, 路径, 说明, 类型, 调用端}], 数据:[…], 待确认:[{问题, 建议}]}'),
        openapi=STR('OpenAPI 3 YAML 全文（只含新增 / 修改的接口；没有接口留空）')), ['iteration', 'plan']),
+    ('kb_stack_release', '新产品的发布清单会话交回清单（网页「出发布清单」启动的会话最后调用一次）：按端列上线前要做的事，用户逐条勾完这一期才算上线。'
+                         '缺的账号、证书、域名先用 kb_issue 记下。',
+     S(iteration=STR('期名'), items=STR('JSON 列表：[{"端": "服务端", "项": "做什么", "说明": "在哪做、怎么做、怎么确认", "需要": "要用户提供的账号 / 证书，没有留空"}]')),
+     ['iteration', 'items']),
     ('kb_stack_report', '全栈各端开发会话做完时汇报一次（网页「各端开工」启动的会话用）：之后会有独立的审查会话检查。',
      S(iteration=STR('期名'), end=STR('端名：这一期加了的端，如 服务端 / Web / iOS / Android / 鸿蒙 / Unity'), status=STR('完成 / 卡住'), summary=STR('做了什么；卡住的话卡在哪'),
        reqs=STR('JSON：{"REQ-001": "完成", "REQ-002": "部分：原因"}'), evidence=STR('自测证据：编译、测试结果、截图路径'),
@@ -404,6 +410,8 @@ def _call_tool(name, a):
         return task_item_set(g('iteration'), g('item'), g('status') or '', g('conclusion') or '')
     if name == 'kb_stack_plan':
         return stack_plan_submit(g('iteration'), g('plan'), g('openapi') or '')
+    if name == 'kb_stack_release':
+        return stack_release_submit(g('iteration'), g('items'))
     if name == 'kb_stack_report':
         return stack_report(g('iteration'), g('end'), g('status'), g('summary') or '', g('reqs'), g('evidence') or '', g('commits') or '')
     if name == 'kb_stack_change':

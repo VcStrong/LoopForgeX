@@ -28,7 +28,9 @@ from kblib.infra import hosts
 from kblib.ai.devsession import DEV_DIR, _NO_BG, _alive, _dev_env, _dev_result, _notify, _session_id
 from kblib.ai.engines import engine_cmd, engine_popen, role_engine
 from kblib.ai.flows import flow_for, flow_text
-from kblib.stack.plan import _sdir, period_ends, sort_ends
+from kblib.stack.plan import EMPTY_TREE, _sdir, period_ends, refresh_vcs, sort_ends
+from kblib import lazy
+_launch = lazy('kblib.stack.launch')     # 新产品：脚手架还在生成的端先不开工；验收后进入发布
 
 MAX_PAR = 2              # 同时开发的端（审查是只读的，不占这个名额）
 MAX_ROUNDS = 2           # 审查打回后自动改的轮数
@@ -71,6 +73,9 @@ def stack_dev_start(name, only='', by='用户（网页）'):
     if st.get('状态') not in ('已拍板', '开发中', '各端完成'):
         raise KBError('方案还没拍板')
     plan = _plan(d)
+    if refresh_vcs(d, m):
+        m = load_meta(d)
+        st = m.get('全栈') or {}
     ends = period_ends(d, m)
     want = [x['端'] for x in plan['各端'] if x.get('涉及')]
     if only:
@@ -85,7 +90,10 @@ def stack_dev_start(name, only='', by='用户（网页）'):
             skip.append(f'{e}（正在跑）')
             continue
         if e not in ends:
-            skip.append(f'{e}（没选仓库）')
+            skip.append(f'{e}（没选仓库' + ('，先「新建工程」' if m.get('新产品') else '') + '）')
+            continue
+        if _launch.scaffold_busy(m, e):
+            skip.append(f'{e}（脚手架还在生成，好了再开工）')
             continue
         dev[e] = {'状态': '排队中', '轮次': 0, '排队时间': now(), '仓库': ends[e]['仓库'], '分支': ends[e].get('分支', ''), '版本库': ends[e].get('版本库', ''),
                   '会话': cur.get('会话', '') if only else '',
@@ -171,11 +179,12 @@ def _dev_prompt(d, m, end, x, plan, issues=None, todo=''):
     reqs = [r for r in plan.get('需求') or [] if end in (r.get('端') or [])]
     root, branch = x['仓库'], x.get('分支', '')
     svn = x.get('版本库') == 'svn'
+    plain = x.get('版本库') == '本地'
     f = flow_for(m, root) if not hosts.is_remote(root) else None
     steps = flow_text(f, '开发步骤', 期名=d.name, 仓库=root, 分支=branch, 文档目录='', 资料目录='') if f else ''
     server_ok = (m.get('各端开发') or {}).get('服务端', {}).get('状态') == '审查通过' or x.get('联调')
     if issues is not None:
-        return (f'审查会话把 {end} 这一轮打回了（第 {x["轮次"]} 轮），问题如下，逐条改完、自测、{"留在 svn 工作副本里（不要 svn commit）" if svn else "提交"}，再用 kb_stack_report 重新汇报：\n'
+        return (f'审查会话把 {end} 这一轮打回了（第 {x["轮次"]} 轮），问题如下，逐条改完、自测、{"留在 svn 工作副本里（不要 svn commit）" if svn else "留在目录里（不提交）" if plain else "提交"}，再用 kb_stack_report 重新汇报：\n'
                 + '\n'.join(f'- [{i.get("严重度", "")}] {i.get("需求", "")} {i.get("问题", "")}（{i.get("位置", "")}）' for i in issues)
                 + ('\n有不同意见的，在汇报的 summary 里说明理由，不要硬改。' ) + _NO_BG)
     return f"""你是由知识库网页启动的【后台无人值守】{end} 开发会话：期「{d.name}」。终端里没有人，不要在回复里提问，也不要用 AskUserQuestion；
@@ -185,7 +194,7 @@ def _dev_prompt(d, m, end, x, plan, issues=None, todo=''):
 - 需求规格：{_sdir(d) / 'spec.md'}（需求编号 REQ-xxx，验收标准逐条要满足）
 - 接口契约：{cp or '本期不涉及接口'}{f'（{ver}，已锁定；和它不一致的地方不要自己改契约，用 kb_ask 提出）' if cp else ''}
 - 设计稿：kb_period（name=「{d.name}」）里的设计图（PSD 看同名 .png 预览）
-{_vcs_lines(root, branch) if svn else f"""- 仓库：{root}，分支：{branch or '（用仓库当前分支；要新建就按仓库惯例从主干拉，先 kb_ask 确认分支名）'}
+{_PLAIN_LINES.format(root=root) if plain else _vcs_lines(root, branch) if svn else f"""- 仓库：{root}，分支：{branch or '（用仓库当前分支；要新建就按仓库惯例从主干拉，先 kb_ask 确认分支名）'}
   先确认在这个分支上：本地没有就从远端拉；有别人未提交的改动不要 reset / stash，用 kb_ask 问。"""}
 {('- 待办：' + todo) if todo else ''}
 你这个端要做的（拍板方案里的改动）：
@@ -196,7 +205,9 @@ def _dev_prompt(d, m, end, x, plan, issues=None, todo=''):
 约定：
 - {'服务端已经做完并通过审查，客户端可以直接接真实接口。' if server_ok or end == '服务端' else '服务端接口可能还没做好：客户端先按接口契约写 mock（优先用项目已有的 mock 方式），做成一键切换，联调时再切真实接口。'}
 - 服务端：按契约实现接口和数据变更，写接口测试（至少覆盖契约里的每个接口的成功和主要错误码）。
-{_SVN_RULE if svn else '- 提交按仓库惯例，提交说明里带需求编号（如 feat(xxx): … REQ-001）；不要 push；只改这个端的仓库。'}
+{_PLAIN_RULE if plain else _SVN_RULE if svn else '- 提交按仓库惯例，提交说明里带需求编号（如 feat(xxx): … REQ-001）；只改这个端的仓库。\n'
+ '- 【不要 git push，不要加 / 改 remote】：推送由用户验收时知识库统一做（远端在网页「全栈 → 各端 → 推送到」里填）。'
+ '用户要求推到某个仓库时，回复「验收时由知识库推送，请在「全栈 → 各端」填推送地址」，不要自己去推。'}
 - 做的过程中发现：需求得改、别的端也必须配合 / 兼容、接口契约得改、方案漏了东西——不要自己去改别的端或契约，
   用 kb_stack_change（iteration=「{d.name}」，from_end={end}）提出来（说清为什么、影响哪些端），然后继续做不受影响的部分；
   用户拍板后你会收到要补做的内容。
@@ -207,6 +218,10 @@ reqs 每个需求的完成度（完成 / 部分 / 没做 + 原因）；evidence 
 
 _SVN_RULE = ('- 这是 svn 工作副本：【不要 svn commit】（svn 一提交就直接进服务器，要等审查通过、用户验收后由知识库统一提交）；'
              '新文件 svn add、删文件 svn delete、改名 svn move，让 svn status 能看到全部改动；不要 svn revert 不是你改的文件；只改这个端的仓库。')
+
+
+_PLAIN_LINES = '- 目录：{root}（不是 git / svn 的本地目录，没有分支；直接在这里改文件，不要 git init / svn checkout）'
+_PLAIN_RULE = ('- 这个目录没有版本管理：改完直接留在目录里，不要提交、不要建版本库；汇报时 summary 里逐个列出改了 / 新增 / 删除了哪些文件（commits 留空），审查会话按这个清单看。只改这个端的目录。')
 
 
 def _vcs_lines(root, branch):
@@ -249,6 +264,9 @@ def _start_dev(d, end):
     issues = (x.get('审查') or {}).get('问题') if x['状态'] == '打回修改' else None
     if not x.get('版本库'):
         x['版本库'] = hosts.vcs(root) or 'git'
+    if x['版本库'] == '本地' and not x.get('起点'):        # 不是版本库的本地目录：不更新代码，记下开工时间，审查按修改时间找改动
+        x['起点'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        log(d, '更新代码', f'{end} 开发前：本地目录（不是 git / svn），不更新')
     if not x.get('起点'):
         # 开发前更新代码：只在这一端第一次开工时合并（之后各轮只 fetch，免得别人的提交混进「起点..HEAD」让审查看错）
         up = hosts.sync(root, x['版本库'], branch=x.get('分支', ''))
@@ -298,6 +316,11 @@ issues：[{{"需求": "REQ-001", "严重度": "高/中/低", "问题": "…", "�
 
 
 def _review_diff(x):
+    if x.get('版本库') == '本地':
+        t = x.get('起点') or ''
+        return (f"- 这次的改动：{x['仓库']} 不是 git / svn，没有 diff。用 find {shlex.quote(x['仓库'])} -type f -newermt '{t}' "
+                "-not -path '*/node_modules/*' -not -path '*/build/*' -not -path '*/.*' 找开工后改过的文件，"
+                f"再对照开发会话汇报里列的文件逐个看（开工时间 {t}）。")
     if x.get('版本库') != 'svn':
         return f"- 这次的改动：仓库 {x['仓库']}，git diff {x.get('起点') or 'HEAD~1'}..HEAD（先 git log --oneline {x.get('起点') or 'HEAD~1'}..HEAD 看提交）"
     pre = x.get('原有改动') or []
@@ -517,13 +540,21 @@ def stack_accept(name, by='用户（网页）'):
     st = m.get('全栈') or {}
     if st.get('状态') != '各端完成':
         raise KBError('各端还没都结束')
+    if refresh_vcs(d, m):
+        m = load_meta(d)
+        st = m.get('全栈') or {}
     plan = _plan(d)
     ev = evidence(d, m, plan) or {}
     done = _publish_ends(d, m, plan)               # 验收才进服务器：git 推送、svn 提交（失败就不验收，处理后再点）
     st.update(状态='已验收', 验收时间=now(), 验收人=by, 验收时全部通过=ev.get('全部通过', False))
     m['全栈'] = st
+    newp = bool(m.get('新产品'))
+    if newp and not m.get('发布'):
+        _launch.release_mark(d, m)              # 新产品：验收后还要发布，发布清单勾完才算上线
     save_meta(d, m)
     log(d, '全栈', f'验收（拍板 2）' + ('' if ev.get('全部通过') else '：有没完全通过的需求，带着问题验收') + f'（{by}）')
+    if newp:
+        return '已验收' + (f'；{"；".join(done)}' if done else '') + '；下一步：点「📦 出发布清单」，清单勾完这一期才算上线'
     if m.get('状态') != '已完成':
         set_status(d.name, '已完成', '全栈验收通过（本人）', by_human=True)
     return '已验收，这一期标为已完成' + (f'；{"；".join(done)}' if done else '') + '；后续 Bug 照常同步、分析、修复'
@@ -538,7 +569,7 @@ def _git_push_end(d, e, x):
         raise KBError(f'{e}：仓库不在任何分支上（游离 HEAD），不知道推哪个分支；切到开发分支后再验收')
     if g('rev-parse', '--verify', '--quiet', f'refs/heads/{b}').returncode:
         raise KBError(f'{e}：本地没有分支 {b}')
-    n = g('rev-list', '--count', f'{x["起点"]}..refs/heads/{b}').stdout.strip() if x.get('起点') else '1'
+    n = g('rev-list', '--count', f'refs/heads/{b}' if x.get('起点') == EMPTY_TREE else f'{x["起点"]}..refs/heads/{b}').stdout.strip() if x.get('起点') else '1'
     if n == '0':
         x['已推送'] = '无改动'
         return f'{e}（git）分支 {b} 没有新提交，不用推送'
@@ -548,7 +579,7 @@ def _git_push_end(d, e, x):
         x['已推送'] = '没有远端'
         return f'{e}（git）仓库没有远端，没推送（{n} 个提交留在本地 {b}）'
     up = hosts.git_catch_up(root, remote, b)                 # 推代码前更新：远端有新提交先 rebase 上去
-    r = hosts.run(root, f'GIT_TERMINAL_PROMPT=0 git push -u {remote} refs/heads/{b}:refs/heads/{b}', timeout=300)
+    r = hosts.run(root, f'GIT_TERMINAL_PROMPT=0 git push --follow-tags -u {remote} refs/heads/{b}:refs/heads/{b}', timeout=300)
     if r.returncode:
         err = (r.stderr or r.stdout).strip()[-600:]
         hint = ('远端有别人的新提交：先在仓库里 git pull --rebase，解决冲突后再验收' if any(k in err for k in ('rejected', 'fetch first', 'non-fast-forward'))
@@ -566,6 +597,11 @@ def _publish_ends(d, m, plan):
     逐端保存，失败后重点验收会跳过已推送 / 已提交的。"""
     out = []
     for e, x in (m.get('各端开发') or {}).items():
+        if x.get('版本库') == '本地':
+            if not x.get('已推送'):
+                x['已推送'] = '本地目录'
+                out.append(f'{e}（本地目录）改动留在目录里，不用推送')
+            continue
         if x.get('版本库') != 'svn':
             if x.get('已推送'):
                 continue

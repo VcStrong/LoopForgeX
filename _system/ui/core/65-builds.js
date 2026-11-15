@@ -8,7 +8,8 @@ async function buildBox(name,fresh){
   if(!$('#buildBox')||curPeriod()!==name)return;
   const n=v['任务'].reduce((a,j)=>a+j['构建'].length,0),tb=document.querySelector('[data-tab="build"]');
   if(tb&&n)tb.innerHTML=`构建<span class="n">${n}</span>`;
-  if(!v['插件']){box.innerHTML=`<div class="mut small">还没有挂载构建插件。把 Jenkins 地址填进「◈ 基础信息」（字段「地址」，如 http://jenkins.example.com/jenkins），再到「⚙ 设置 → 插件 → Jenkins」挂载并选这个条目；之后每一期按分支自动对应 Jenkins 任务。</div>`;return}
+  if(!v['插件']){app.querySelectorAll('[data-tab="build"],[data-pane="build"]').forEach(x=>x.style.display='none');   // 没挂构建插件：不显示这个页签（安装说明在「⚙ 设置 → 插件」）
+    box.innerHTML=`<div class="mut small">还没有挂载构建插件。把 Jenkins 地址填进「◈ 基础信息」（字段「地址」，如 http://jenkins.example.com/jenkins），再到「⚙ 设置 → 插件 → Jenkins」挂载并选这个条目；之后每一期按分支自动对应 Jenkins 任务。</div>`;return}
   const art=(b,k)=>b['产物'].filter(a=>a['类型']===k);
   const row=b=>{const r=BRES[b['进行中']?'进行中':b['结果']]||['',b['结果']||'?'],apk=art(b,'安装包'),mp=art(b,'mapping')[0],qr=art(b,'二维码')[0];
     return `<tr><td><a href="${esc(b['地址'])}" target="_blank" rel="noopener" class="mono">#${b['编号']}</a></td><td><span class="badge ${r[0]}">${esc(r[1])}</span></td>

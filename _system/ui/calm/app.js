@@ -23,7 +23,7 @@
     '安静': { k: 'quiet', c: ['#2dd4bf', '#4ade80', '#38bdf8'], t: '安静' },
   };
   const PHASES = ['收集资料', '方案拍板', '并行开发', '验收上线', '线上维护'];
-  const phaseOfStep = s => !s ? 4 : s === '资料' ? 0 : ['选仓库', '出方案', '拍板', '开始开发'].includes(s) ? 1 : ['开发', '开发中'].includes(s) ? 2 : 3;
+  const phaseOfStep = s => !s ? 4 : s === '资料' ? 0 : ['选仓库', '完善需求', '出方案', '拍板', '建工程', '开始开发'].includes(s) ? 1 : ['开发', '开发中'].includes(s) ? 2 : 3;
   const PHASE_DOCK = ['ask', 'proj', 'proj', 'proj', 'issue'];   // 每个阶段最相关的坞入口
 
   const periods = () => (SITE && SITE['期']) || [];

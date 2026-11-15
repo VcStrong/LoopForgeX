@@ -193,9 +193,30 @@ def flow_matches(f, root):
     return all((Path(root) / x).exists() for x in f.get('识别文件') or [])
 
 
-def flow_for(m, root):
-    """这个仓库用哪套流程：这一期选定的 > 事项默认轻量流程 > 工程的默认流程 > 识别文件对得上的（默认流程优先）> 不要求识别文件的默认流程。
-    对不上返回 None。"""
+def _same_dir(a, b):
+    try:
+        return str(Path(a).expanduser().resolve()) == str(Path(b).expanduser().resolve())
+    except (OSError, TypeError):
+        return str(a) == str(b)
+
+
+def end_flow(m, root):
+    """这个仓库在这一期「全栈 → 各端」里所在的端，单独选了哪套流程（没选 / 流程被删了 → None）。"""
+    for v in (m.get('各端') or {}).values():
+        if v.get('流程') and v.get('仓库') and root and _same_dir(v['仓库'], root):
+            try:
+                return get_flow(v['流程'])
+            except KBError:
+                return None
+    return None
+
+
+def flow_for(m, root, by_end=True):
+    """这个仓库用哪套流程：所在端选的（全栈 → 各端）> 这一期统一指定的（老数据）> 事项默认轻量流程 > 工程的默认流程
+    > 识别文件对得上的（默认流程优先）> 不要求识别文件的默认流程。对不上返回 None。by_end=False：不看端选的（算「自动」是什么）。"""
+    f = end_flow(m, root) if by_end else None
+    if f:
+        return f                                   # 本人按端选的：不再要求识别文件
     if not m.get('开发流程') and is_task(m):
         return get_flow(TASK_FLOW)
     if m.get('开发流程'):
@@ -222,7 +243,10 @@ def _repo_flow(root):
 
 
 def period_flow(m):
-    """还没定仓库时用的流程（开发包、需求变更提醒）：这一期选定的 > 上次开发用的 > 事项轻量 > 开发仓库的默认流程 > 全局默认。"""
+    """还没定仓库时用的流程（开发包、需求变更提醒）：开发仓库所在端选的 > 这一期统一指定的 > 上次开发用的 > 事项轻量 > 开发仓库的默认流程 > 全局默认。"""
+    f = end_flow(m, m.get('开发仓库')) if m.get('开发仓库') else None
+    if f:
+        return f
     for fid in (m.get('开发流程'), (m.get('开发会话') or {}).get('流程'), TASK_FLOW if is_task(m) else ''):
         if fid:
             try:

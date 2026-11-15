@@ -23,6 +23,16 @@ def _post_api_stack_end(self, u, n, body):
     return self._guard(lambda: {'msg': kb.stack_set_end(body.get('period', ''), body.get('end', ''), body.get('repo', ''), body.get('branch', ''))})
 
 
+@post('/api/stack/remote', page_only=True)
+def _post_api_stack_remote(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.stack_set_remote(body.get('period', ''), body.get('end', ''), body.get('url', ''))})
+
+
+@post('/api/stack/flow', page_only=True)
+def _post_api_stack_flow(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.stack_set_flow(body.get('period', ''), body.get('end', ''), body.get('flow', ''))})
+
+
 @post('/api/stack/plan', page_only=True)
 def _post_api_stack_plan(self, u, n, body):
     return self._guard(lambda: {'msg': kb.stack_plan_start(body.get('period', ''), body.get('note', ''))})
@@ -53,6 +63,54 @@ def _post_api_stack_stop(self, u, n, body):
     return self._guard(lambda: {'msg': kb.stack_dev_stop(body.get('period', ''), body.get('end', ''))})
 
 
+@post('/api/stack/answer', page_only=True)
+def _post_api_stack_answer(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.stack_answer(body.get('period', ''), body.get('idx'), body.get('mode', ''), body.get('text', ''))})
+
+
 @post('/api/stack/approve', page_only=True)
 def _post_api_stack_approve(self, u, n, body):
     return self._guard(lambda: {'msg': kb.stack_approve(body.get('period', ''))})
+
+
+# ---------------- 新产品：完善需求、建工程、发布（kblib/stack/launch.py）
+@post('/api/stack/newproduct', page_only=True)
+def _post_api_stack_newproduct(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.stack_new_product(body.get('period', ''), body.get('on', True) is not False)})
+
+
+@post('/api/stack/prd', page_only=True)
+def _post_api_stack_prd(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.stack_prd_start(body.get('period', ''), body.get('note', ''), bool(body.get('skip')))})
+
+
+@get('/api/stack/newdir')
+def _get_api_stack_newdir(self, u, q):
+    return self._guard(lambda: {'dir': kb.default_dir(q.get('name', ''), q.get('end', ''))})
+
+
+@post('/api/stack/create', page_only=True)
+def _post_api_stack_create(self, u, n, body):
+    if body.get('retry'):
+        return self._guard(lambda: {'msg': kb.stack_scaffold_start(body.get('period', ''), body.get('end', ''))})
+    return self._guard(lambda: {'msg': kb.stack_new_project(body.get('period', ''), body.get('end', ''), body.get('parent', ''), body.get('dir', ''))})
+
+
+@get('/api/stack/dirkind')
+def _get_api_stack_dirkind(self, u, q):
+    return self._guard(lambda: kb.stack_dir_kind(q.get('path', '')))
+
+
+@post('/api/stack/gitinit', page_only=True)
+def _post_api_stack_gitinit(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.stack_git_init(body.get('path', ''))})
+
+
+@post('/api/stack/release', page_only=True)
+def _post_api_stack_release(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.stack_release_start(body.get('period', ''))})
+
+
+@post('/api/stack/release/check', page_only=True)
+def _post_api_stack_release_check(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.stack_release_check(body.get('period', ''), body.get('id', ''), body.get('done', True) is not False)})

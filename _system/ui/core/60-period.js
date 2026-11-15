@@ -9,7 +9,7 @@ function guideHtml(g){
 async function period(name){
   const d=await api('/api/period?name='+enc(name)), m=d.meta;
   if(!periodNames.length){try{sideNav(await api('/api/overview'))}catch(_){}}
-  const isTask=m['类型']==='事项';
+  const isTask=m['类型']==='事项',stackP=!isTask&&!!(m['全栈']||Object.keys(m['各端']||{}).length);   // 全栈期：开发在「全栈」里，不用单端的开始开发
   if(isTask&&(m['外部来源']||[]).length&&!fullView[d.name])return pushPage(d);
   if(isTask&&!fullView[d.name])return memoPage(d.name);
   const hist=m['状态历史']||[];
@@ -38,9 +38,9 @@ async function period(name){
       ${!items.length&&!ns.length?'<div class="mut small">暂无</div>':''}
       <div class="drop" data-cat="${esc(c)}">拖文件 / 链接 / 文字到这里，或点击选择文件</div></div></div>`;
   };
-  const tabs=[['dev','开发',(m['待确认']||[]).filter(q=>q['状态']==='待回答').length+((m['非阻断问题']||[]).filter(q=>q['状态']==='待处理').length)],
+  const tabs=[['dev',stackP?'确认与问题':'开发',(m['待确认']||[]).filter(q=>q['状态']==='待回答').length+((m['非阻断问题']||[]).filter(q=>q['状态']==='待处理').length)],
     ['mat','资料',d.cats.reduce((a,c)=>a+d.materials[c].length+d.notes[c].length,0)],
-    ['stack','全栈',m['全栈']&&m['全栈']['状态']==='待拍板'?1:0],
+    ['stack','全栈',m['全栈']&&m['全栈']['状态']==='待拍板'?1:0],   // 待拍板时 stackBox 换成还没确认的待确认条数
     ['build','构建',0],
     ['bug','Bug',(d.bugs||[]).filter(b=>b['状态']!=='已关闭').length],
     ['log','记录',d.log.length]];
@@ -56,9 +56,9 @@ async function period(name){
   const pend=(m['来源']||[]).filter(x=>x['核对']!=='已核对').length;
   app.innerHTML=`<div class="pagehead"><div style="min-width:0"><div class="crumb"><a href="#/">总览</a> / ${isTask?(((ovPeriods.find(p=>p.name===name)||{}).batch||{})['来源']==='anr'?'<a href="#/anr">💥 ANR / 崩溃</a> / 批次':'事项'):'期'}${isTask?` · <a id="toPush">← ${(m['外部来源']||[]).length?'回到原始内容':'回到简洁版'}</a>`:''}</div>
       <h1>${esc(d.name)} ${badge(m['状态'])}${isTask?` <span class="badge st-收集中">${esc(m['事项类型']||'其他')}</span> <span class="badge ${PRI_C[m['优先级']]||''}">优先级 ${esc(m['优先级']||'中')}</span>`:''}</h1><div class="mut">${esc(m['说明']||'')}${isTask&&m['来自']?`　<span class="small">来自：${esc(m['来自'])}</span>`:''}${isTask?` <a class="small" id="tkEdit">✎ 编辑</a>`:''}</div>
-      <div class="pmeta">${branches.length?`<span>🌿 开发分支 ${branches.map(n=>`<b class="mono">${esc(noteTitle(n))}</b>`).join('；')}</span>`:''}
+      <div class="pmeta">${stackP?`<span>各端 ${Object.entries(m['各端']||{}).map(([e,x])=>`<b>${esc(e)}</b> <span class="mono">${esc(String(x['仓库']||'').replace(/^\/Users\/[^/]+/,'~'))}${x['分支']?' · '+esc(x['分支']):''}</span>`).join('，')||'<span class="mut">还没有加端</span>'}</span>`:`${branches.length?`<span>🌿 开发分支 ${branches.map(n=>`<b class="mono">${esc(noteTitle(n))}</b>`).join('；')}</span>`:''}
         ${m['开发仓库']?`<span>仓库 <span class="mono">${esc(m['开发仓库'].replace(/^\/Users\/[^/]+/,'~'))}</span></span>`:''}
-        <span>关联仓库 ${esc((m['关联仓库']||[]).join('、')||'无')}</span><span class="mono" title="这一期的资料目录">${esc(d.dir.replace(/^\/Users\/[^/]+/,'~'))}</span></div></div>
+        <span>关联仓库 ${esc((m['关联仓库']||[]).join('、')||'无')}</span>`}<span class="mono" title="这一期的资料目录">${esc(d.dir.replace(/^\/Users\/[^/]+/,'~'))}</span></div></div>
     <div class="row"><span class="pview" title="分栏：按分类切换；整页：所有内容一页看完，按流程先后排，正在进行的放最上面"><button data-pv="tab" class="${whole?'':'on'}">▤ 分栏</button><button data-pv="whole" class="${whole?'on':''}">☰ 整页</button></span><label class="small mut" for="stSel">状态</label><select id="stSel">${[...new Set([m['状态'],'收集中','开发中','已完成','已暂停'])].map(s=>`<option ${s===m['状态']?'selected':''}>${s}</option>`).join('')}</select><button id="fixLink" title="设计稿、文档地址给错了：所有地方一起换成正确链接">✎ 更正链接</button><button class="danger" id="delP" title="没用的${isTask?'事项':'期'}：从知识库里整个删掉">🗑 删除</button></div></div>
     ${d.guide?guideHtml(d.guide):`<div class="steps">${steps}</div>${notice}`}
     <div class="card2 talk"><div class="bd">
@@ -72,7 +72,7 @@ async function period(name){
         <label class="small row" id="tkIntL" style="color:var(--fg)" hidden><input type="checkbox" id="tkWait"> 等开发会话这一步做完再插入</label></div>
       <div class="mut small" id="tkHint" style="margin-top:4px"></div>
       <div class="chat" id="tkMsgs"></div>
-      <details id="tkActD" style="margin-top:6px"><summary class="small"><b>最近动作</b> <span class="mut" id="tkActN"></span>　<a id="tkAll">查看全部开发记录</a></summary><div class="act" id="tkActs"></div></details>
+      <details id="tkActD" style="margin-top:6px"><summary class="small"><b>终端</b>　<a class="tseg on" data-tv="ai" title="AI 会话执行的命令和动作（只读）">AI 动作<span class="mut" id="tkActN"></span></a>　<a class="tseg" data-tv="me" title="你自己的交互式终端：在这一期各端仓库里直接敲命令（AI 被拦、要登录、要推送时用）">⌨ 我的终端<span class="mut" id="tmN"></span></a>　<a id="tkAll">查看全部开发记录</a></summary><div class="act" id="tkActs"></div><div id="tmBox" hidden></div></details>
     </div></div>
     <div class="${whole?'pwhole':''}" style="display:flex;flex-direction:column"><nav class="ptabs" style="order:-1">${(whole?order.map(k=>tabs.find(x=>x[0]===k)):tabs).map(([k,t,n])=>`<a class="ptab ${k===tab&&!whole?'on':''}" data-tab="${k}">${t}${n?`<span class="n${k==='dev'&&n?' w':''}">${n}</span>`:''}${k==='mat'&&pend?`<span class="n w" title="来源核对">${pend} 待核对</span>`:''}</a>`).join('')}</nav>
     <div data-pane="dev" style="order:${order.indexOf('dev')}" ${whole||tab==='dev'?'':'hidden'}>${secHd('dev')}<div class="dev" id="devBox">${devCache.name===d.name?devCache.html:'<span class="mut">开发面板加载中…</span>'}</div></div>
@@ -91,7 +91,7 @@ async function period(name){
     app.querySelectorAll('[data-tab]').forEach(x=>x.classList.toggle('on',x===a));app.querySelectorAll('[data-pane]').forEach(x=>x.hidden=x.dataset.pane!==a.dataset.tab)});
   const gb=$('#gGo');if(gb)gb.onclick=()=>{const k=(gb.dataset.to||'').replace('tab:','');if(!k)return;
     if(whole){const p=app.querySelector(`[data-pane="${k}"]`);if(p)p.scrollIntoView({behavior:'smooth',block:'start'})}else{const a=app.querySelector(`[data-tab="${k}"]`);if(a)a.click()}};
-  devBox(d.name);talkBind(d.name);buildBox(d.name);stackBox(d.name);
+  devBox(d.name);talkBind(d.name);termBind(d.name);buildBox(d.name);stackBox(d.name);
   bindBugs(app);
   app.querySelectorAll('[data-read]').forEach(a=>a.onclick=()=>a.dataset.dir?toast('目录：请在 Finder 或让 Claude 查看'):readFile(a.dataset.read));
   app.querySelectorAll('[data-img]').forEach(a=>a.onclick=()=>showImg(a.dataset.img,d));

@@ -355,6 +355,8 @@ def set_status(period, status, note='', by_human=False):
     if not by_human:
         if status == '已批准开发':
             raise KBError('「已批准开发」只能由用户本人在终端运行 kb approve 设置，AI 不能代为批准。')
+        if status == '已完成' and not is_task(m) and (m.get('全栈') or m.get('各端')):
+            raise KBError('全栈期的「已完成」由用户在网页上验收（新产品是发布清单勾完）决定，AI 不能改；做完用 kb_stack_report 汇报就行')
         allowed = {'开发中': ('已批准开发', '开发中'), '已完成': ('开发中',)}
         if status in allowed and cur not in allowed[status]:
             raise KBError(f'当前状态是「{cur}」，不能直接改为「{status}」。')

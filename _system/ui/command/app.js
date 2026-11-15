@@ -321,7 +321,7 @@
 
   // ───────────────────────────────────────────── 工作区：面包屑 + 建议 + 需要你判断
   const PAGE = { '/bugs': ['🐞', 'Bug'], '/anr': ['💥', 'ANR / 崩溃'], '/phones': ['▯', '手机'], '/base': ['◈', '基础信息'], '/settings': ['⚙', '设置'], '/classic': ['▦', '经典总览'] };
-  const SECS = { mat: ['资料', '需求、设计稿、接口、其他资料，来源核对'], stack: ['全栈', '选仓库 → 出方案 → 拍板 → 开工 → 验收'], dev: ['开发', '开发会话、AI 的提问、问题、复测'], build: ['构建', '安装包、mapping、各次构建'], bug: ['Bug', '归到这里的 Bug 和 AI 的只读分析'], log: ['记录', '这一期发生过的每件事'] };
+  const SECS = { mat: ['资料', '需求、设计稿、接口、其他资料，来源核对'], stack: ['全栈', '选仓库（新产品：完善需求）→ 出方案 → 拍板 → 开工 → 验收 → 发布'], dev: ['开发', '开发会话、AI 的提问、问题、复测'], build: ['构建', '安装包、mapping、各次构建'], bug: ['Bug', '归到这里的 Bug 和 AI 的只读分析'], log: ['记录', '这一期发生过的每件事'] };
   function crumbs(h) {
     const c = [['首页', '#/']];
     if (h.startsWith('/p/')) {
@@ -402,7 +402,7 @@
     if (k === cur) return 'cur';
     const st = (p && p['步骤']) || [], done = n => (st.find(s => s['名称'] === n) || {})['状态'] === 'done';
     if (k === 'mat' && done('资料')) return 'done';
-    if (k === 'stack' && p && p['流程'] === '全栈' && done('验收')) return 'done';
+    if (k === 'stack' && p && p['流程'] === '全栈' && done('验收') && (!st.some(s => s['名称'] === '发布') || done('发布'))) return 'done';
     return '';
   }
   function openSec(k, scroll) {

@@ -109,6 +109,21 @@ def check_repo(loc):
     return (f'ssh://{r["主机"]}:{r["端口"]}{top}' if r['端口'] else f'{r["主机"]}:{top}')
 
 
+def check_dir(loc):
+    """全栈各端用：git 仓库 / svn 工作副本照旧（→ 版本库, 仓库根）；都不是但目录存在 → ('本地', 目录)，AI 直接改文件、不提交不推送。"""
+    kind, top = _top(loc)
+    r = parse(loc)
+    if kind:
+        root = top
+    else:
+        p = run(loc, 'pwd -P')                      # 目录不存在 / 远程连不上，run 里报
+        root = p.stdout.strip() or r['路径']
+        kind = '本地'
+    if not r['远程']:
+        return kind, root
+    return kind, (f'ssh://{r["主机"]}:{r["端口"]}{root}' if r['端口'] else f'{r["主机"]}:{root}')
+
+
 def head(loc, kind=''):
     """当前版本：git 提交号 / svn 工作副本版本号。"""
     kind = kind or vcs(loc)

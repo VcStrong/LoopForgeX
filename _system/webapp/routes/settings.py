@@ -8,7 +8,7 @@ def _get_api_settings(self, u, q):
     return self._guard(lambda: {'flows': kb.flows(), 'fields': kb.FLOW_FIELDS, 'vars': kb.FLOW_VARS,
                                 'engines': [dict(e, 状态=kb.engine_status(e), 接入说明=kb.engine_link_help(e))
                                             for e in kb.engines()],
-                                'roles': kb.role_engines(),
+                                'roles': kb.role_engines(), 'term': kb.term_enabled(),
                                 'engineFields': kb.ENGINE_FIELDS, 'engineVars': kb.ENGINE_VARS,
                                 'plugins': kb.plugins(), 'pluginEvents': kb.PLUGIN_EVENTS,
                                 'pluginEnv': kb.PLUGIN_ENV, 'pluginDir': str(kb.PLUGIN_DIR),

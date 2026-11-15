@@ -60,20 +60,23 @@ async function devBox(name){
   const ae=document.activeElement,sb=$('#sessBar');if(box.dataset.sig&&ae&&(box.contains(ae)&&ae.matches('textarea,input')||sb&&sb.contains(ae)&&ae.matches('select'))){devPending=name;return}   // 正在填回答，填完再刷新
   const keep={};box.querySelectorAll('details[data-k]').forEach(x=>keep[x.dataset.k]=x.open);
   const oa=box.querySelector('.act'),oTop=oa?oa.scrollTop:0,oH=oa?oa.scrollHeight:0;
-  const s=v['会话'],run=s&&s['状态']==='运行中',pg=v['进度'];
+  const s=v['会话'],run=s&&s['状态']==='运行中',SP=!!v['全栈期'],legacy=s&&s['类型']!=='复测',pg=SP&&!legacy?null:v['进度'];
   const pend=v['待确认'].filter(q=>q['状态']==='待回答'),done=v['待确认'].filter(q=>q['状态']!=='待回答').reverse();
-  const sess=!s?'<span class="mut">还没有启动过后台开发</span>':run?`<span class="badge st-开发中">● 后台${s['类型']==='复测'?'复测':'开发'}中</span> <span class="small mut">已运行 <span data-since="${esc(s['开始时间'])}">${since(s['开始时间'])}</span> · ${esc((s['仓库']||'').split('/').pop())} · ${esc(s['分支']||'')} · ${esc(s['权限']||'')}${s['续跑次数']?' · 已自动续跑 '+s['续跑次数']+' 次':''}</span>`
+  const spRun=SP?((v['在跑']||[]).length?`<a id="dvToStack" title="到「全栈」看各端进度">${v['在跑'].map(x=>`<span class="badge st-开发中">● ${esc(x)}</span>`).join(' ')}</a>`:'<span class="mut">现在没有 AI 在跑</span>'):'';
+  const sess=SP&&!run&&!legacy?spRun:!s?'<span class="mut">还没有启动过后台开发</span>':run?`<span class="badge st-开发中">● 后台${s['类型']==='复测'?'复测':'开发'}中</span> <span class="small mut">已运行 <span data-since="${esc(s['开始时间'])}">${since(s['开始时间'])}</span> · ${esc((s['仓库']||'').split('/').pop())} · ${esc(s['分支']||'')} · ${esc(s['权限']||'')}${s['续跑次数']?' · 已自动续跑 '+s['续跑次数']+' 次':''}</span>`
     :`<span class="badge st-${s['状态']==='已结束'&&!s['出错']&&!s['退出码']?'已完成':'已暂停'}">${esc(s['状态'])}</span> <span class="small mut">${esc(s['结束时间']||'')}${s['退出码']?' · 退出码 '+s['退出码']:''}${s['费用']?' · $'+(+s['费用']).toFixed(2):''}${s['续跑次数']?' · 自动续跑 '+s['续跑次数']+' 次':''}</span>${s['未续跑原因']?`<div class="small" style="color:var(--warn)">${esc(s['未续跑原因'])}</div>`:''}`;
   const can=!['已完成'].includes(v['状态']);
   const rt=v['复测']||{},ts2=rt['测试'],plan=rt['待复测'],phones=v['设备'];
   const freeN=phones?phones.filter(x=>x['空闲']||x['本期']).length:0;
-  const btn=(run?`<button class="danger" id="dvStop">■ 停止${s['类型']==='复测'?'复测':'开发'}</button>`:can?`<button class="pri" id="dvStart">▶ ${s?'继续开发':'开始开发'}</button>`:'')
+  const btn=(run?`<button class="danger" id="dvStop">■ 停止${s['类型']==='复测'?'复测':'开发'}</button>`
+      :SP&&!legacy?`<a class="small" id="dvToStack2" title="全栈期：各端按拍板的方案开发、互相审查">${['开发中','各端完成','已验收'].includes(v['全栈状态'])?'各端进度、证据包在「全栈」→':'开发在「全栈」：拍板后 ▶ 各端开工 →'}</a>`
+      :can?`<button class="pri" id="dvStart">▶ ${s?'继续开发':'开始开发'}</button>`:'')
     +(!run&&ts2?'<button id="dvRetest" title="开发时手机不够、没连手机等没测成的 case，条件具备后补测">🔁 复测</button>':'');
   const URG=['设备不足','账号','环境'],KINDS=['设备不足','账号','环境','未验证','待排查','工具链','其他'];
   const iss=v['非阻断问题']||[],openI=iss.filter(x=>x['状态']==='待处理'),doneI=iss.filter(x=>x['状态']!=='待处理').reverse();
   const issCard=x=>`<div class="iss${x['状态']==='待处理'?'':' done'}" data-i="${esc(x['编号'])}"><div class="row" style="gap:6px;align-items:baseline"><b style="flex:1">${esc(x['标题'])}</b>
     <span class="mut small">${esc(x['编号'])} · ${esc(x['来源'])}${x['状态']!=='待处理'?' · '+esc(x['状态']):''}</span>
-    ${x['状态']==='待处理'?'<button data-is="已处理">✓ 已处理</button><button data-is="已忽略">忽略</button>':'<button data-is="待处理">恢复</button>'}</div>
+    ${x['状态']==='待处理'?`${['工具链','环境','账号','其他'].includes(x['类型'])?'<button data-iterm="1" title="打开「我的终端」（目录是这一期的仓库），自己敲命令处理">⌨ 去终端处理</button>':''}<button data-is="已处理">✓ 已处理</button><button data-is="已忽略">忽略</button>`:'<button data-is="待处理">恢复</button>'}</div>
     ${x['详情']?`<details class="small"><summary class="mut">详情</summary><div class="md">${md(x['详情']).html}</div></details>`:''}</div>`;
   const issHtml=iss.length?`<details data-k="iss" ${openI.some(x=>URG.includes(x['类型']))?'open':''} style="margin-top:12px">
     <summary class="small"><b style="color:var(--warn)">⚠ 不阻断开发、需要你处理的问题</b>（待处理 ${openI.length}${doneI.length?' · 已处理 '+doneI.length:''}）<span class="mut">　手机不够、缺账号、环境不满足等；处理好后点「🔁 复测」补测</span></summary>
@@ -120,13 +123,13 @@ async function devBox(name){
     ${t['审查发现']?`<details class="small"><summary>代码审查发现</summary>${esc(t['审查发现']).split(' | ').join('<br>')}</details>`:''}
     ${ts['报告'].length||pg['审查报告'].length?`<div class="small" style="margin-top:4px">报告：${ts['报告'].map(f=>fileLink(f)).concat(pg['审查报告'].map(f=>fileLink(f))).join('　')}</div>`:''}
     <div class="small mut" style="margin-top:4px">SDD 目录：${esc(pg['目录'])}${pg['状态文件']?' · '+fileLink(pg['状态文件']):''}</div>`;
-  }else prog=`<div class="small mut" style="margin-top:8px">开始开发后，这里显示开发进度（按开发流程「${esc(v['当前流程'])}」的进度设置）。</div>`;
+  }else prog=SP&&!legacy?'':`<div class="small mut" style="margin-top:8px">开始开发后，这里显示开发进度（按开发流程「${esc(v['当前流程'])}」的进度设置）。</div>`;
   const acts=v['动作'];
   const barHtml=`<div class="top"><b>会话</b>${sess}<span class="sp"></span>
- <label class="small mut" title="这一期用哪个 AI 开发；在「⚙ 设置」里管理">AI <select id="dvEng" ${run?'disabled':''}><option value="">默认（${esc(v['默认引擎'])}）</option>${v['引擎列表'].map(x=>`<option value="${esc(x.id)}" ${x.id===v['引擎']?'selected':''}>${esc(x['名称'])}</option>`).join('')}</select></label>
-    <label class="small mut" title="这一期按哪套流程开发；在「⚙ 设置」里管理流程">流程 <select id="dvFlow" ${run?'disabled':''}><option value="">自动（按仓库匹配，默认 ${esc(v['默认流程'])}）</option>${v['流程列表'].map(x=>`<option value="${esc(x.id)}" ${x.id===v['流程']?'selected':''}>${esc(x['名称'])}</option>`).join('')}</select></label>
-    <span class="sw ${v['免打扰']?'on':''}" id="dvDnd" title="开启后，后续需要确认的地方由 AI 自行决策并记录"><i></i>🌙 免打扰</span>${btn}</div>
-    ${v['免打扰']?'<div class="small mut" style="margin-top:4px">免打扰已开启：需要确认的地方由 AI 按自己的建议决策，结果记在「开发」里的「已处理的确认」和记录里。</div>':''}`;
+ <label class="small mut" title="这一期 AI 开发用的引擎（全栈各端没单独指定时也用它）；在「⚙ 设置」里管理">AI <select id="dvEng" ${run?'disabled':''}><option value="">默认（${esc(v['默认引擎'])}）</option>${v['引擎列表'].map(x=>`<option value="${esc(x.id)}" ${x.id===v['引擎']?'selected':''}>${esc(x['名称'])}</option>`).join('')}</select></label>
+    ${SP?'':`<span class="small mut" title="开发流程跟着端和仓库走：在「全栈 → 各端」里给每个端选">流程 ${(v['各端流程']||[]).length?v['各端流程'].map(x=>`${esc(x['端'])} <b>${esc(x['流程'])}</b>`).join('，'):`<b>${esc(v['当前流程'])}</b>`}${v['流程']?' <span class="badge" title="老的期在这里统一指定过流程">整期统一</span> <a id="dvFlowEnd" title="取消整期统一的流程，改为在「全栈 → 各端」按端选">改为按端</a>':''} · <a id="dvFlowGo">按端选 →</a></span>`}
+    <span class="sw ${v['免打扰']?'on':''}" id="dvDnd" title="整期生效：出方案、完善需求、各端开发、单端开发的提问都由 AI 按自己的建议决策并记录"><i></i>🌙 免打扰（整期）</span>${btn}</div>
+    ${v['免打扰']?`<div class="small mut" style="margin-top:4px">免打扰已开启（整期）：需要确认的地方由 AI 按自己的建议决策，结果记在「${SP?'确认与问题':'开发'}」里的「已处理的确认」和记录里。</div>`:''}`;
   const bar=$('#sessBar');if(bar&&bar.innerHTML!==barHtml)bar.innerHTML=barHtml;
   box.innerHTML=`    <div class="two"><div class="stack">
     ${pend.map(qCard).join('')}
@@ -149,7 +152,8 @@ async function devBox(name){
     const ai=el.querySelector('[data-ai]');if(ai)ai.onclick=()=>{ta.value=q['AI建议'];drafts[id]=ta.value;ta.focus()};
     const go=async()=>{try{const r=await post('/api/answer',{period:name,id,answer:ta.value});delete drafts[id];toast(r.msg);devBox(name)}catch(e){toast(e.message)}};
     el.querySelector('[data-ans]').onclick=go;ta.onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey))go()}});
-  $('#dvDnd').onclick=async()=>{try{const r=await post('/api/dnd',{period:name,on:!v['免打扰']});toast(r.msg);devBox(name)}catch(e){toast(e.message)}};
+  $('#dvDnd').onclick=async()=>{try{const r=await post('/api/dnd',{period:name,on:!v['免打扰']});toast(r.msg);devBox(name);if($('#stackBox'))stackBox(name)}catch(e){toast(e.message)}};
+  ['#dvToStack','#dvToStack2'].forEach(k=>{const a=$(k);if(a)a.onclick=()=>{const t=document.querySelector('[data-tab="stack"]');if(t)t.click();const p=document.querySelector('[data-pane="stack"]');if(p)p.scrollIntoView({behavior:'smooth',block:'start'})}});
   const st=$('#dvStart');if(st)st.onclick=()=>{
     openDlg((s?'继续':'开始')+'开发',`<div class="form"><p style="margin:0">这等同于<b>你本人批准开发</b>：会在目标仓库后台启动 Claude Code（${'auto'} 权限），按这一期的开发流程开发；需要确认的地方会出现在本页并弹系统通知。</p>
       <label>输入期名确认<input type="text" id="dvC" placeholder="${esc(name)}"></label>
@@ -161,7 +165,10 @@ async function devBox(name){
         await devStart({period:name,confirm:$('#dvC').value,note:$('#dvN').value})}
       catch(e){toast(e.message);b.disabled=false;b.textContent='▶ 确认开始'}};$('#dvC').focus()};
   const eg=$('#dvEng');if(eg)eg.onchange=async()=>{try{const r=await post('/api/period/engine',{period:name,id:eg.value});toast(r.msg);devBox(name)}catch(e){toast(e.message)}};
-  const fl=$('#dvFlow');if(fl)fl.onchange=async()=>{try{const r=await post('/api/period/flow',{period:name,id:fl.value});toast(r.msg);devBox(name)}catch(e){toast(e.message)}};
+  const fe=$('#dvFlowEnd');if(fe)fe.onclick=async()=>{if(!confirm('取消这一期统一指定的流程？之后每个端按「全栈 → 各端」里选的流程（没选就自动匹配）。'))return;
+    try{const r=await post('/api/period/flow',{period:name,id:''});toast(r.msg);devBox(name);stackBox(name)}catch(e){toast(e.message)}};
+  const fg=$('#dvFlowGo');if(fg)fg.onclick=()=>{const t=document.querySelector('[data-tab="stack"]');if(t)t.click();const p=document.querySelector('[data-pane="stack"]');if(p)p.scrollIntoView({block:'start'})};
+  box.querySelectorAll('[data-iterm]').forEach(b=>b.onclick=()=>termOpen(name,((v['各端一览']||[])[0]||{})['仓库']||(s&&s['仓库'])||''));
   box.querySelectorAll('.iss').forEach(el=>el.querySelectorAll('[data-is]').forEach(b=>b.onclick=async()=>{
     try{const r=await post('/api/issue',{period:name,id:el.dataset.i,status:b.dataset.is});toast(r.msg);devBox(name)}catch(e){toast(e.message)}}));
   box.querySelectorAll('[data-dm]').forEach(b=>b.onclick=async()=>{
@@ -204,7 +211,7 @@ function needDlg(body,n){
   if(n['需要']==='仓库'){
     const cs=n['候选']||[],first=cs.findIndex(x=>x['可用']);
     h=`<p>${esc(n['说明']||(cs.length?'找到多个可能的代码仓库，确定不了用哪个，请选一个：':'本期文字资料里没有找到本机代码路径，请填写：'))}</p>
-      ${cs.map((x,i)=>radio(x['路径'],`<code>${esc(x['路径'])}</code>　<span class="mut small">当前分支 ${esc(x['当前分支']||'—')} · 来自 ${esc(x['依据'].join('、'))} · ${x['可用']?'流程 '+esc(x['流程']):'没有匹配的开发流程（可在开发面板换流程）'}</span>`,!x['可用'],i===first)).join('')}
+      ${cs.map((x,i)=>radio(x['路径'],`<code>${esc(x['路径'])}</code>　<span class="mut small">当前分支 ${esc(x['当前分支']||'—')} · 来自 ${esc(x['依据'].join('、'))} · ${x['可用']?'流程 '+esc(x['流程']):'没有匹配的开发流程（可在「全栈 → 各端」给端选流程）'}</span>`,!x['可用'],i===first)).join('')}
       ${radio('*','其他路径　<input type="text" id="ndP" style="width:420px" placeholder="/Users/…/代码仓库根目录">',false,first<0)}
       ${n['分支']&&n['分支'].length?`<p class="mut small">本期登记的开发分支：${esc(n['分支'].join('、'))}</p>`:''}
       <p class="mut small">选定后会记在这一期，下次开始开发直接使用。</p>`;

@@ -15,7 +15,7 @@
     bugs/      sources（接入的平台）、index（同步、索引、归属）、analysis（只读分析）、fix（修复队列）、adapters/（各平台）
     anr/       parse（解析、签名、mapping 还原）、store（归并、问题）、manual（自建问题）
     tasks/     memo（事项记事本、推动）
-    stack/     plan（出方案、拍板）、dev（各端开发、审查、验收）、guide（每一期的下一步）
+    stack/     plan（出方案、拍板）、dev（各端开发、审查、验收）、launch（新产品：完善需求、建工程、发布）、guide（每一期的下一步）
   层 3  管家
     steward/   patrol（巡检、自主动作）、chat（交给管家）、intake（统一收件）、brief（智能状态、界面模板清单）、
                site（整站导航）、onboard（首次引导、示例期、目录浏览）

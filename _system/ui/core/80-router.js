@@ -27,7 +27,7 @@ async function render(){
 // 实时更新：服务端有变化才推送（SSE），只刷新对应部分；不再定时轮询
 let pagePending=false;
 const curPeriod=()=>{const h=decodeURIComponent(location.hash.slice(1)||'/');return h.startsWith('/p/')?h.slice(3):null};
-const canRender=()=>!Object.values(drafts).some(x=>x)&&!dlg.open&&!document.activeElement.matches('input,textarea,select');
+const canRender=()=>!Object.values(drafts).some(x=>x)&&!dlg.open&&!document.activeElement.matches('input,textarea,select')&&!($('#tmBox iframe')&&!$('#tmBox').hidden);   // 开着「我的终端」时不重画（重画 = iframe 重建、shell 断开）
 function softRender(){if(!canRender()){pagePending=true;return}pagePending=false;const y=scrollY;render().then(()=>scrollTo(0,y))}
 function onEvt(ev){
   const h=decodeURIComponent(location.hash.slice(1)||'/'), p=curPeriod();

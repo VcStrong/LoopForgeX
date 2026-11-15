@@ -20,11 +20,12 @@ from kblib.core.periods import design_previews, load_meta, log, period_dir, peri
 from kblib.core.repos import REPO_ENDS, load_repos, repo_pref, save_repo_pref
 from kblib.ai.devsession import _alive, _dev_result, _notify
 from kblib.ai.engines import engine_popen, role_engine
-from kblib.ai.flows import flow_for, get_flow
+from kblib.ai.flows import flow_for, flows, get_flow
 from kblib.plugins.run import base_repo_paths
 from kblib import lazy
 _stackdev = lazy('kblib.stack.dev')      # 上层模块：用到时才 import
 _fix = lazy('kblib.bugs.fix')
+_launch = lazy('kblib.stack.launch')     # 新产品：完善需求、建工程、发布
 
 ENDS = REPO_ENDS               # 常用平台（候选和排序）；端名不限于这些，见 end_name
 STACK_DIR = '全栈'
@@ -109,10 +110,10 @@ def stack_repos():
         if hosts.is_remote(pth):          # 远程的不在这里逐个连（慢），选了再校验
             out.append({'路径': pth, '名称': nm, '端': [], '分支': '', '远程': True})
             continue
-        kind = 'git' if (Path(pth) / '.git').exists() else 'svn' if (Path(pth) / '.svn').exists() else ''
+        kind = 'git' if (Path(pth) / '.git').exists() else 'svn' if (Path(pth) / '.svn').exists() else '本地' if Path(pth).is_dir() else ''
         if not kind:
             continue
-        out.append({'路径': pth, '名称': nm, '端': detect_ends(pth), '版本库': kind, '分支': hosts.branch_of(pth, kind)})
+        out.append({'路径': pth, '名称': nm, '端': detect_ends(pth), '版本库': kind, '分支': '' if kind == '本地' else hosts.branch_of(pth, kind)})
     return sorted(out, key=lambda x: (end_key(x['端'][0]) if x['端'] else (99, ''), x['名称']))
 
 
@@ -124,7 +125,7 @@ def stack_branches(repo):
         raise KBError('没有仓库路径')
     try:
         kind = hosts.vcs(repo)
-        cur = hosts.branch_of(repo, kind) if kind else ''
+        cur = hosts.branch_of(repo, kind) if kind else ''           # 不是 git / svn 的本地目录：没有分支
         out = []
         if kind == 'git':
             p = hosts.git(repo, 'for-each-ref', '--sort=-committerdate', '--format=%(refname)', 'refs/heads', 'refs/remotes', timeout=20)
@@ -168,20 +169,20 @@ def stack_set_end(name, end, repo='', branch='', by='用户（网页）'):
     ends = period_ends(d, m)
     repo = (repo or '').strip()
     if repo:
-        rp = hosts.check_repo(repo)          # 路径不存在 / 不是 git 仓库或 svn 工作副本 / 远程连不上 都在这里报
-        kind = hosts.vcs(rp)
-        branch = (branch or '').strip()
-        if not branch and (ends.get(end) or {}).get('仓库') != rp:     # 新选的仓库：git 用当前分支，svn 用当前 URL 对应的 trunk / branches/xxx
+        kind, rp = hosts.check_dir(repo)      # 路径不存在 / 远程连不上 在这里报；不是 git / svn 的目录 → 本地
+        branch = '' if kind == '本地' else (branch or '').strip()
+        if kind != '本地' and not branch and (ends.get(end) or {}).get('仓库') != rp:     # 新选的仓库：git 用当前分支，svn 用当前 URL 对应的 trunk / branches/xxx
             try:
                 branch = hosts.branch_of(rp, kind)
             except KBError:
                 branch = ''
         if kind == 'svn' and branch:
             branch = hosts.svn_branch(rp, branch)        # feat-x → branches/feat-x（服务器上没有就报错）
-        ends[end] = {'仓库': rp, '分支': branch, '版本库': kind}
+        ends[end] = {'仓库': rp, '分支': branch, '版本库': kind, **({'流程': ends[end]['流程']} if (ends.get(end) or {}).get('流程') else {})}
         if end not in detect_ends(rp):          # 认不出或认成别的端：记住这个工程是这一端，以后选它就知道
             save_repo_pref(rp, 端=end)
-        msg = f'{end}：{hosts.label(rp)}' + ('（svn：AI 只改工作副本，你验收后由知识库提交）' if kind == 'svn' else '') + (f'，分支 {branch}' if branch else '')
+        msg = f'{end}：{hosts.label(rp)}' + ('（svn：AI 只改工作副本，你验收后由知识库提交）' if kind == 'svn' else
+                                           '（不是 git / svn 的本地目录：AI 直接改目录里的文件，不提交、不推送）' if kind == '本地' else '') + (f'，分支 {branch}' if branch else '')
     else:
         ends.pop(end, None)
         msg = f'{end}：不涉及'
@@ -194,6 +195,97 @@ def stack_set_end(name, end, repo='', branch='', by='用户（网页）'):
     if repo and dev and end not in dev and end in ((m.get('全栈') or {}).get('涉及') or []):   # 变更后要做、之前缺仓库的端：选好就开工
         msg += '；' + _stackdev.stack_dev_start(d.name, end, by)
     return msg
+
+
+def _flow_name(fid):
+    try:
+        return get_flow(fid)['名称'] if fid else ''
+    except KBError:
+        return ''
+
+
+EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'      # git 的空树：git diff 空树..HEAD = 全部内容
+
+
+def refresh_vcs(d, m=None, by='自动'):
+    """记成「本地目录」的端，后来变成了 git / svn 仓库（如按你的回答 git init 了）：改过来，审查、验收、推送才按仓库走。→ 改了哪些端"""
+    m = m or load_meta(d)
+    ends, dev, changed = m.get('各端') or {}, m.get('各端开发') or {}, []
+    for e, v in ends.items():
+        if v.get('版本库') != '本地' or hosts.is_remote(v.get('仓库', '')):
+            continue
+        kind = hosts.vcs(v['仓库'])
+        if not kind:
+            continue
+        try:
+            br = hosts.branch_of(v['仓库'], kind)
+        except KBError:
+            br = ''
+        v.update(版本库=kind, 分支=v.get('分支') or br)
+        if e in dev:
+            dev[e].update(版本库=kind, 分支=dev[e].get('分支') or br,          # 本地目录的起点是开工时间：开工后才建的库，提交都算这次的
+                          起点=EMPTY_TREE if kind == 'git' else '')
+        changed.append(f'{e}（{kind}{"，分支 " + br if br else ""}）')
+    if changed:
+        save_meta(d, m)
+        log(d, '各端', f'目录已经变成仓库，改按仓库处理（审查、验收推送）：{"、".join(changed)}（{by}）')
+    return changed
+
+
+def end_remote(repo):
+    """git 端的 origin 地址（没有返回 ''）。"""
+    try:
+        p = hosts.git(repo, 'remote', 'get-url', 'origin', timeout=10)
+    except KBError:
+        return ''
+    return p.stdout.strip() if p.returncode == 0 else ''
+
+
+def stack_set_remote(name, end, url, by='用户（网页）'):
+    """「全栈 → 各端 → 推送到」：给 git 端设 origin（知识库执行 git remote add / set-url，不经过 AI）。验收时知识库推到这里。"""
+    end = end_name(end)
+    d = period_dir(name)
+    m = load_meta(d)
+    refresh_vcs(d, m)
+    m = load_meta(d)
+    v = (m.get('各端') or {}).get(end)
+    if not v:
+        raise KBError(f'这一期还没有加 {end}')
+    if v.get('版本库') not in ('git', '', None):
+        raise KBError(f'{end} 不是 git 仓库（{v.get("版本库")}），没有远端可设；本地目录要推送先在各端里选它，按提示初始化成 git 仓库')
+    url = (url or '').strip()
+    if not url or re.search(r'\s', url):
+        raise KBError('填远端仓库地址，如 https://github.com/you/app.git 或 git@github.com:you/app.git')
+    old = end_remote(v['仓库'])
+    p = hosts.git(v['仓库'], 'remote', 'set-url' if old else 'add', 'origin', url, timeout=15)
+    if p.returncode:
+        raise KBError(f'设置远端失败：{(p.stderr or p.stdout).strip()[-300:]}')
+    log(d, '各端', f'{end} 推送到 {url}' + (f'（原来是 {old}）' if old else '') + f'；验收时知识库推送（{by}）')
+    return f'{end} 的远端设为 {url}，验收时知识库推送到这里'
+
+
+def stack_set_flow(name, end, flow='', by='用户（网页）'):
+    """这一期某个端用哪套开发流程（全栈 → 各端）；空 = 自动（这一期统一指定的 > 工程默认 > 识别文件 > 全局默认）。
+    全栈各端开发、单端「开始开发」、开发包都按它（见 flows.flow_for）。"""
+    end = end_name(end)
+    d = period_dir(name)
+    m = load_meta(d)
+    ends = period_ends(d, m)
+    if end not in ends:
+        raise KBError(f'这一期还没有加 {end}：先在「全栈 → 各端」给它选仓库')
+    f = get_flow(flow) if (flow or '').strip() else None
+    if (ends[end].get('流程') or '') == (f['id'] if f else ''):
+        return '没有变化'
+    if f:
+        ends[end]['流程'] = f['id']
+    else:
+        ends[end].pop('流程', None)
+    for v in ends.values():
+        v.pop('来自', None)
+    m['各端'] = ends
+    save_meta(d, m)
+    log(d, '开发流程', f'{end}：{f["名称"] if f else "自动"}（{by}）')
+    return f'{end} 的开发流程改为「{f["名称"] if f else "自动"}」'
 
 
 # ---------------------------------------------------------------- 工程设置：端、默认流程（⚙ 设置 → 开发流程 → 按工程）
@@ -250,7 +342,21 @@ def _incr_rule(d):
             '在 plan 里加 "变更": [{"编号": "CR-001", "处理": "纳入 / 不需要改 / 建议驳回", "说明": "影响了哪些端、哪些需求"}]。')
 
 
-def _plan_prompt(d, ends, note):
+_NEW_RULE = """
+【新产品模式】这一期是全新产品，还没有（或只有部分）代码仓库。没有仓库的端，你来做技术选型：
+- 先读需求（需求/PRD.md 如果有，以它为准），判断要哪些端（App / Web / 小程序 / 服务端…），能少就少：一个人做，MVP 优先。
+- 每个要做的端在「各端」里加一项、涉及 true，并多写三个字段：
+  "技术栈": "语言 / 框架 / 主要库 / 数据库 / 部署方式，一行写清，选成熟、文档多、一个人好维护的",
+  "目录": "顶层目录结构（多行文本，像 tree 那样，每个目录后面一句用途）",
+  "脚手架": "怎么初始化（官方脚手架命令 + 非交互参数），之后知识库会照这个在新目录里建工程"
+  「改动」写这一端要做的模块 / 页面（REQ-xxx），基于需求，不用找现有代码。
+- 接口契约照常写 OpenAPI 3（服务端怎么鉴权、返回包装、错误码、分页由你定，写在契约里），客户端和服务端都按它开发。
+- plan 里加 "工程名": "英文短名（小写、连字符），新建工程的目录名用它，如 todo"。
+- 技术选型里拿不准、要用户定的（如要不要做 App、用不用云服务）放进待确认，并给出建议。
+"""
+
+
+def _plan_prompt(d, ends, note, new=False):
     names = '/'.join(sort_ends(ends)) or '/'.join(ENDS[:5])
     common = '、'.join(ENDS)
     others = '、'.join(e for e in ENDS if e not in ends) or '其他平台'
@@ -263,8 +369,8 @@ def _plan_prompt(d, ends, note):
 
 这一期：「{d.name}」。用 kb_period（name=「{d.name}」）看需求、设计图、接口文档等资料，必要时 kb_read 读全文；kb_search 可搜资料和代码。
 各端仓库（只读，用来判断现有接口、数据结构、模块位置）：
-{rows}
-{f'用户的意见 / 这次要处理的变更：{note}' if note else ''}
+{rows or '（还没有任何仓库：这一期从零开始）'}
+{_NEW_RULE if new else ''}{f'用户的意见 / 这次要处理的变更：{note}' if note else ''}
 {_incr_rule(d)}
 
 要做的事（一次做完，用户只拍板一次）：
@@ -286,7 +392,7 @@ def _plan_prompt(d, ends, note):
    "需求": [{{"编号": "REQ-001", "标题": "…", "描述": "…", "验收": ["当…时，应…", …], "端": ["Android", "服务端"], "设计": ["对应的画板 / 图片文件名"], "来源": "资料里的出处（文件名或链接）"}}],
    "设计对照": {{"缺设计": ["REQ-003：…"], "设计多出": ["画板 xx 里的 …，需求没写"], "缺状态": [{{"页面": "…", "缺": "空态 / 加载 / 报错 / 无网 / 权限…"}}],
               "端不一致": ["…"], "无法核对": "没有设计稿 / 蓝湖只有链接 等（都核对了就留空）"}},
-   "各端": [{{"端": "{names}（这一期加了的端；没加仓库但需要的端也可以写，如 {others}）", "涉及": true, "原因": "…", "改动": ["模块或文件：改什么（REQ-001）", …], "工作量": "小/中/大", "风险": "…"}}],
+   "各端": [{{"端": "{names}（这一期加了的端；没加仓库但需要的端也可以写，如 {others}）", "涉及": true, "原因": "…", "改动": ["模块或文件：改什么（REQ-001）", …], "工作量": "小/中/大", "风险": "…"{', "技术栈": "…", "目录": "…", "脚手架": "…"（新产品模式：没有仓库的端要写）' if new else ''}}}],
    "接口": [{{"方法": "GET", "路径": "/api/…", "说明": "…（REQ-001）", "类型": "新增/修改/复用", "调用端": ["iOS", "Android"]}}],
    "数据": ["表 / 字段 / 缓存 / 配置的变化"],
    "待确认": [{{"问题": "…", "建议": "…"}}]}}
@@ -311,7 +417,57 @@ def spec_md(name, plan):
         if dc.get('无法核对'):
             out.append(f'- 无法核对：{dc["无法核对"]}')
         out.append('')
+    qs = [q for q in plan.get('待确认') or [] if isinstance(q, dict) and q.get('结论')]
+    if qs:
+        out += ['## 已确认的问题', '', '> 拍板时定下来的，各端开发、审查都按这里执行。', '']
+        out += [f'{i}. {q.get("问题", "")}\n   - 结论：{q["结论"]}' + ('（用户的意见）' if q.get('结论来源') == '用户' else '（按 AI 建议）')
+                for i, q in enumerate(qs, 1)]
+        out.append('')
     return '\n'.join(out)
+
+
+def _answer_text(q):
+    a = q.get('回答') or {}
+    return a.get('内容', '') if a.get('方式') == '自定义' else q.get('建议', '') if a.get('方式') == '按建议' else ''
+
+
+def stack_answer(name, idx, mode='按建议', text='', by='用户（网页）'):
+    """待拍板时回答方案里的一条待确认：mode 按建议 / 自定义（text 是你的意见）/ 空 = 撤回回答。存进 方案.json 这一条的「回答」。"""
+    d = period_dir(name)
+    m = load_meta(d)
+    if (m.get('全栈') or {}).get('状态') != '待拍板':
+        raise KBError('现在没有待拍板的方案')
+    f = _sdir(d) / '方案.json'
+    plan = json.loads(f.read_text('utf-8'))
+    qs = plan.get('待确认') or []
+    try:
+        q = qs[int(idx)]
+    except (ValueError, IndexError, TypeError):
+        raise KBError(f'没有第 {idx} 条待确认')
+    mode, text = (mode or '').strip(), (text or '').strip()
+    if mode == '自定义' and not text:
+        raise KBError('写一下你的意见')
+    if mode not in ('按建议', '自定义', ''):
+        raise KBError('回答方式只能是 按建议 / 自定义')
+    if mode:
+        q['回答'] = {'方式': mode, '内容': text if mode == '自定义' else '', '时间': now(), '人': by}
+    else:
+        q.pop('回答', None)
+    f.write_text(json.dumps(plan, ensure_ascii=False, indent=1), 'utf-8')
+    n = sum(1 for x in qs if x.get('回答'))
+    log(d, '全栈', f'待确认 {int(idx) + 1}「{q.get("问题", "")[:40]}」：' + (f'{mode}' + (f'：{text}' if text else '') if mode else '撤回回答') + f'（{by}）')
+    return f'已保存（已确认 {n} / {len(qs)}）'
+
+
+def _answered_note(d):
+    """重出方案时带上：上一版方案待确认里用户已经回答的。"""
+    try:
+        qs = json.loads((_sdir(d) / '方案.json').read_text('utf-8')).get('待确认') or []
+    except (OSError, ValueError):
+        return ''
+    rows = [f'- {q.get("问题", "")} → {"用户的意见：" + _answer_text(q) if (q.get("回答") or {}).get("方式") == "自定义" else "按你的建议：" + _answer_text(q)}'
+            for q in qs if isinstance(q, dict) and q.get('回答')]
+    return ('用户对上一版方案「待确认」的回答（照这些改方案，写进对应的需求 / 各端 / 接口；这些问题已经定了，不要再放进待确认）：\n' + '\n'.join(rows)) if rows else ''
 
 
 def stack_plan_start(name, note='', by='用户（网页）'):
@@ -322,10 +478,15 @@ def stack_plan_start(name, note='', by='用户（网页）'):
     if s.get('状态') == '运行中' and _alive(s.get('pid', 0)):
         raise KBError('方案正在出，等它结束')
     ends = period_ends(d, m)
-    if not ends:
-        raise KBError('先选至少一个端的仓库')
+    if not ends and not m.get('新产品'):          # 还没有任何端：当成新产品，让 AI 建议要哪些端和技术栈
+        m['新产品'] = True
+        save_meta(d, m)
+        log(d, '新产品', f'还没有端就出方案：按新产品流程，AI 建议要哪些端、技术栈和目录结构（{by}）')
     for e, v in ends.items():
-        hosts.check_repo(v['仓库'])
+        hosts.check_dir(v['仓库'])
+    ans = _answered_note(d) if (m.get('全栈') or {}).get('状态') == '待拍板' else ''
+    if ans:
+        note = ((note or '').strip() + '\n' if (note or '').strip() else '') + ans
     crs = [x for x in m.get('全栈变更') or [] if x['状态'] in ('待评估', '评估中')]
     if crs:
         note = ((note or '').strip() + '\n' if (note or '').strip() else '') + '\n'.join(
@@ -336,6 +497,8 @@ def stack_plan_start(name, note='', by='用户（网页）'):
         save_meta(d, m)
     dev = m.get('各端开发') or {}
     for e, v in ends.items():             # 分析代码前更新：这一端有会话在改就只 fetch，不动它的工作区
+        if v.get('版本库') == '本地':
+            continue
         busy = dev.get(e, {}).get('状态') in ('开发中', '审查中') or (not hosts.is_remote(v['仓库']) and _fix._repo_busy(v['仓库']))
         log(d, '更新代码', f'{e} 出方案前：' + hosts.sync(v['仓库'], v.get('版本库', ''), branch=v.get('分支', ''), fetch_only=bool(busy)))
     design_previews(d)                    # PSD 等先转好 PNG 预览，AI 才看得到
@@ -348,7 +511,7 @@ def stack_plan_start(name, note='', by='用户（网页）'):
         for v in ends.values():
             if not hosts.is_remote(v['仓库']):
                 extra += ['--add-dir', v['仓库']]
-    proc = engine_popen(eng, _plan_prompt(d, ends, (note or '').strip()), f'kb·全栈方案·{d.name}', logf, str(d),
+    proc = engine_popen(eng, _plan_prompt(d, ends, (note or '').strip(), new=bool(m.get('新产品'))), f'kb·全栈方案·{d.name}', logf, str(d),
                         env_extra={'KB_SESSION': 'stack:' + d.name}, extra_args=extra)
     _PROCS[d.name] = proc
     m = load_meta(d)
@@ -410,6 +573,14 @@ def stack_plan_submit(name, plan, openapi='', by='Claude'):
     ids = [x.get('编号') for x in reqs]
     if any(not re.fullmatch(r'REQ-\d{3,}', str(i or '')) for i in ids) or len(set(ids)) != len(ids):
         raise KBError('需求编号要是 REQ-001 这样、且不重复')
+    try:                                           # 重出方案时，问题原样没变的，保留你之前的回答
+        prev = {q.get('问题'): q.get('回答') for q in json.loads((sd / '方案.json').read_text('utf-8')).get('待确认') or []
+                if isinstance(q, dict) and q.get('回答')}
+    except (OSError, ValueError):
+        prev = {}
+    for q in plan.get('待确认') or []:
+        if isinstance(q, dict) and prev.get(q.get('问题')) and not q.get('回答'):
+            q['回答'] = prev[q['问题']]
     (sd / '方案.json').write_text(json.dumps(plan, ensure_ascii=False, indent=1), 'utf-8')
     (sd / 'spec.md').write_text(spec_md(d.name, plan), 'utf-8')
     api = sd / 'api' / 'openapi.yaml'
@@ -440,6 +611,14 @@ def stack_approve(name, by='用户（网页）'):
         raise KBError('现在没有待拍板的方案')
     sd = _sdir(d)
     plan = json.loads((sd / '方案.json').read_text('utf-8'))
+    qs = [q for q in plan.get('待确认') or [] if isinstance(q, dict)]
+    for q in qs:                                   # 拍板 = 每条待确认定下结论：你写了意见的按你的，其余按 AI 建议
+        mine = (q.get('回答') or {}).get('方式') == '自定义'
+        q['结论'] = (q['回答'].get('内容') if mine else q.get('建议')) or q.get('建议') or ''
+        q['结论来源'] = '用户' if mine else 'AI 建议'
+    if qs:
+        (sd / '方案.json').write_text(json.dumps(plan, ensure_ascii=False, indent=1), 'utf-8')
+        (sd / 'spec.md').write_text(spec_md(d.name, plan), 'utf-8')
     prev = _last_approved(d)
     old = json.loads(prev.read_text('utf-8')) if prev else None
     api = sd / 'api' / 'openapi.yaml'
@@ -459,7 +638,8 @@ def stack_approve(name, by='用户（网页）'):
               涉及=[x['端'] for x in plan['各端'] if x.get('涉及')])
     m['全栈'] = st
     save_meta(d, m)
-    log(d, '全栈', f'拍板方案 v{pn}：涉及 {"、".join(st["涉及"])}' + (f'，接口契约 {ver}{"（新版本）" if newver else ""}' if ver else '，不涉及接口')
+    mine = sum(1 for q in qs if q.get('结论来源') == '用户')
+    log(d, '全栈', (f'待确认 {len(qs)} 条定下结论：{mine} 条按你的意见，其余按 AI 建议；' if qs else '') + f'拍板方案 v{pn}：涉及 {"、".join(st["涉及"])}' + (f'，接口契约 {ver}{"（新版本）" if newver else ""}' if ver else '，不涉及接口')
         + (f'；纳入变更 {"、".join(x["编号"] for x in crs)}' if crs else '') + f'（{by}）')
     out = '已拍板' + (f'，接口契约{"锁定为" if newver else "仍是"} {ver}' if ver else '')
     if m.get('各端开发') and old:           # 开发中又拍板（变更 / 重出方案）：算出各端要补什么
@@ -525,6 +705,8 @@ def stack_get(name):
         except ValueError:
             plan = None
     api = sd / 'api' / 'openapi.yaml'
+    if refresh_vcs(d, m):
+        m = load_meta(d)
     ends = period_ends(d, m)
     need = list((m.get('全栈') or {}).get('涉及') or []) + [x.get('端') for x in (plan or {}).get('各端') or [] if isinstance(x, dict) and x.get('涉及')]
     rows = []
@@ -532,17 +714,22 @@ def stack_get(name):
         v = ends.get(e)
         if v:
             remote = hosts.is_remote(v['仓库'])
-            f = None if remote else flow_for(m, v['仓库']) if Path(v['仓库']).is_dir() else None
+            local = not remote and Path(v['仓库']).is_dir()
+            f = flow_for(m, v['仓库']) if local else None
+            auto = flow_for(m, v['仓库'], by_end=False) if local else None
             kind = v.get('版本库') or 'git'
-            cur = '' if remote else hosts.branch_of(v['仓库'], kind) if Path(v['仓库']).is_dir() else ''
+            cur = '' if remote or kind == '本地' else hosts.branch_of(v['仓库'], kind) if Path(v['仓库']).is_dir() else ''
             rows.append({'端': e, '仓库': v['仓库'], '显示': hosts.label(v['仓库']), '远程': remote, '分支': v.get('分支', ''), '当前分支': cur,
-                         '版本库': kind,
-                         '流程': '（远程：开工时在那台机器上匹配）' if remote else f['名称'] if f else '（没有匹配的流程：按仓库现有约定）', '来自': v.get('来自', '')})
+                         '版本库': kind, '远端': end_remote(v['仓库']) if kind == 'git' else '',
+                         '流程': ('（远程：开工时在那台机器上匹配）' if not v.get('流程') else _flow_name(v['流程']) + '（远程）') if remote
+                         else f['名称'] if f else '（没有匹配的流程：按仓库现有约定）',
+                         '流程id': v.get('流程', ''), '自动流程': auto['名称'] if auto else '没有匹配的流程：按仓库现有约定', '来自': v.get('来自', '')})
         else:
             rows.append({'端': e, '待添加': True})
-    return {'各端': rows, '常用平台': list(ENDS), '状态': (m.get('全栈') or {}).get('状态', ''), '全栈': m.get('全栈') or {},
+    return {'各端': rows, '常用平台': list(ENDS), '流程列表': [{'id': x['id'], '名称': x['名称']} for x in flows()],
+            '统一流程': _flow_name(m.get('开发流程')), '状态': (m.get('全栈') or {}).get('状态', ''), '全栈': m.get('全栈') or {},
             '会话': {k: s.get(k) for k in ('状态', '开始时间', '结束时间', '引擎', '结果', '意见')} if s else None,
             '方案': plan, '契约': api.read_text('utf-8') if api.exists() else '', '契约路径': str(api) if api.exists() else '',
             '规格路径': str(spec) if spec.exists() else '', '开发': _stackdev.stack_dev_view(d, m),
             '变更': m.get('全栈变更') or [], '证据': _stackdev.evidence(d, m, plan),
-            '并行上限': _stackdev.MAX_PAR, '审查轮数': _stackdev.MAX_ROUNDS}
+            '并行上限': _stackdev.MAX_PAR, '审查轮数': _stackdev.MAX_ROUNDS, **_launch.launch_view(d, m)}

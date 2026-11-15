@@ -50,9 +50,9 @@
     if (p['事项']) return /ANR|崩溃|Bug/i.test(p['事项类型'] || '') || (p['批次'] || {})['来源'] ? 'online' : 'dev';
     const s = p['当前步骤'] || '';
     if (s === '资料') return 'collect';
-    if (['选仓库', '出方案', '拍板', '开始开发'].includes(s)) return 'plan';
+    if (['选仓库', '完善需求', '出方案', '拍板', '建工程', '开始开发'].includes(s)) return 'plan';
     if (['开发', '开发中'].includes(s)) return 'dev';
-    if (['验收', '完成'].includes(s)) return 'accept';
+    if (['验收', '发布', '完成'].includes(s)) return 'accept';
     return (p['步骤'] || []).length ? 'online' : 'dev';
   }
 

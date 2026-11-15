@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from kblib.core.common import KBError, PERIODS, now, read_text
 from kblib.core.periods import load_meta, log, period_dir, period_names, save_meta
-from kblib.ai.flows import BUILTIN_FLOWS, flow_progress, flow_text, flows, get_flow
+from kblib.ai.flows import BUILTIN_FLOWS, flow_for, flow_progress, flow_text, flows, get_flow
 from kblib.ai.engines import engine_bin, engines, get_engine, period_engine
 from kblib.ai.devprep import _git
 from kblib.ai.devsession import DEV_DIR, _NO_BG, _dev_spawn, _notify, _result_of, dev_session, session_flow
@@ -642,6 +642,23 @@ def dev_activity_all(period, limit=3000):
     return out[-limit:]
 
 
+def _end_flows(m):
+    """会话栏显示用：这一期各端（全栈 → 各端）各按哪套流程。"""
+    out = []
+    for e, v in (m.get('各端') or {}).items():
+        root = v.get('仓库') or ''
+        if ':' in root.split('/')[0] or not Path(root).is_dir():         # 远程 / 不在本机：只显示选定的
+            try:
+                name = get_flow(v['流程'])['名称'] if v.get('流程') else '开工时匹配'
+            except KBError:
+                name = '开工时匹配'
+        else:
+            f = flow_for(m, root)
+            name = f['名称'] if f else '按仓库现有约定'
+        out.append({'端': e, '流程': name, '指定': bool(v.get('流程'))})
+    return out
+
+
 def dev_overview(period):
     d = period_dir(period)
     s = dev_session(d.name)
@@ -651,7 +668,7 @@ def dev_overview(period):
             '会话记录': sorted((x.name for x in (d / DEV_DIR).glob('*.jsonl')), reverse=True) if (d / DEV_DIR).exists() else [],
             '动作': session_activity(s), '进度': flow_progress(session_flow(m), m.get('SDD目录')),
             '流程': m.get('开发流程', ''), '当前流程': session_flow(m)['名称'], '默认流程': get_flow()['名称'],
-            '流程列表': [{'id': x['id'], '名称': x['名称']} for x in flows()],
+            '流程列表': [{'id': x['id'], '名称': x['名称']} for x in flows()], '各端流程': _end_flows(m),
             '引擎': m.get('AI引擎', ''), '默认引擎': get_engine()['名称'],
             '引擎列表': [{'id': x['id'], '名称': x['名称']} for x in engines()],
             '待确认': m.get('待确认') or [], '对话': (m.get('对话') or [])[-8:], '设备': devices(d.name) if _adb() else None,

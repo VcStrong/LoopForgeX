@@ -94,7 +94,9 @@ async function settingsPage(){
         <span class="small">${es['已安装']?'✅ 已安装'+(es['已接入']===true?' · ✅ 已接入知识库':es['已接入']===false?' · ⚠ 还没接入知识库（到高级设置里点「接入知识库」）':''):'⚪ 本机没装，选一个装了的，或装好后刷新'}</span></div>
         <div class="small mut" style="margin:0 0 8px 106px">后台干活用的编程 AI：出方案、开发、审查、Bug 分析都默认用它。想让不同的活用不同的 AI，打开下面的高级设置。</div>
         <div class="row" style="gap:10px;flex-wrap:wrap;margin:2px 0"><b style="width:96px">开发流程</b><select id="smFlow">${d.flows.map(f=>`<option value="${esc(f.id)}" ${f['默认']?'selected':''}>${esc(f['名称'])}</option>`).join('')}</select></div>
-        <div class="small mut" style="margin:0 0 4px 106px">AI 开发时按什么步骤走。不知道选哪个就用「通用」；团队有自己的流程命令或技能，到高级设置里「从命令 / 技能添加」。</div></div>`})()}
+        <div class="small mut" style="margin:0 0 4px 106px">AI 开发时按什么步骤走。不知道选哪个就用「通用」；团队有自己的流程命令或技能，到高级设置里「从命令 / 技能添加」。</div>
+        <div class="row" style="gap:10px;flex-wrap:wrap;margin:8px 0 2px"><b style="width:96px">网页终端</b><label class="row small" style="gap:4px"><input type="checkbox" id="smTerm" ${d.term?'checked':''} style="width:auto;margin:0"> 打开</label></div>
+        <div class="small mut" style="margin:0 0 4px 106px">期页面「终端 → ⌨ 我的终端」：在各端仓库里直接敲命令（AI 被拦、要登录、要推送时用）。等于在网页上开放 shell，只能你本人在网页上用；部署到不放心的环境可以关掉。</div></div>`})()}
     ${rp&&rp.items.length?`<h3 style="margin-top:14px">按工程</h3>
     <p class="small mut">每个工程是哪一端、默认用哪套开发流程，随时可改。「自动」：端按仓库里的文件识别；流程按识别文件匹配，匹配不上用上面的默认流程。
       某一期在开发面板单独选了流程以那一期为准；事项默认用轻量流程。在全栈「各端」里给某端选了认不出的工程，也会记到这里。</p>
@@ -149,6 +151,7 @@ async function settingsPage(){
   const rpSet=async b=>{try{toast((await post('/api/repos/settings',b)).msg)}catch(e){toast(e.message)}settingsPage()};
   app.querySelectorAll('[data-rpend]').forEach(s=>s.onchange=()=>rpSet({path:s.dataset.rpend,end:s.value}));
   app.querySelectorAll('[data-rpflow]').forEach(s=>s.onchange=()=>rpSet({path:s.dataset.rpflow,flow:s.value}));
+  $('#smTerm').onchange=async e=>{try{toast((await post('/api/term/enable',{on:e.target.checked})).msg)}catch(err){toast(err.message)}settingsPage()};
   $('#smFlow').onchange=async e=>{try{toast((await post('/api/settings/default',{id:e.target.value})).msg)}catch(err){toast(err.message)}settingsPage()};
   if($('#swSave'))$('#swSave').onclick=async()=>{const acts={};app.querySelectorAll('[data-swa]').forEach(x=>acts[x.dataset.swa]=x.checked);
     try{toast((await post('/api/steward/settings',{on:$('#swOn').checked,level:(app.querySelector('[name=swLv]:checked')||{}).value,limit:$('#swLim').value,new_days:$('#swNd').value,actions:acts})).msg)}catch(e){toast(e.message)}};

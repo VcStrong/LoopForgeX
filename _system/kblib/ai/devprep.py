@@ -197,8 +197,8 @@ def _sdd_slot(url, cat, has_new_doc):
 def _no_flow_msg(m, root):
     if m.get('开发流程'):
         f = get_flow(m['开发流程'])
-        return f'{root} 不符合这一期选定的开发流程「{f["名称"]}」（缺少：{"、".join(x for x in f["识别文件"] if not (Path(root) / x).exists())}），请换仓库或在开发面板换流程'
-    return f'{root} 没有匹配的开发流程，请在开发面板为这一期选择流程，或在「⚙ 设置」里新建本组的流程'
+        return f'{root} 不符合这一期选定的开发流程「{f["名称"]}」（缺少：{"、".join(x for x in f["识别文件"] if not (Path(root) / x).exists())}），请换仓库，或在会话面板点「改为按端」后到「全栈 → 各端」按端选流程'
+    return f'{root} 没有匹配的开发流程，请在「全栈 → 各端」给这个仓库所在的端选流程，或在「⚙ 设置」里新建本组的流程'
 
 
 def _dev_target(d, m, repo='', store=''):

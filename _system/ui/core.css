@@ -268,3 +268,8 @@ a.scard:hover{border-color:var(--acc)}
 
 /* 长下拉框（工程路径等）不撑破窄屏 */
 select{max-width:100%}
+/* 期页面「终端」：AI 动作 / 我的终端 两个视图共用一块 */
+.tseg{color:var(--mut);padding:1px 6px;border-radius:6px;cursor:pointer}.tseg.on{color:var(--fg);background:var(--soft);font-weight:600}
+#tmBox .tmbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:6px 0}
+#tmBox .tmtab{padding:2px 8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;font-size:12px}#tmBox .tmtab.on{border-color:var(--acc);color:var(--acc)}
+#tmBox .tmwin{height:380px;background:#2b2b2b;border-radius:8px;display:block}

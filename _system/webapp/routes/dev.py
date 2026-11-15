@@ -15,7 +15,7 @@ def _get_api_devices(self, u, q):
 
 @get('/api/dev')
 def _get_api_dev(self, u, q):
-    return self._guard(lambda: kb.dev_overview(q.get('name', '')))
+    return self._guard(lambda: {**kb.dev_overview(q.get('name', '')), **kb.stack_brief(q.get('name', ''))})
 
 
 @post('/api/dev/start', page_only=True)

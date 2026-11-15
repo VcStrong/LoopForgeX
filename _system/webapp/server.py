@@ -1,11 +1,13 @@
 """网页服务：请求处理器（鉴权、本人操作检查、按注册表分发）和启动（后台循环）。接口本身在 webapp/routes/。"""
 import importlib
 import json
+import selectors
+import socket
 
 from webapp.shared import *  # noqa: F401,F403
 from webapp import router
 
-ROUTE_MODULES = ['static', 'periods', 'dev', 'stack', 'bugs', 'anr', 'plugins', 'settings', 'base', 'steward']
+ROUTE_MODULES = ['static', 'periods', 'dev', 'stack', 'term', 'bugs', 'anr', 'plugins', 'settings', 'base', 'steward']
 for _m in ROUTE_MODULES:
     importlib.import_module(f'webapp.routes.{_m}')
 
@@ -98,6 +100,45 @@ class H(BaseHTTPRequestHandler):
         host = self.headers.get('Host', '')
         return not origin or origin.endswith('//' + host)
 
+    def _term_proxy(self, u):
+        """/term/<编号>/… 原样转发到这个终端的 ttyd（UNIX socket，不开端口）：普通请求转一次就关，WebSocket 升级后双向对拷。
+        能走到这里已经过了登录校验；WebSocket 还要求是本页面发起的（Origin 和 Host 一致），防别的网站连进来。"""
+        parts = u.path.split('/')
+        sock = kb.term_socket(parts[2] if len(parts) > 2 else '')
+        if not sock:
+            return self._send(404, {'error': '终端不在了：回到期页面重新打开一个'})
+        ws = self.headers.get('Upgrade', '').lower() == 'websocket'
+        if ws and not self._from_page():
+            return self._send(403, {'error': '只能在知识库网页上由本人使用'})
+        up = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            up.connect(sock)
+        except OSError as e:
+            up.close()
+            return self._send(502, {'error': f'连不上终端：{e}'})
+        hdrs = ''.join(f'{k}: {v}\r\n' for k, v in self.headers.items() if ws or k.lower() not in ('connection', 'keep-alive'))
+        up.sendall(f'{self.command} {self.path} HTTP/1.1\r\n{hdrs}{"" if ws else "Connection: close" + chr(13) + chr(10)}\r\n'.encode('latin-1'))
+        self.close_connection = True
+        cli = self.connection
+        sel = selectors.DefaultSelector()
+        sel.register(cli, selectors.EVENT_READ, up)
+        sel.register(up, selectors.EVENT_READ, cli)
+        try:
+            while True:
+                ev = sel.select(timeout=6 * 3600)
+                if not ev:
+                    break
+                for key, _ in ev:
+                    data = key.fileobj.recv(65536)
+                    if not data:
+                        return
+                    key.data.sendall(data)
+        except OSError:
+            pass
+        finally:
+            sel.close()
+            up.close()
+
     def _cookie(self):
         c = SimpleCookie(self.headers.get('Cookie', ''))
         return c['kb_s'].value if 'kb_s' in c else ''
@@ -121,6 +162,8 @@ class H(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             return self._send(401, {'error': '要先登录', 'login': True})
+        if u.path.startswith('/term/'):                  # 网页终端：转发给这个终端的 ttyd（含 WebSocket）
+            return self._term_proxy(u)
         if u.path.startswith('/ui/'):                    # 共用功能层和各套界面模板的静态文件
             r = ui_file(u.path[4:])
             return self._send(200, *r) if r else self._send(404, {'error': 'not found'})

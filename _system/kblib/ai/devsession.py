@@ -610,6 +610,8 @@ def dev_start(period, note='', repo='', branch='', keep_branch=False):
         raise KBError('后台开发会话已经在运行')
     if m.get('状态') == '已完成':
         raise KBError('这一期已完成；如要继续开发，先把状态改为「已暂停」再开始')
+    if m.get('类型') != '事项' and (m.get('全栈') or m.get('各端')) and not (s and s.get('类型') != '复测'):
+        raise KBError('这一期走全栈：开发在「全栈」里，方案拍板后点「▶ 各端开工」（各端按方案开发、互相审查）')
     if repo:
         root = _git_root(repo)
         if not root:

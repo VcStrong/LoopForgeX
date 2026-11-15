@@ -166,7 +166,7 @@ def _push(d, m, text, by):
 
 
 def _to_other(d, m, key, text, name):
-    if key.startswith('px:'):
+    if key.startswith(('px:', 'end:')):          # 新会话、全栈各端会话：记进这一期「对话」，它下次调用知识库工具时收到（_take_px）
         m.setdefault('对话', []).append({'时间': now(), '内容': text, '方式': '排队', '状态': '待送达', '会话': key, '目标': name})
         return
     sid = key[3:]
