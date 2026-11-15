@@ -68,7 +68,7 @@ function fixDlg(b){const f=b['修复'];
   bindSvnCommit(dlg);
   $('#fxUndo').onclick=async()=>{try{const r=await post('/api/zentao/unfix',{id:b['编号']});toast(r.msg);dlg.close();render()}catch(e){toast(e.message)}}}
 function bindSvnCommit(root){root.querySelectorAll('[data-bsvn]').forEach(b=>b.onclick=async e=>{e.preventDefault();e.stopPropagation();
-  if(!confirm(`把 Bug ${b.dataset.bsvn} 修复改的文件提交到 svn 服务器？（改了同一批文件的其他 Bug 会一起提交）`))return;
+  if(!await kbConfirm(`把 Bug ${b.dataset.bsvn} 修复改的文件提交到 svn 服务器？（改了同一批文件的其他 Bug 会一起提交）`))return;
   b.disabled=true;try{toast((await post('/api/zentao/svncommit',{id:b.dataset.bsvn})).msg);if(dlg.open)dlg.close();render()}catch(err){toast(err.message);b.disabled=false}})}
 async function fixBugs(ids){     // 点「修复」就是批准：直接进修复队列，进度和异常显示在列表顶部
   try{const r=await post('/api/zentao/fix',{ids});toast(r.msg.split('\n')[0]);if(dlg.open)dlg.close();render()}catch(e){toast(e.message)}}
@@ -161,11 +161,11 @@ async function analysisDlg(id){
 async function ignoreBugs(ids,on){try{toast((await post('/api/zentao/ignore',{ids,on})).msg);render()}catch(e){toast(e.message)}}
 function bindBugs(root){
   root.querySelectorAll('[data-bign]').forEach(a=>a.onclick=e=>{e.preventDefault();ignoreBugs([a.dataset.bign],!!a.dataset.on)});
-  root.querySelectorAll('[data-bignall]').forEach(b=>b.onclick=()=>{const ids=b.dataset.bignall.split(',');if(confirm(`忽略这 ${ids.length} 个陈旧 Bug？只在知识库标记，不改 Bug 平台，随时能取消。`))ignoreBugs(ids,true)});
+  root.querySelectorAll('[data-bignall]').forEach(b=>b.onclick=async()=>{const ids=b.dataset.bignall.split(',');if(await kbConfirm(`忽略这 ${ids.length} 个陈旧 Bug？只在知识库标记，不改 Bug 平台，随时能取消。`))ignoreBugs(ids,true)});
   root.querySelectorAll('[data-bshowign]').forEach(a=>a.onclick=()=>{bugShowIgn=!bugShowIgn;render()});
   root.querySelectorAll('[data-bsort]').forEach(a=>a.onclick=()=>{bugSort=a.dataset.bsort;try{localStorage.setItem('kb.bugSort',bugSort)}catch(_){}render()});
   root.querySelectorAll('[data-ban]').forEach(b=>b.onclick=()=>analyze([b.dataset.ban]));
-  root.querySelectorAll('[data-banall]').forEach(b=>b.onclick=()=>{const ids=b.dataset.banall.split(',');if(ids.length>6&&!confirm(`分析 ${ids.length} 条会启动多个后台会话，确定？`))return;analyze(ids)});
+  root.querySelectorAll('[data-banall]').forEach(b=>b.onclick=async()=>{const ids=b.dataset.banall.split(',');if(ids.length>6&&!await kbConfirm(`分析 ${ids.length} 条会启动多个后台会话，确定？`))return;analyze(ids)});
   root.querySelectorAll('[data-bcol]').forEach(c=>c.onchange=()=>{const k=c.dataset.bcol;bugCols=c.checked?[...new Set([...bugCols,k])]:bugCols.filter(x=>x!==k);
     try{localStorage.setItem('kb.bugCols',JSON.stringify(bugCols))}catch(_){}render()});
   root.querySelectorAll('[data-bfix]').forEach(b=>b.onclick=()=>fixBugs([b.dataset.bfix]));
@@ -175,7 +175,7 @@ function bindBugs(root){
   root.querySelectorAll('[data-bfx]').forEach(a=>a.onclick=()=>fixDlg(bugIndex[a.dataset.bfx]));
   root.querySelectorAll('[data-bav]').forEach(a=>a.onclick=()=>analysisDlg(a.dataset.bav).catch(e=>toast(e.message)));
   root.querySelectorAll('[data-bown]').forEach(sel=>{const old=sel.value;sel.onchange=async()=>{
-  let t=sel.value;if(t==='__task'){const n=prompt('新建一个事项并把这个 Bug 归进去，事项名：（如：歌房进房 ANR）');if(!n||!n.trim()){sel.value=old;return}t='事项:'+n.trim()}
+  let t=sel.value;if(t==='__task'){const n=await kbPrompt('新建一个事项并把这个 Bug 归进去，事项名：（如：歌房进房 ANR）');if(!n||!n.trim()){sel.value=old;return}t='事项:'+n.trim()}
   try{const r=await post('/api/zentao/assign',{id:sel.dataset.bown,target:t});toast(r.msg);render()}catch(e){toast(e.message);sel.value=old}}})}
 // 接入 / 修改一个 Bug 或崩溃平台：适配器（内置或「Bug平台」插件）+ 基础信息里的账号 + 平台特有选项
 function srcDlg(s,ents,c){
@@ -203,7 +203,7 @@ function srcDlg(s,ents,c){
         catch(e){$('#sOut').textContent='已保存，但连接测试失败：\n'+e.message}
         if(isNew)c={ID:id,'适配器':b.adapter,'启用':true};}catch(e){toast(e.message)}};
     if($('#sTest'))$('#sTest').onclick=async()=>{$('#sOut').textContent='测试中…';try{$('#sOut').textContent=(await post('/api/bug/test',{id:c.ID})).msg}catch(e){$('#sOut').textContent=e.message}};
-    if($('#sDel'))$('#sDel').onclick=async()=>{if(!confirm(`移除平台「${c.ID}」？没分析过、没手动归类、没修复过的索引条目会去掉（平台上的数据不受影响）`))return;
+    if($('#sDel'))$('#sDel').onclick=async()=>{if(!await kbConfirm(`移除平台「${c.ID}」？没分析过、没手动归类、没修复过的索引条目会去掉（平台上的数据不受影响）`))return;
       try{const r=await post('/api/bug/source',{id:c.ID,remove:true});toast(r.msg);dlg.close();bugsPage()}catch(e){toast(e.message)}};
   };bind();
   dlg.addEventListener('close',()=>{if(location.hash.startsWith('#/bugs'))bugsPage()},{once:true});
@@ -241,8 +241,8 @@ async function bugsPage(){
   bindBugs(app);
   const setz=async b=>{try{await post('/api/bug/source',b);const r=await post('/api/zentao/sync',{source:b.id});toast('已保存，'+r.msg);bugsPage()}catch(e){toast(e.message);bugsPage()}};
   app.querySelectorAll('[data-zpf]').forEach(x=>x.onchange=()=>setz({id:x.dataset.zpf,platform:x.value}));
-  app.querySelectorAll('[data-zscope]').forEach(x=>x.onchange=()=>{const c=srcs.find(y=>y.ID===x.dataset.zscope);
-    if(x.value==='指定人'){const p=prompt('同步哪些人的 Bug？填平台账号，多个用逗号隔开',(c['人员']||[]).join(','));if(!p){x.value=c['范围'];return}setz({id:c.ID,scope:'指定人',people:p});return}
+  app.querySelectorAll('[data-zscope]').forEach(x=>x.onchange=async()=>{const c=srcs.find(y=>y.ID===x.dataset.zscope);
+    if(x.value==='指定人'){const p=await kbPrompt('同步哪些人的 Bug？填平台账号，多个用逗号隔开',(c['人员']||[]).join(','));if(!p){x.value=c['范围'];return}setz({id:c.ID,scope:'指定人',people:p});return}
     setz({id:c.ID,scope:x.value})});
   app.querySelectorAll('[data-zsrc]').forEach(a=>a.onclick=()=>srcDlg(s,d.baseEntries,srcs.find(c=>c.ID===a.dataset.zsrc)));
   $('#zAdd').onclick=()=>srcDlg(s,d.baseEntries,null);

@@ -30,6 +30,6 @@ async function buildBox(name,fresh){
     $('#bdGo').onclick=async()=>{try{const r=await post('/api/period/builds',{period:name,jobs:$('#bdJ').value});toast(r.msg);dlg.close();buildBox(name,true)}catch(e){toast(e.message)}}};
   box.querySelectorAll('[data-qr]').forEach(a=>a.onclick=()=>openDlg('扫码安装',`<img src="${esc(a.dataset.qr)}" style="max-width:280px;display:block;margin:auto">`));
   box.querySelectorAll('[data-bmap]').forEach(a=>a.onclick=async()=>{if(!a.dataset.ver)return toast('这次构建认不出版本号，到 ANR / 崩溃页「＋ 归档 mapping」手动填');
-    if(!confirm(`把这次构建的 mapping 归档为版本 ${a.dataset.ver}？`))return;
+    if(!await kbConfirm(`把这次构建的 mapping 归档为版本 ${a.dataset.ver}？`))return;
     a.textContent='归档中…';try{const r=await post('/api/build/mapping',{url:a.dataset.bmap,version:a.dataset.ver});openDlg('已归档 mapping',`<pre style="white-space:pre-wrap">${esc(r.msg)}</pre>`)}catch(e){toast(e.message)}finally{a.textContent='归档'}});
 }

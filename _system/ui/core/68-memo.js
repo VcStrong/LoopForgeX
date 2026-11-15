@@ -55,7 +55,7 @@ async function memoPage(name){
     rs.innerHTML=`<option value="">${v['工程']?esc(v['工程']):'— 未选 —'}</option>`+r.items.filter(x=>x['路径']!==v['工程']).map(x=>`<option value="${esc(x['路径'])}">${esc(x['名称'])} · ${(x['端']||[]).length?esc(x['端'].join(' / ')):'端未知'}　${esc(x['分支']||'')}${x['改动']?` · ${x['改动']} 个未提交改动`:''}${x['在用'].length?` · 正用于 ${esc(x['在用'].join('、'))}`:''}</option>`).join('')+PICK_OPT}catch(e){toast(e.message)}};
   rs.onchange=()=>{if(rs.value)item({action:'repo',text:rs.value})};
   app.querySelectorAll('[data-mset]').forEach(a=>a.onclick=()=>item({action:'set',key:a.dataset.mset,status:a.dataset.st}));
-  app.querySelectorAll('[data-mdel]').forEach(a=>a.onclick=()=>{if(confirm('删除这一条？'))item({action:'delete',key:a.dataset.mdel})});
+  app.querySelectorAll('[data-mdel]').forEach(a=>a.onclick=async()=>{if(await kbConfirm('删除这一条？'))item({action:'delete',key:a.dataset.mdel})});
   app.querySelectorAll('[data-manr]').forEach(a=>a.onclick=()=>anrDlg(a.dataset.manr,[]));
   app.querySelectorAll('[data-mpush]').forEach(b=>b.onclick=()=>{const x=its.find(i=>i['键']===b.dataset.mpush);
     openDlg('推动：'+x['标题'].slice(0,40),`<div class="form"><p class="small mut" style="margin:0">点了就是你批准处理这一条：不走开发流程，AI 自己判断怎么查、怎么改，改代码前先问你，做完把结论记在这一条下面。</p>
@@ -105,7 +105,7 @@ async function pushBox(name){
       <textarea rows="2" placeholder="你的回答（Cmd+Enter 提交）">${esc(drafts[q['编号']]||'')}</textarea><div class="row" style="margin-top:6px"><button class="pri" data-ans="1">提交回答</button></div></div>`).join('')
     +(v['动作'].length&&!$('#tkMsg')?`<details style="margin-top:8px" ${run?'open':''}><summary class="small mut">最近动作</summary><div class="act">${v['动作'].slice(-8).reverse().map(actLine).join('')}</div></details>`:'');
   box.dataset.sig=sig;
-  const st=$('#puStop');if(st)st.onclick=async()=>{if(!confirm('停止正在推动的后台 AI？'))return;try{toast((await post('/api/dev/stop',{period:name})).msg);pushBox(name)}catch(e){toast(e.message)}};
+  const st=$('#puStop');if(st)st.onclick=async()=>{if(!await kbConfirm('停止正在推动的后台 AI？'))return;try{toast((await post('/api/dev/stop',{period:name})).msg);pushBox(name)}catch(e){toast(e.message)}};
   box.querySelectorAll('.q').forEach(el=>{const id=el.dataset.q,ta=el.querySelector('textarea'),q=pend.find(x=>x['编号']===id);
     ta.oninput=()=>drafts[id]=ta.value;
     el.querySelectorAll('[data-opt]').forEach(b=>b.onclick=()=>{ta.value=q['选项'][+b.dataset.opt];drafts[id]=ta.value;ta.focus()});

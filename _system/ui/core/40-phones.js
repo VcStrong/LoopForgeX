@@ -12,7 +12,7 @@ const phoneRows=(items,period)=>items.length?items.map(x=>{const c=x['占用'],c
     <div class="small mut">${st}${x['agent-device']?` · agent-device 会话 ${esc(x['agent-device']['会话'])}${x['agent-device']['期']?'（'+esc(x['agent-device']['期'])+'）':''}`:''}</div></div>
     ${c?`<button class="small" data-dm="release" data-sn="${esc(x['序列号'])}" title="解除占用（后台会话还在用的话，它下次操作会重新占用）">释放</button>`:x['空闲']?`<button class="small" data-dm="mine" data-sn="${esc(x['序列号'])}" title="你自己要用这台手机：4 小时内后台会话不会往它装包、操作">我在用</button>`:'<span></span>'}</div>`}).join(''):'<div class="small mut">没有连着的手机</div>';
 function bindPhones(root,after){root.querySelectorAll('[data-dm]').forEach(b=>b.onclick=async()=>{
-  if(b.dataset.dm==='release'&&!confirm(`解除 ${b.dataset.sn} 的占用？`))return;
+  if(b.dataset.dm==='release'&&!await kbConfirm(`解除 ${b.dataset.sn} 的占用？`))return;
   try{const r=await post('/api/device',{serial:b.dataset.sn,action:b.dataset.dm});toast(r.msg);after()}catch(e){toast(e.message)}})}
 
 const size=n=>n>1048576?(n/1048576).toFixed(1)+' MB':n>1024?(n/1024).toFixed(0)+' KB':n+' B';

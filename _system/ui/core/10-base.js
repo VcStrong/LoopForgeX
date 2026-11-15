@@ -18,6 +18,20 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const enc=encodeURIComponent;
 const ORDER=['收集中','已批准开发','开发中','已完成','已暂停'];
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),3500)}
+// 站内确认 / 填写框：代替浏览器原生 confirm / prompt（跟随当前模板的 dialog 皮肤）。返回 Promise：确认 → true / 文字，取消 → false / null
+function kbAsk(msg,o={}){return new Promise(done=>{
+  let d=document.getElementById('kbAskDlg');
+  if(!d){d=document.createElement('dialog');d.id='kbAskDlg';d.className='mini';document.body.appendChild(d)}
+  if(d.open){d.onclose=null;d.close()}
+  const inp=o.input, danger=o.danger??(!inp&&/^(删除|删掉|移除|驳回|停止|关闭|解除)/.test(msg));let val=inp?null:false;
+  d.innerHTML=`<div class="hd"><b>${esc(o.title||(inp?'请填写':'请确认'))}</b><button data-x title="取消">✕</button></div><div class="bd" style="display:grid;gap:14px">
+    <div style="white-space:pre-wrap;line-height:1.65">${esc(msg)}</div>${inp?`<input type="text" id="kbAskIn" value="${esc(o.def||'')}" placeholder="${esc(o.ph||'')}" style="width:100%">`:''}
+    <div class="row" style="justify-content:flex-end;gap:8px"><button data-x>${esc(o.cancel||'取消')}</button><button class="${danger?'danger':'pri'}" id="kbAskOk">${esc(o.ok||'确定')}</button></div></div>`;
+  const i=d.querySelector('#kbAskIn'),fin=()=>{val=inp?i.value:true;d.close()};
+  d.querySelector('#kbAskOk').onclick=fin;d.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>d.close());
+  if(i)i.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();fin()}};
+  d.onclose=()=>done(val);d.showModal();if(i){i.focus();i.select()}else d.querySelector('#kbAskOk').focus()})}
+const kbConfirm=(msg,o)=>kbAsk(msg,o), kbPrompt=(msg,def,o)=>kbAsk(msg,{...o,input:true,def});
 async function api(u,opt){const r=await fetch(u,opt);const j=await r.json();if(r.status===401&&j.login){location.href='/login';throw new Error('要先登录')}if(!r.ok){const e=new Error(j.error||r.status);e.need=j.need;throw e}return j}
 const post=(u,b)=>api(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
 const badge=s=>`<span class="badge st-${esc(s)}">${esc(s)}</span>`;

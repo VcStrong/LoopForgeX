@@ -94,7 +94,7 @@ async function anrPage(){
   if($('#arAll')){$('#arAll').onchange=()=>{app.querySelectorAll('[data-asel]').forEach(c=>c.checked=$('#arAll').checked);bulk()};
     $('#arBX').onclick=()=>{app.querySelectorAll('[data-asel],#arAll').forEach(c=>c.checked=false);bulk()};
     $('#arBGo').onclick=async()=>{const ids=sels(),t=$('#arBT').value;let name='';
-      if(t==='＋新建'){name=prompt('新批次叫什么？',`ANR 第${bs.length+1}批`);if(name===null)return}
+      if(t==='＋新建'){name=await kbPrompt('新批次叫什么？',`ANR 第${bs.length+1}批`);if(name===null)return}
       try{const r=await post('/api/anr/batch',{ids,task:t,name});toast(r.msg);anrPage()}catch(e){toast(e.message)}}}
   const send=async(files,kind,ver)=>{for(const f of files){toast(`上传 ${f.name}…`);
     try{const r=await api('/api/anr/upload',{method:'POST',headers:{'X-Kind':kind,'X-Version':enc(ver||''),'X-Source':enc($('#arS').value.trim()),'X-Filename':enc(f.name)},body:f});
@@ -108,7 +108,7 @@ async function anrPage(){
   $('#arNew').onclick=()=>anrNewDlg(d.tasks,false);
 }
 async function anrLink(id,b){
-  if(b.task==='＋新建'&&!confirm('新建一个「ANR/崩溃」事项，并把这个问题关联进去？'))return anrPage();
+  if(b.task==='＋新建'&&!await kbConfirm('新建一个「ANR/崩溃」事项，并把这个问题关联进去？'))return anrPage();
   try{const r=await post('/api/anr/link',Object.assign({id},b));toast(r.msg);if(dlg.open)dlg.close();render()}catch(e){toast(e.message)}}
 function anrDlg(id,tasks){
   const p=anrIndex[id];if(!p)return;
@@ -131,6 +131,6 @@ function anrDlg(id,tasks){
   if($('#adAuto'))$('#adAuto').onclick=async()=>{const b=$('#adAuto');b.disabled=true;b.textContent='查找中…';
     try{let msg='';for(const v of p['版本']){const r=await post('/api/anr/automap',{version:v});msg+=r.msg+'\n'}
       openDlg('从构建找 mapping',`<pre style="white-space:pre-wrap">${esc(msg)}</pre>`);render()}catch(e){toast(e.message);b.disabled=false;b.textContent='从构建找 mapping'}};
-  $('#dlgB').querySelectorAll('[data-adel]').forEach(a=>a.onclick=async()=>{if(!confirm('删除这份样本（不是这个问题的日志）？'))return;
+  $('#dlgB').querySelectorAll('[data-adel]').forEach(a=>a.onclick=async()=>{if(!await kbConfirm('删除这份样本（不是这个问题的日志）？'))return;
     try{const r=await post('/api/anr/delete',{sample:a.dataset.adel});toast(r.msg);dlg.close();render()}catch(e){toast(e.message)}});
 }

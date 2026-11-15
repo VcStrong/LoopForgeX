@@ -118,13 +118,13 @@ async function stackBox(name){
     if(r.value==='按建议')return ans(i,'按建议');const w=box.querySelector(`[data-sqw="${i}"]`);w.hidden=false;w.querySelector('textarea').focus()});
   box.querySelectorAll('[data-sqs]').forEach(b=>b.onclick=()=>{const t=box.querySelector(`[data-sqt="${b.dataset.sqs}"]`).value.trim();if(!t)return toast('写一下你的意见');ans(b.dataset.sqs,'自定义',t)});
   if($('#stQAll'))$('#stQAll').onclick=async()=>{for(const [i,q] of QN.entries())if(!q['回答'])try{await post('/api/stack/answer',{period:name,idx:i,mode:'按建议'})}catch(e){toast(e.message);break}stackBox(name)};
-  if($('#stReAns'))$('#stReAns').onclick=()=>{if(confirm(`把你对 ${qMine} 个问题的意见交给 AI 重出方案？按建议的那些也会一起定下来，不再重复问。`))go()};
+  if($('#stReAns'))$('#stReAns').onclick=async()=>{if(await kbConfirm(`把你对 ${qMine} 个问题的意见交给 AI 重出方案？按建议的那些也会一起定下来，不再重复问。`))go()};
   if($('#stDnd'))$('#stDnd').onclick=async()=>{try{toast((await post('/api/dnd',{period:name,on:!v['免打扰']})).msg)}catch(e){toast(e.message)}stackBox(name);if($('#devBox'))devBox(name)};
   const P2=async(u,b)=>{try{toast((await post(u,{period:name,...b})).msg)}catch(e){toast(e.message)}stackBox(name)};
   if($('#stNewOn'))$('#stNewOn').onclick=()=>P2('/api/stack/newproduct',{on:true});
-  if($('#stNewOff'))$('#stNewOff').onclick=()=>{if(confirm('不按新产品流程走？（还是先选仓库）'))P2('/api/stack/newproduct',{on:false})};
+  if($('#stNewOff'))$('#stNewOff').onclick=async()=>{if(await kbConfirm('不按新产品流程走？（还是先选仓库）'))P2('/api/stack/newproduct',{on:false})};
   if($('#stPrd'))$('#stPrd').onclick=()=>P2('/api/stack/prd',{note:$('#stPrdN').value.trim()});
-  if($('#stPrdSkip'))$('#stPrdSkip').onclick=()=>{if(confirm('跳过完善需求，直接出方案？'))P2('/api/stack/prd',{skip:true})};
+  if($('#stPrdSkip'))$('#stPrdSkip').onclick=async()=>{if(await kbConfirm('跳过完善需求，直接出方案？'))P2('/api/stack/prd',{skip:true})};
   box.querySelectorAll('[data-read]').forEach(a=>a.onclick=()=>readFile(a.dataset.read));
   if($('#stRel'))$('#stRel').onclick=()=>P2('/api/stack/release',{});
   box.querySelectorAll('[data-rel]').forEach(c=>c.onchange=()=>P2('/api/stack/release/check',{id:c.dataset.rel,done:c.checked}));
@@ -132,38 +132,39 @@ async function stackBox(name){
   box.querySelectorAll('[data-snew]').forEach(b=>b.onclick=async()=>{const end=b.dataset.snew;
     const parent=await pickDir('');if(!parent)return;
     let def='';try{def=(await api('/api/stack/newdir?name='+enc(name)+'&end='+enc(end))).dir}catch(_){}
-    const dir=prompt(`在 ${parent} 下新建哪个目录？（留空 = 直接用 ${parent}，要求是空目录）`,def);if(dir===null)return;
+    const dir=await kbPrompt(`在 ${parent} 下新建哪个目录？（留空 = 直接用 ${parent}，要求是空目录）`,def);if(dir===null)return;
     await P2('/api/stack/create',{end,parent,dir:dir.trim()});stackRepos=null});
   if($('#crGo'))$('#crGo').onclick=async()=>{const t=$('#crT').value.trim();if(!t)return toast('写一句要变什么');
     const ends=[...box.querySelectorAll('[data-cre]:checked')].map(c=>c.dataset.cre);
     try{toast((await post('/api/stack/change',{period:name,title:t,ends})).msg)}catch(e){toast(e.message)}stackBox(name)};
-  box.querySelectorAll('[data-crx]').forEach(a=>a.onclick=async()=>{if(!confirm(`驳回 ${a.dataset.crx}？`))return;try{toast((await post('/api/stack/reject',{period:name,id:a.dataset.crx})).msg)}catch(e){toast(e.message)}stackBox(name)});
+  box.querySelectorAll('[data-crx]').forEach(a=>a.onclick=async()=>{if(!await kbConfirm(`驳回 ${a.dataset.crx}？`))return;try{toast((await post('/api/stack/reject',{period:name,id:a.dataset.crx})).msg)}catch(e){toast(e.message)}stackBox(name)});
   if($('#stAcc'))$('#stAcc').onclick=async()=>{const pubE=(v['开发']||[]).filter(x=>x['状态']==='审查通过'&&x['版本库']!=='本地'&&!(x['版本库']==='svn'?x['已提交']:x['已推送'])).map(x=>x['端']+(x['版本库']==='svn'?'（svn 提交）':'（git 推送）'));
-    if(!confirm('验收这一期？看过证据包，确认各端做完（这一期会标为已完成，之后照常处理 Bug）。'+(pubE.length?`\n\n验收时会把审查通过的端送上服务器：${pubE.join('、')}。svn 只提交这次改的文件，git 只推开发分支。`:'')))return;
+    if(!await kbConfirm('验收这一期？看过证据包，确认各端做完（这一期会标为已完成，之后照常处理 Bug）。'+(pubE.length?`\n\n验收时会把审查通过的端送上服务器：${pubE.join('、')}。svn 只提交这次改的文件，git 只推开发分支。`:'')))return;
     try{toast((await post('/api/stack/accept',{period:name})).msg)}catch(e){toast(e.message)}render()};
-  if($('#stDev'))$('#stDev').onclick=async()=>{if(!confirm('各端开工？涉及的端会各起一个 AI 会话按拍板的方案开发（= 你批准开发）。'))return;
+  if($('#stDev'))$('#stDev').onclick=async()=>{if(!await kbConfirm('各端开工？涉及的端会各起一个 AI 会话按拍板的方案开发（= 你批准开发）。'))return;
     try{toast((await post('/api/stack/dev',{period:name})).msg)}catch(e){toast(e.message)}stackBox(name)};
-  box.querySelectorAll('[data-stop]').forEach(b=>b.onclick=async()=>{if(!confirm(`停止 ${b.dataset.stop}？`))return;try{toast((await post('/api/stack/stop',{period:name,end:b.dataset.stop})).msg)}catch(e){toast(e.message)}stackBox(name)});
-  box.querySelectorAll('[data-redev]').forEach(b=>b.onclick=async()=>{if(!confirm(`${b.dataset.redev} 重新开工？`))return;try{toast((await post('/api/stack/dev',{period:name,end:b.dataset.redev})).msg)}catch(e){toast(e.message)}stackBox(name)});
-  const setEnd=async(end,repo)=>{if(repo==='__other'){repo=prompt(`${end} 的仓库地址：本机写路径，远程写 user@主机:/路径`,'');if(!repo){stackBox(name);return}}
+  box.querySelectorAll('[data-stop]').forEach(b=>b.onclick=async()=>{if(!await kbConfirm(`停止 ${b.dataset.stop}？`))return;try{toast((await post('/api/stack/stop',{period:name,end:b.dataset.stop})).msg)}catch(e){toast(e.message)}stackBox(name)});
+  box.querySelectorAll('[data-redev]').forEach(b=>b.onclick=async()=>{if(!await kbConfirm(`${b.dataset.redev} 重新开工？`))return;try{toast((await post('/api/stack/dev',{period:name,end:b.dataset.redev})).msg)}catch(e){toast(e.message)}stackBox(name)});
+  const setEnd=async(end,repo)=>{if(repo==='__other'){repo=(await kbPrompt(`${end} 的仓库地址：本机写路径，远程写 user@主机:/路径`,'',{title:'填写仓库地址',ph:'/路径 或 user@主机:/路径'})||'').trim();if(!repo){stackBox(name);return}}
     if(!repo||repo==='__pick')return;
     const known=(stackRepos||[]).find(x=>x['路径']===repo);
     if(repo.startsWith('/')||repo.startsWith('~'))try{if(!known||known['版本库']==='本地'){const f=await api('/api/stack/dirkind?path='+enc(repo));
-      if(!f['版本库']&&confirm(`${f['路径']} 不是 git 仓库。\n\n初始化为 git 仓库？（git init 并首次提交，之后 AI 在分支上开发、验收时推送）\n取消 = 当普通本地目录用（AI 直接改文件，不提交）`)){
+      if(!f['版本库']&&await kbConfirm(`${f['路径']} 不是 git 仓库。\n\n初始化为 git 仓库？（git init 并首次提交，之后 AI 在分支上开发、验收时推送）\n不初始化 = 当普通本地目录用（AI 直接改文件，不提交）`,{ok:'初始化为 git',cancel:'当普通目录用'})){
         toast((await post('/api/stack/gitinit',{path:f['路径']})).msg);repo=f['路径']}}}catch(_){}
     try{toast((await post('/api/stack/end',{period:name,end,repo})).msg);stackRepos=null}catch(e){toast(e.message)}stackBox(name)};
   box.querySelectorAll('[data-send]').forEach(sel=>sel.onchange=()=>setEnd(sel.dataset.send,sel.value));
-  box.querySelectorAll('[data-sdel]').forEach(b=>b.onclick=async()=>{const e=b.dataset.sdel;if(!confirm(`这一期不涉及 ${e}？会从各端里移除（仓库本身不受影响）。`))return;
+  box.querySelectorAll('[data-sdel]').forEach(b=>b.onclick=async()=>{const e=b.dataset.sdel;if(!await kbConfirm(`这一期不涉及 ${e}？会从各端里移除（仓库本身不受影响）。`))return;
     try{toast((await post('/api/stack/end',{period:name,end:e,repo:''})).msg)}catch(x){toast(x.message)}stackBox(name)});
   let addEnd='';
   const addSel=$('#stAddE'),addRw=$('#stAddRw');
-  if(addSel)addSel.onchange=()=>{let e=addSel.value;
-    if(e==='__other'){e=(prompt('端的名字（如 Unity、嵌入式、脚本），最多 20 个字','')||'').trim();if(!e){addSel.value='';return}}
+  if(addSel)addSel.onchange=async()=>{let e=addSel.value;
+    if(e==='__other'){e=(await kbPrompt('端的名字（如 Unity、嵌入式、脚本），最多 20 个字','',{title:'添加端'})||'').trim();if(!e){addSel.value='';return}}
     if(!e){addRw.hidden=true;return}
     const dup=v['各端'].find(r=>r['端'].toLowerCase()===e.toLowerCase());
     if(dup&&dup['仓库']){toast(`已经有 ${dup['端']} 了`);addSel.value='';return}
     addEnd=dup?dup['端']:e;$('#stAddR').innerHTML=opts({端:addEnd});addRw.hidden=false;
     if(addSel.value==='__other'){const o=document.createElement('option');o.value=addEnd;o.textContent=addEnd;addSel.insertBefore(o,addSel.lastElementChild);addSel.value=addEnd}};
+  const addR=$('#stAddR');if(addR)addR.onchange=()=>{if(addR.value==='__other'&&addEnd)setEnd(addEnd,'__other')};  // 选「填写地址」直接弹框，填完就加
   if($('#stAddX'))$('#stAddX').onclick=()=>{addSel.value='';addRw.hidden=true};
   if($('#stAddGo'))$('#stAddGo').onclick=()=>{const r=$('#stAddR').value;if(!addEnd)return toast('先选平台');if(!r||r==='__pick')return toast(`给 ${addEnd} 选一个仓库`);setEnd(addEnd,r)};
   box.querySelectorAll('[data-sbr]').forEach(i=>i.onfocus=async()=>{if(i.dataset.loaded)return;i.dataset.loaded='1';
@@ -176,7 +177,7 @@ async function stackBox(name){
     try{toast((await post('/api/stack/end',{period:name,end:r['端'],repo:r['仓库'],branch:i.value.trim()})).msg)}catch(e){toast(e.message)}stackBox(name)});
   const go=async()=>{try{toast((await post('/api/stack/plan',{period:name,note:$('#stNote')?$('#stNote').value.trim():''})).msg)}catch(e){toast(e.message)}stackBox(name)};
   if($('#stGo'))$('#stGo').onclick=go;if($('#stRe'))$('#stRe').onclick=go;
-  if($('#stOk'))$('#stOk').onclick=async()=>{if(!confirm('拍板这份方案？接口契约会锁成一个版本，之后各端按它开发。'+(qLeft?`\n\n还有 ${qLeft} 个问题没确认，将按 AI 建议处理。`:'')+(qMine?`\n\n你写了意见的 ${qMine} 个问题按你的意见执行，但方案正文不会按它改；想让 AI 先改方案就点「按我的回答重出方案」。`:'')))return;
+  if($('#stOk'))$('#stOk').onclick=async()=>{if(!await kbConfirm('拍板这份方案？接口契约会锁成一个版本，之后各端按它开发。'+(qLeft?`\n\n还有 ${qLeft} 个问题没确认，将按 AI 建议处理。`:'')+(qMine?`\n\n你写了意见的 ${qMine} 个问题按你的意见执行，但方案正文不会按它改；想让 AI 先改方案就点「按我的回答重出方案」。`:'')))return;
     try{toast((await post('/api/stack/approve',{period:name})).msg)}catch(e){toast(e.message)}stackBox(name)};
   if(run||QS['在跑']||RS['在跑']||Object.values(BLD).some(b=>b['在跑'])||D.some(x=>x['在跑']||['排队中','待审查','打回修改'].includes(x['状态'])))setTimeout(()=>{if(curPeriod()===name)stackBox(name)},6000);
 }

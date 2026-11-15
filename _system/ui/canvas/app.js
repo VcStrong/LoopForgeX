@@ -495,7 +495,7 @@
   }
   const bindPlaces = p => {
     p.querySelectorAll('[data-add]').forEach(b => b.onclick = () => { closePop(); KB.addDlg(b.dataset.add) });
-    const bk = p.querySelector('[data-back]'); if (bk) bk.onclick = () => { if (confirm('把界面换回经典（会改设置）？')) KB.setTemplate('经典') };
+    const bk = p.querySelector('[data-back]'); if (bk) bk.onclick = async () => { if (await KB.confirm('把界面换回经典（会改设置）？')) KB.setTemplate('经典') };
   };
   $('#tplFilterBtn').onclick = e => openPop(e.currentTarget, filterHtml(), bindFilter);
   $('#tplPlacesBtn').onclick = e => openPop(e.currentTarget, placesHtml(), bindPlaces);

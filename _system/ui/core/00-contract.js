@@ -46,7 +46,7 @@
  *                             dev（某期开发进度，ev.period）、adds（最近添加）、live（连接状态 ev.on）、*（全部）。core 自己已按事件刷新当前页和导航。
  *   KB.api(url, opt)          fetch + JSON，出错抛 Error（e.need = 需要补的信息），401 跳登录；KB.post(url, body)：POST JSON
  *   KB.esc(s) KB.enc(s)       HTML 转义 / encodeURIComponent
- *   KB.toast(文字)            右下角提示；KB.openDlg(标题, html)：全局对话框（#dlg）；KB.md(markdown) → {html, toc}；KB.mdInline(文字)
+ *   KB.toast(文字)            右下角提示；KB.openDlg(标题, html)：全局对话框（#dlg）；KB.confirm(文字, {ok,cancel,danger,title}) → Promise<bool>、KB.prompt(文字, 默认值, {title,ph}) → Promise<文字|null>：站内确认 / 填写框（不要用浏览器原生 confirm / prompt / alert）；KB.md(markdown) → {html, toc}；KB.mdInline(文字)
  *   KB.badge(状态)            状态徽章 html；KB.fileUrl(路径)；KB.readFile(路径)：对话框里看文件；KB.showImg(路径)
  *   KB.since(时间) KB.when(秒) KB.size(字节)   「3 分钟」/ 日期 / 「1.2 MB」
  *   KB.askOpen(true|false)    打开 / 收起「交给管家」面板；KB.addDlg(tab)：手动新建对话框（tab: 'new' 新期 / 'task' 事项 / 'add' 添加）

@@ -101,10 +101,10 @@ async function period(name){
   app.querySelectorAll('[data-nadd]').forEach(a=>a.onclick=()=>noteForm(d,{'分类':a.dataset.nadd}));
   app.querySelectorAll('[data-nedit]').forEach(a=>a.onclick=()=>noteForm(d,byId(a.dataset.nedit)));
   app.querySelectorAll('[data-ndel]').forEach(a=>a.onclick=async()=>{const n=byId(a.dataset.ndel);
-    if(!confirm(`删除 ${n['编号']}「${noteTitle(n)}」？`))return;
+    if(!await kbConfirm(`删除 ${n['编号']}「${noteTitle(n)}」？`))return;
     try{const r=await post('/api/note',{period:d.name,id:n['编号'],delete:true});toast(r.msg);render()}catch(e){toast(e.message)}});
   app.querySelectorAll('[data-v]').forEach(b=>b.onclick=async()=>{
-    let note='';if(b.dataset.s==='有问题'){note=prompt('哪里有问题？（会记进记录，Claude 可据此修正）')||'';}
+    let note='';if(b.dataset.s==='有问题'){note=await kbPrompt('哪里有问题？（会记进记录，Claude 可据此修正）')||'';}
     try{const r=await post('/api/verify',{period:d.name,sid:b.dataset.v,status:b.dataset.s,note});toast(r.msg);render()}catch(e){toast(e.message)}});
   const refresh=async(sid,b)=>{b.disabled=true;const t=b.textContent;b.textContent='检查中…';
     try{const r=await post('/api/refresh',{period:d.name,sid});openDlg('检查更新结果',`<pre style="white-space:pre-wrap">${esc(r.msg)}</pre>`);render()}
@@ -121,7 +121,7 @@ async function period(name){
     $('#tkGo').onclick=async()=>{try{const r=await post('/api/task/meta',{period:d.name,kind:$('#tkK').value,priority:$('#tkP').value,source:$('#tkF').value.trim(),summary:$('#tkS').value.trim()});toast(r.msg);dlg.close();render()}catch(e){toast(e.message)}}};
   $('#stSel').title='选另一个状态会先确认再修改';
   $('#stSel').onchange=async()=>{const sel=$('#stSel'),to=sel.value;
-    if(!confirm(`把「${d.name}」的状态从「${m['状态']}」改为「${to}」？`)){sel.value=m['状态'];return}
+    if(!await kbConfirm(`把「${d.name}」的状态从「${m['状态']}」改为「${to}」？`)){sel.value=m['状态'];return}
     try{const r=await post('/api/status',{period:d.name,status:to});toast(r.msg);render()}catch(e){toast(e.message);sel.value=m['状态']}};
 }
 

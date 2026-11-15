@@ -34,13 +34,13 @@ async function tmRender(name){
       :'<div class="small mut" style="padding:8px 0">在这一期的仓库里开一个真正的终端（开源的 ttyd：中文输入、复制粘贴、vim、ssh 输密码都行）：选目录后点「＋ 新终端」。AI 被拦、要登录、要推送时在这里处理，处理完点「↩ 发给会话」让 AI 接着做。</div>')
     +'<div class="small mut">只能你本人在网页上用，会话里的 AI 用不了；刷新页面会重开 shell（之前的输出录在 期/'+esc(name)+'/终端/）。</div>';
   box.querySelectorAll('[data-tmt]').forEach(a=>a.onclick=()=>{TM.cur=a.dataset.tmt;box.innerHTML='';tmRender(name)});
-  $('#tmNew').onclick=async()=>{let cwd=$('#tmDir').value;if(cwd==='__other'){cwd=(prompt('在哪个目录开终端？本机写路径，远程写 user@主机:/路径','')||'').trim();if(!cwd)return}
+  $('#tmNew').onclick=async()=>{let cwd=$('#tmDir').value;if(cwd==='__other'){cwd=(await kbPrompt('在哪个目录开终端？本机写路径，远程写 user@主机:/路径','')||'').trim();if(!cwd)return}
     try{TM.cur=(await post('/api/term/open',{period:name,cwd})).id;box.innerHTML='';tmRender(name);termBind(name)}catch(e){toast(e.message)}};
-  if($('#tmClose'))$('#tmClose').onclick=async()=>{if(!confirm('关闭这个终端？里面在跑的命令会被结束。'))return;
+  if($('#tmClose'))$('#tmClose').onclick=async()=>{if(!await kbConfirm('关闭这个终端？里面在跑的命令会被结束。'))return;
     try{toast((await post('/api/term/close',{id:TM.cur})).msg)}catch(e){toast(e.message)}TM.cur='';box.innerHTML='';tmRender(name);termBind(name)};
   if($('#tmSend'))$('#tmSend').onclick=async()=>{let t;try{t=(await api('/api/term/tail?id='+enc(TM.cur)))['文本']}catch(e){return toast(e.message)}
     if(!t.trim())return toast('终端还没有输出');
     const msg=`我在网页终端（${cur['目录']}）里处理了下面这些，请据此接着做：\n\`\`\`\n${t.trim()}\n\`\`\``;
-    if(!confirm(`把这个终端最近的输出（${t.length} 字）发给会话？\n\n有会话在跑：它下次调用知识库工具时收到；没有：新开会话接着处理。`))return;
+    if(!await kbConfirm(`把这个终端最近的输出（${t.length} 字）发给会话？\n\n有会话在跑：它下次调用知识库工具时收到；没有：新开会话接着处理。`))return;
     try{toast((await post('/api/period/say',{period:name,text:msg,target:'all',interrupt:false})).msg)}catch(e){toast(e.message)}};
 }

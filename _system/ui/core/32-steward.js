@@ -50,7 +50,7 @@ async function loadStw(){
   const el=$('#ovStw');if(!el)return;el.innerHTML=stwHtml(ovStw);
   const go=async(u,b)=>{try{toast((await post(u,b)).msg)}catch(e){toast(e.message)}loadStw()};
   const t=$('#stwTick');if(t)t.onclick=()=>{t.disabled=true;t.textContent='巡检中…';go('/api/steward/tick',{})};
-  el.querySelectorAll('[data-sans]').forEach(b=>b.onclick=()=>{if(/忽略/.test(b.textContent)&&!confirm('忽略这些陈旧 Bug？只在知识库标记，不改 Bug 平台，随时能在 Bug 页取消。'))return;const s=el.querySelector(`[data-sopt="${CSS.escape(b.dataset.sans)}"]`);b.disabled=true;go('/api/steward/answer',{id:b.dataset.sans,value:s?s.value:''})});
+  el.querySelectorAll('[data-sans]').forEach(b=>b.onclick=async()=>{if(/忽略/.test(b.textContent)&&!await kbConfirm('忽略这些陈旧 Bug？只在知识库标记，不改 Bug 平台，随时能在 Bug 页取消。'))return;const s=el.querySelector(`[data-sopt="${CSS.escape(b.dataset.sans)}"]`);b.disabled=true;go('/api/steward/answer',{id:b.dataset.sans,value:s?s.value:''})});
   el.querySelectorAll('[data-sno]').forEach(b=>b.onclick=()=>go('/api/steward/dismiss',{id:b.dataset.sno}));
   bindProp(el,'/api/steward/answer');
 }

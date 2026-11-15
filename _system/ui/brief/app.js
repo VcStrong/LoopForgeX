@@ -410,7 +410,7 @@
 
   // 报头按钮、换回经典
   q('#tplAsk').onclick = () => KB.askOpen(true);
-  q('#tplBack').onclick = () => { if (confirm('把界面换回经典？（会改设置，整站重新加载）')) KB.setTemplate('经典') };
+  q('#tplBack').onclick = async () => { if (await KB.confirm('把界面换回经典？（会改设置，整站重新加载）')) KB.setTemplate('经典') };
   dateline();
   loadBrief(true);
 })();

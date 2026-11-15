@@ -143,7 +143,7 @@ async function settingsPage(){
   const byId=id=>d.flows.find(f=>f.id===id),eById=id=>d.engines.find(e=>e.id===id),pById=id=>d.plugins.find(p=>p.id===id);
   const rl=async b=>{try{toast((await post('/api/chat/rule',b)).msg.split('\n')[0])}catch(e){toast(e.message)}settingsPage()};
   if($('#rlAdd'))$('#rlAdd').onclick=()=>{const v=$('#rlIn').value.trim();if(v)rl({text:v})};
-  app.querySelectorAll('[data-rdel]').forEach(a=>a.onclick=()=>{if(confirm('删掉这条规矩？'))rl({delete:a.dataset.rdel})});
+  app.querySelectorAll('[data-rdel]').forEach(a=>a.onclick=async()=>{if(await kbConfirm('删掉这条规矩？'))rl({delete:a.dataset.rdel})});
   app.querySelectorAll('[data-uit]').forEach(b=>b.onclick=()=>{setPrevTpl=b.dataset.uit;settingsPage()});
   if($('#uiUse'))$('#uiUse').onclick=async()=>{try{await setTemplate(setPrevTpl)}catch(e){toast(e.message)}};
   $('#advTog').onclick=()=>{setAdv=!setAdv;try{localStorage.setItem('kb.setAdv',setAdv?'1':'')}catch(_){}settingsPage()};
@@ -160,7 +160,7 @@ async function settingsPage(){
     if(p['启用'])return plSave(p,false,p['时机'],p['配置']);plDlg(d,p,true)});
   app.querySelectorAll('[data-pset]').forEach(b=>b.onclick=()=>plDlg(d,pById(b.dataset.pset),false));
   app.querySelectorAll('[data-prun]').forEach(b=>b.onclick=()=>plRunDlg(d,pById(b.dataset.prun)));
-  app.querySelectorAll('[data-prm]').forEach(b=>b.onclick=async()=>{const p=pById(b.dataset.prm);if(!confirm(`从列表移除插件「${p['名称']}」？（不删除文件）`))return;
+  app.querySelectorAll('[data-prm]').forEach(b=>b.onclick=async()=>{const p=pById(b.dataset.prm);if(!await kbConfirm(`从列表移除插件「${p['名称']}」？（不删除文件）`))return;
     try{toast((await post('/api/plugin/remove',{id:p.id})).msg);render()}catch(e){toast(e.message)}});
   $('#plAdd').onclick=()=>{openDlg('添加插件目录',`<div class="form"><label>插件文件夹的绝对路径（里面要有 plugin.json）<input type="text" id="plP" placeholder="/Users/…/my-plugin"></label>
       <div class="row"><button class="pri" id="plGo">添加</button></div></div>`);
@@ -177,13 +177,13 @@ async function settingsPage(){
     try{const r=await post('/api/engine/test',{id:e.id});openDlg(`测试 ${e['名称']}：${r['成功']?'✅ 成功':'❌ 没通过'}`,`<p class="small mut">退出码 ${r['退出码']} · 用时 ${r['耗时']} 秒</p><pre style="white-space:pre-wrap">${esc(r['结果']||'（没有输出）')}</pre>${r['成功']?'':'<p class="small">没通过时：确认已安装、已登录，「接入知识库」后再试；仍不行就检查启动参数（权限模式是否允许调用知识库工具）。</p>'}`)}
     catch(e){toast(e.message)}b.disabled=false;b.textContent='测试'});
   app.querySelectorAll('[data-erm]').forEach(b=>b.onclick=async()=>{const e=eById(b.dataset.erm);
-    if(!confirm(e['内置']?`把「${e['名称']}」恢复为默认设置？`:`删除引擎「${e['名称']}」？用它的期会改回默认引擎。`))return;
+    if(!await kbConfirm(e['内置']?`把「${e['名称']}」恢复为默认设置？`:`删除引擎「${e['名称']}」？用它的期会改回默认引擎。`))return;
     try{toast((await post('/api/engine/delete',{id:e.id})).msg);render()}catch(x){toast(x.message)}});
   app.querySelectorAll('[data-ed]').forEach(b=>b.onclick=()=>flowDlg(d,byId(b.dataset.ed)));
   app.querySelectorAll('[data-cp]').forEach(b=>b.onclick=()=>{const f={...byId(b.dataset.cp)};['id','内置','已修改','默认'].forEach(k=>delete f[k]);f['名称']+='（副本）';flowDlg(d,f)});
   app.querySelectorAll('[data-df]').forEach(b=>b.onclick=async()=>{try{toast((await post('/api/settings/default',{id:b.dataset.df})).msg);render()}catch(e){toast(e.message)}});
   app.querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{const f=byId(b.dataset.rm);
-    if(!confirm(f['内置']?`把「${f['名称']}」恢复为内置的默认设置？你的修改会丢失。`:`删除流程「${f['名称']}」？用它的期会改回「自动」。`))return;
+    if(!await kbConfirm(f['内置']?`把「${f['名称']}」恢复为内置的默认设置？你的修改会丢失。`:`删除流程「${f['名称']}」？用它的期会改回「自动」。`))return;
     try{toast((await post('/api/settings/flow/delete',{id:f.id})).msg);render()}catch(e){toast(e.message)}});
   app.querySelectorAll('[data-ex]').forEach(b=>b.onclick=()=>{const f={...byId(b.dataset.ex)};['id','内置','已修改','默认'].forEach(k=>delete f[k]);
     const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(f,null,2)],{type:'application/json'}));a.download=`开发流程-${f['名称']}.json`;a.click()});

@@ -165,14 +165,14 @@ async function devBox(name){
         await devStart({period:name,confirm:$('#dvC').value,note:$('#dvN').value})}
       catch(e){toast(e.message);b.disabled=false;b.textContent='▶ 确认开始'}};$('#dvC').focus()};
   const eg=$('#dvEng');if(eg)eg.onchange=async()=>{try{const r=await post('/api/period/engine',{period:name,id:eg.value});toast(r.msg);devBox(name)}catch(e){toast(e.message)}};
-  const fe=$('#dvFlowEnd');if(fe)fe.onclick=async()=>{if(!confirm('取消这一期统一指定的流程？之后每个端按「全栈 → 各端」里选的流程（没选就自动匹配）。'))return;
+  const fe=$('#dvFlowEnd');if(fe)fe.onclick=async()=>{if(!await kbConfirm('取消这一期统一指定的流程？之后每个端按「全栈 → 各端」里选的流程（没选就自动匹配）。'))return;
     try{const r=await post('/api/period/flow',{period:name,id:''});toast(r.msg);devBox(name);stackBox(name)}catch(e){toast(e.message)}};
   const fg=$('#dvFlowGo');if(fg)fg.onclick=()=>{const t=document.querySelector('[data-tab="stack"]');if(t)t.click();const p=document.querySelector('[data-pane="stack"]');if(p)p.scrollIntoView({block:'start'})};
   box.querySelectorAll('[data-iterm]').forEach(b=>b.onclick=()=>termOpen(name,((v['各端一览']||[])[0]||{})['仓库']||(s&&s['仓库'])||''));
   box.querySelectorAll('.iss').forEach(el=>el.querySelectorAll('[data-is]').forEach(b=>b.onclick=async()=>{
     try{const r=await post('/api/issue',{period:name,id:el.dataset.i,status:b.dataset.is});toast(r.msg);devBox(name)}catch(e){toast(e.message)}}));
   box.querySelectorAll('[data-dm]').forEach(b=>b.onclick=async()=>{
-    if(b.dataset.dm==='release'&&!confirm(`解除 ${b.dataset.sn} 的占用？`))return;
+    if(b.dataset.dm==='release'&&!await kbConfirm(`解除 ${b.dataset.sn} 的占用？`))return;
     try{const r=await post('/api/device',{serial:b.dataset.sn,action:b.dataset.dm});toast(r.msg);devBox(name)}catch(e){toast(e.message)}});
   const mt=$('#dvMsg');if(mt){mt.oninput=()=>drafts.__chat=mt.value;
     const send=async()=>{const t=mt.value.trim();if(!t)return;const it=$('#dvInt'),b=$('#dvSend');b.disabled=true;
@@ -191,12 +191,12 @@ async function devBox(name){
       <div class="row"><button class="pri" id="rtGo">▶ 现在复测</button><button id="rtAuto">⏰ 手机够了自动复测</button></div>
       <p class="small mut" style="margin:0">「手机够了自动复测」：每分钟检查一次，空闲手机达到台数就自动开始并弹通知（只触发一次）。</p></div>`);
     const opt=()=>({scope:($('#dlgB').querySelector('input[name=rtS]:checked')||{}).value||'未通过',phones:+$('#rtN').value||1});
-    $('#rtGo').onclick=async()=>{const o=opt();if(phones&&freeN<o.phones&&!confirm(`现在只有 ${freeN} 台空闲手机，少于 ${o.phones} 台。仍然现在复测？（测不了的会记成问题）`))return;
+    $('#rtGo').onclick=async()=>{const o=opt();if(phones&&freeN<o.phones&&!await kbConfirm(`现在只有 ${freeN} 台空闲手机，少于 ${o.phones} 台。仍然现在复测？（测不了的会记成问题）`))return;
       const b=$('#rtGo');b.disabled=true;b.textContent='启动中…';
       try{const r=await post('/api/retest',{period:name,scope:o.scope,note:$('#rtNote').value});dlg.close();toast(r.msg);render()}catch(e){toast(e.message);b.disabled=false;b.textContent='▶ 现在复测'}};
     $('#rtAuto').onclick=async()=>{const o=opt();try{const r=await post('/api/retest/plan',{period:name,auto:true,phones:o.phones,scope:o.scope});dlg.close();toast(r.msg);devBox(name)}catch(e){toast(e.message)}};
   };
-  const sp=$('#dvStop');if(sp)sp.onclick=async()=>{if(!confirm(s['类型']==='复测'?'停止复测？':'停止后台开发？进行中的步骤会中断，状态改为「已暂停」，之后可「继续开发」。'))return;
+  const sp=$('#dvStop');if(sp)sp.onclick=async()=>{if(!await kbConfirm(s['类型']==='复测'?'停止复测？':'停止后台开发？进行中的步骤会中断，状态改为「已暂停」，之后可「继续开发」。'))return;
     try{const r=await post('/api/dev/stop',{period:name});toast(r.msg);render()}catch(e){toast(e.message)}};
 }
 

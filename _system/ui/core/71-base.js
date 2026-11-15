@@ -40,7 +40,7 @@ async function basePage(){
     bind();$('#bFA').onclick=()=>{$('#bF').insertAdjacentHTML('beforeend',row({'名':'','值':'','机密':false}));bind()};
     $('#bGo').onclick=async()=>{const fields=[...$('#bF').querySelectorAll('.frow')].map(r=>({'名':r.querySelector('.fN').value.trim(),'值':r.querySelector('.fV').value,'机密':r.querySelector('.fS').checked})).filter(f=>f['名']);
       try{const r=await post('/api/base/save',{id:e?e['编号']:'',category:$('#bC').value,name:$('#bN').value,scope:$('#bS').value,note:$('#bR').value,fields});dlg.close();toast(r.msg.split('\n')[0]);render()}catch(x){toast(x.message)}};
-    if(e)$('#bDel').onclick=async()=>{if(!confirm('删除「'+e['名称']+'」？机密字段也会一起删除。'))return;
+    if(e)$('#bDel').onclick=async()=>{if(!await kbConfirm('删除「'+e['名称']+'」？机密字段也会一起删除。'))return;
       try{const r=await post('/api/base/save',{id:e['编号'],delete:true});dlg.close();toast(r.msg);render()}catch(x){toast(x.message)}};
     $('#bN').focus()};
   $('#bAdd').onclick=()=>edit(null);
