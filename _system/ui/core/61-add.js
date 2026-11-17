@@ -34,14 +34,13 @@ async function addDlg(tab){
   $('#adGo').onclick=go;$('#adT').onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey))go()};
   show(tab||'add');addList();
 }
-function openDlg(t,h){$('#dlgT').textContent=t;$('#dlgB').innerHTML=h;$('#dlgB').onkeydown=null;dlg.showModal()}
-async function readFile(p,start){
-  try{const r=await api('/api/read?path='+enc(p)+'&start='+(start||1));openDlg(p.split('/').pop(),`<pre>${esc(r.text)}</pre>`)}catch(e){toast(e.message)}
-}
+function openDlg(t,h){$('#dlgT').textContent=t;$('#dlgB').innerHTML=h;$('#dlgB').onkeydown=null;dlg.classList.remove('pvw','pvfull');if(!dlg.open)dlg.showModal()}
+// 看文件：按扩展名选预览器（md 渲染、html 沙箱、图片缩放、pdf / docx / xlsx / 音视频……，见 62-preview.js）；start = 从第几行看文字
+function readFile(p,start){return previewOpen(p,start).catch(e=>toast(e.message))}
 function showImg(p){
   const el=[...document.querySelectorAll('[data-img]')].find(x=>x.dataset.img===p);
   const note=el?.dataset.note||el?.querySelector('div')?.title||'';
-  openDlg(p.split('/').pop(),`${note?`<p style="white-space:pre-wrap">${esc(note)}</p>`:'<p class="mut">暂无说明，可让 Claude「把设计图都看一遍补上说明」</p>'}<img src="${fileUrl(p)}">`);
+  return previewOpen(p,0,{note}).catch(e=>toast(e.message));
 }
 
 async function search(q,scope){

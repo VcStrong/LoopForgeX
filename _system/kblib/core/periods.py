@@ -369,7 +369,7 @@ def set_status(period, status, note='', by_human=False):
     if status == '已完成' and cur != '已完成':
         root = m.get('开发仓库') or ''
         branch = _devprep._git(Path(root), 'branch', '--show-current').stdout.strip() if root and Path(root).is_dir() else ''
-        plug = _plugins.run_plugins('开发完成', d, root, branch, m.get('SDD目录', ''))
+        plug = _plugins.run_plugins('done', d, root, branch, m.get('SDD目录', ''))
         if plug:
             msg += f'\n\n【开发完成时已运行的插件】\n{plug}'
             if '个文件改动' in plug:
@@ -381,3 +381,95 @@ def add_log(period, note):
     d = period_dir(period)
     log(d, '记录', note)
     return f'已记录到 {d.name}/记录.md'
+
+
+# ---------------------------------------------------------------- 归档：做完一段时间的期 / 事项不再出现在列表里（目录、资料、记录都不动，检索照常）
+ARCHIVE_DAYS = 14          # 默认：已完成满 14 天自动归档；设置.json「归档天数」改，0 = 不自动
+
+
+def archive_days():
+    from kblib.core.common import load_settings
+    v = load_settings().get('归档天数', ARCHIVE_DAYS)
+    try:
+        return max(0, int(v))
+    except (TypeError, ValueError):
+        return ARCHIVE_DAYS
+
+
+def done_time(m):
+    """最后一次标为已完成的时间（没有状态历史就用更新时间）。"""
+    for x in reversed(m.get('状态历史') or []):
+        if x.get('状态') == '已完成':
+            return x.get('时间', '')
+    return m.get('更新时间', '') if m.get('状态') == '已完成' else ''
+
+
+def is_archived(m, days=None):
+    """归档了吗：只有已完成的才会归档；手动归档的一直算；否则已完成（或上次恢复）满 N 天自动算。"""
+    if (m or {}).get('状态') != '已完成':
+        return False
+    if m.get('归档') == '手动':
+        return True
+    days = archive_days() if days is None else days
+    since = max(done_time(m), m.get('恢复时间') or '')
+    if not days or not since:
+        return False
+    from datetime import timedelta
+    return since < (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M')
+
+
+def period_archive(name, on=True, by='用户（网页）'):
+    """手动归档 / 恢复。恢复 = 重新出现在列表里，再满 N 天才会自动归档。"""
+    d = period_dir(name)
+    m = load_meta(d)
+    if on:
+        if m.get('状态') != '已完成':
+            raise KBError('只有已完成的期 / 事项才能归档；还在推进的要先把状态改成已完成')
+        m['归档'] = '手动'
+    else:
+        if not is_archived(m):
+            return '没有归档，不用恢复'
+        m.pop('归档', None)
+        m['恢复时间'] = now()
+    save_meta(d, m)
+    log(d, '归档', ('归档：不再出现在列表里，在「📦 归档」页能找到' if on else '恢复：重新出现在列表里') + f'（{by}）')
+    return f'「{d.name}」已' + ('归档' if on else '恢复')
+
+
+def unarchive_if(name, why):
+    """归档的期 / 事项又有动静（新 Bug / ANR、你在它的页面里说话）：自动恢复到列表里。→ 是否恢复了"""
+    try:
+        d = period_dir(name)
+    except KBError:
+        return False
+    m = load_meta(d)
+    if not is_archived(m):
+        return False
+    m.pop('归档', None)
+    m['恢复时间'] = now()
+    save_meta(d, m)
+    log(d, '归档', f'自动恢复到列表：{why}')
+    return True
+
+
+def archive_list(q='', kind=''):
+    """「📦 归档」页：归档的期 / 事项，按完成时间倒序。q 搜名字、简介、结论；kind 期 / 事项。"""
+    q = (q or '').strip().lower()
+    days = archive_days()
+    out = []
+    for n in period_names():
+        d = PERIODS / n
+        m = load_meta(d)
+        if not is_archived(m, days):
+            continue
+        k = '事项' if is_task(m) else '期'
+        if kind and kind != k:
+            continue
+        concl = next((x for x in (d / '其他资料' / '结论.md', d / '全栈' / 'spec.md') if x.exists()), None)
+        if q:
+            hay = f'{n}\n{m.get("说明", "")}\n{m.get("事项类型", "")}'.lower()
+            if q not in hay and not (concl and q in concl.read_text('utf-8', 'replace')[:20000].lower()):
+                continue
+        out.append({'名称': n, '类型': k, '事项类型': m.get('事项类型', ''), '说明': m.get('说明', ''), '完成时间': done_time(m),
+                    '手动': m.get('归档') == '手动', '结论': str(concl) if concl else ''})
+    return sorted(out, key=lambda x: x['完成时间'], reverse=True)

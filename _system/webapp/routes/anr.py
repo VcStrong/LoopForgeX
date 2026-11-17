@@ -12,10 +12,17 @@ def _get_api_anr(self, u, q):
 def _post_api_anr_stage(self, u, n, body):
     if not self._from_page():
         return self._send(403, {'error': '只能在知识库网页上由本人操作'})
-    sid = uuid.uuid4().hex
-    d = kb.SYS / 'tmp' / ('chat-stage' if u.path == '/api/chat/stage' else 'anr-stage') / sid
-    d.mkdir(parents=True)
-    f = d / (kb.safe_name(unquote(self.headers.get('X-Filename', ''))) or 'log.txt')
+    root = kb.SYS / 'tmp' / ('chat-stage' if u.path == '/api/chat/stage' else 'anr-stage')
+    sid = self.headers.get('X-Stage', '')                 # 拖进来的文件夹：同一个文件夹的文件传到同一个暂存目录，保留目录结构
+    if not (re.fullmatch(r'[0-9a-f]{32}', sid) and (root / sid).is_dir()):
+        sid = uuid.uuid4().hex
+    d = root / sid
+    d.mkdir(parents=True, exist_ok=True)
+    segs = [kb.safe_name(x) for x in unquote(self.headers.get('X-Filename', '')).split('/') if x.strip() and x.strip('. ')] or ['log.txt']
+    f = d.joinpath(*segs)
+    if len(segs) > 1 and len({p.name for p in d.iterdir()} | {segs[0]}) > 1:
+        return self._send(400, {'error': '一个文件夹只能有一个顶层目录'})
+    f.parent.mkdir(parents=True, exist_ok=True)
     with f.open('wb') as fp:
         left = n
         while left > 0:

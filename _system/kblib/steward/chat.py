@@ -5,6 +5,7 @@
 对话存在 _system/管家/对话.json（最近 100 条）；你说「以后……」时它会记成管家规矩（kb_steward_rule），以后的回答和巡检都照做。
 """
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -12,6 +13,7 @@ from urllib.parse import quote
 
 from kblib.core.common import KBError, ROOT, SYS, load_settings, now, read_text, save_settings, uuid_hex
 from kblib.ai.engines import engine_run, role_engine
+from kblib.ai import team
 
 FILE = SYS / '管家' / '对话.json'
 _LOCK = threading.Lock()
@@ -68,6 +70,11 @@ def _prompt(text, page, hist):
 - 先用知识库 MCP 工具（kb_overview、kb_search、kb_iteration、kb_read、kb_bug_list 等）查清楚再回答，不要凭印象。
 - 你是执行者，不是顾问：用户给了东西（日志、需求、Bug、账号、仓库路径），就直接用 kb_ 工具建好、存好、归好，不要让他自己去页面操作，也不要因为「信息不全」停下——缺的先按最可能的默认值做，回答里说一句你假设了什么。
   · ANR / 崩溃日志（文字）：kb_anr_create 直接建问题和事项，然后 kb_propose_push 提出推动。
+  · 线上问题（录屏、日志文件夹 / 日志包、解密程序……）：建好事项（kb_create_task，类型「线上问题」，说明写现象）；已有事项就用 kb_task_item add 记一条现象。
+    录屏、截图用 kb_add_material 放「其他资料」。日志文件夹和日志包（.zip / .tar.gz）用 kb_log_pack 带事项名整份放进去，不要拆开、不要列清单：
+    用户点名了哪天 / 哪个文件，就 kb_log_pack pick 找出来；没点名不要问他挑，直接 kb_propose_push 放「▶ 推动」——推动后分析会话按现象找出相关日志、再跟他确认。
+    解密程序 / 解密文件 / 解密工程（本地路径或仓库地址）和用法用 kb_decrypt_add 登记；zip 密码、解密密钥这类机密用 kb_base_save（机密=true）存进基础信息。
+    回答两三句：放进了哪个事项、文件夹 / 包的概况一句（多少文件、日期范围）、下一步点什么。绝不逐个列文件。
   · 需求：kb_create_iteration 建期 / kb_add_note 放资料；不是需求的工作：kb_create_task 建事项；Bug：kb_bug_assign 归到期或事项；仓库：kb_add_repo 登记。
 - 要动代码的事（推动事项、修复 Bug、开始开发）必须用户点确认：用 kb_propose_push 提出（带上你建议的工程和分支），网页对话里会出现「▶ 推动」按钮，用户一点就开始，不要让他再去找页面。
 - 用户说「以后……」「记住……」这类长期要求，用 kb_steward_rule 记成规矩。
@@ -122,10 +129,19 @@ def _route(rec, text, files, page, hist, by):
     before = intake.period_stamps()
     done = lambda **kv: _attach(rid, 回答时间=now(), **kv)
     try:
-        logs = [f for f in files if intake.is_log_file(f)]
+        pick = re.search(r'解密|只(看|要|解析|分析)|挑|选(一|某|其中)|其中(一|某)', text)   # 要挑日志 / 要解密：交给管家
+        logs = [] if pick else [f for f in files if intake.is_log_file(f)]
         rest = [f for f in files if f not in logs]
-        if logs or (not rest and intake.looks_like_log(text)):          # ANR / 崩溃：建问题、事项，只问工程和分支
-            task, pids, desc = intake.anr_intake_files(logs, by) if logs else intake.anr_intake_text(text, by)
+        anr = None
+        if logs or (not rest and not pick and intake.looks_like_log(text)):   # ANR / 崩溃：建问题、事项，只问工程和分支
+            try:
+                anr = intake.anr_intake_files(logs, by) if logs else intake.anr_intake_text(text, by)
+            except KBError:
+                if not logs:
+                    raise
+                rest, logs = files, []                                  # 文件里认不出 ANR / 崩溃：当普通资料交给管家
+        if anr:
+            task, pids, desc = anr
             p = intake.push_proposal(task, ['anr:' + x for x in pids])
             done(答=f'{desc}。\n\n{_link(task)}\n\n只差一件事：确认在哪个工程、哪个分支处理，点「▶ 推动」就开始定位原因 → 改代码 → 自测 → 写结论。',
                  状态='已回答', 引擎='知识库（不用模型）', 提议=p)
@@ -144,11 +160,17 @@ def _route(rec, text, files, page, hist, by):
             return
         e = role_engine('管家')
         extra = NO_EDIT if e.get('id') == 'claude' or (e.get('命令') or '').endswith('claude') else []
-        q = text + (('\n\n用户附带了这些文件（本地路径，判断放进哪一期 / 事项，用 kb_add_material 归档；看不出就问）：\n'
+        q = text + (('\n\n用户附带了这些文件（本地路径，判断放进哪一期 / 事项，用 kb_add_material 归档；文件夹和日志压缩包用 kb_log_pack 整份放；看不出就问）：\n'
                      + '\n'.join(map(str, rest))) if rest else '')
-        code, res = engine_run(e, _prompt(q, page, hist), str(ROOT), timeout=900, extra_args=extra, title='kb·问管家')
+        snap = {'git前': team.wc_snapshot([str(ROOT)])} if extra else {}       # 只读会话：结束时对比知识库仓库的 git 状态
+        code, res = engine_run(e, _prompt(q, page, hist), str(ROOT), timeout=900, extra_args=extra, title='kb·问管家',
+                               scene='管家', env_extra={'KB_SESSION': 'steward'})
         ans, st = (res.get('结果') or '').strip(), '已回答' if code == 0 and not res.get('出错') else '出错'
-        done(答=(ans or '（没有回答）') + _next_md(intake.next_steps(before)), 状态=st, 引擎=e['名称'])
+        team.wc_alarm(None, snap, '问管家')
+        done(答=(ans or '（没有回答）') + _next_md(intake.next_steps(before))
+             + (f'\n\n⚠ {snap["警告"]}（同时有别的会话在改知识库程序时，也可能是它们改的）' if snap.get('警告') else ''),
+             状态=st, 引擎=e['名称'],
+             **({'角色': res['角色'], '参与': team.roles_text(res['角色'])} if res.get('角色') else {}))
     except Exception as ex:
         done(答=f'没做成：{ex}', 状态='出错')
     finally:
@@ -190,7 +212,7 @@ def steward_ask(text, page='', by='用户（网页）', files=None):
         if any(x.get('状态') == '思考中' and x.get('编号') in _RUN for x in items):
             raise KBError('上一件还在处理，等它好了再说')
         hist = items[:]
-        rec = {'编号': uuid_hex()[:8], '时间': now(), '问': (text or '（发了文件）')[:2000], '文件': [f.name for f in files],
+        rec = {'编号': uuid_hex()[:8], '时间': now(), '问': (text or '（发了文件）')[:2000], '文件': [f.name + ('/' if f.is_dir() else '') for f in files],
                '页面': page, '状态': '思考中', '人': by}
         items.append(rec)
         _save(items)

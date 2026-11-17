@@ -50,6 +50,25 @@ def _get_api_read(self, u, q):
     return self._guard(lambda: {'text': kb.read_file(q.get('path', ''), int(q.get('start', 1)), 3000)})
 
 
+@get('/api/text')
+def _get_api_text(self, u, q):
+    """预览用：按行取文本（不带行号），编码自动识别；docx / pdf / pptx 等取抽出来的文字。
+    {lines, start, end, total, ok}：ok=False 表示这种文件抽不出文字（前端显示文件信息 + 下载）。"""
+    def run():
+        p = Path(q.get('path', '')).expanduser().resolve()
+        if not p.is_file() or not kb._allowed(p):
+            raise kb.KBError('只能读取知识库和已登记仓库里的文件')
+        text = kb.extract(p)
+        if text is None:
+            return {'ok': False, 'lines': [], 'start': 1, 'end': 0, 'total': 0}
+        lines = text.splitlines()
+        start = max(1, int(q.get('start') or 1))
+        n = max(1, min(20000, int(q.get('n') or 3000)))
+        end = min(len(lines), start + n - 1)
+        return {'ok': True, 'lines': lines[start - 1:end], 'start': start, 'end': end, 'total': len(lines)}
+    return self._guard(run)
+
+
 @post('/api/upload', raw=True)
 def _post_api_upload(self, u, n, body):
     period = unquote(self.headers.get('X-Period', ''))
@@ -203,3 +222,23 @@ def _post_api_add(self, u, n, body):
 @post('/api/reindex')
 def _post_api_reindex(self, u, n, body):
     return self._guard(lambda: {'msg': kb.reindex(body.get('target', 'all'))})
+
+
+@get('/api/archive')
+def _get_api_archive(self, u, q):
+    return self._guard(lambda: {'items': kb.archive_list(q.get('q', ''), q.get('kind', '')), '天数': kb.archive_days()})
+
+
+@post('/api/archive', page_only=True)
+def _post_api_archive(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.period_archive(body.get('period', ''), body.get('on', True) is not False)})
+
+
+@post('/api/archive/days', page_only=True)
+def _post_api_archive_days(self, u, n, body):
+    def run():
+        s = kb.load_settings()
+        s['归档天数'] = max(0, int(body.get('days') or 0))
+        kb.save_settings(s)
+        return {'msg': f'已完成满 {s["归档天数"]} 天自动归档' if s['归档天数'] else '不自动归档（只手动归档）'}
+    return self._guard(run)

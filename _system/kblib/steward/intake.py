@@ -100,7 +100,7 @@ def _task_branch(task, m):
 
 def push_proposal(task, keys=None, kind='Android'):
     """推动卡片：事项里还没处理的 ANR / 崩溃条目 + 候选工程、默认工程和分支。"""
-    items = [x for x in task_items(task) if x['键'].startswith('anr:') and x.get('状态') in (None, '', '待处理', '没解决')]
+    items = [x for x in task_items(task) if not x['键'].startswith('bug:') and x.get('状态') in (None, '', '待处理', '没解决')]  # Bug 走分析→修复
     keys = keys or [x['键'] for x in items]
     repos, repo, branch = push_repo_choices(task, kind)
     m = load_meta(PERIODS / task)
@@ -137,9 +137,26 @@ def confirm_push(task, keys, repo, branch, by='用户（网页）'):
 LOG_EXT = {'.txt', '.log', '.zip', '.trace', '.traces', '.anr', '.gz'}
 
 
+def _anr_pack(p):
+    """压缩包像不像 ANR / 崩溃包（bugreport、anr/、tombstones/、traces）；按日期打包的普通日志包不算，交给管家挑。"""
+    import re
+    import zipfile
+    if p.suffix.lower() != '.zip':
+        return p.suffix.lower() == '.gz' and not p.name.lower().endswith('.tar.gz')
+    try:
+        with zipfile.ZipFile(p) as z:
+            names = z.namelist()
+    except (zipfile.BadZipFile, OSError):
+        return False
+    return p.name.lower().startswith('bugreport') or any(
+        re.search(r'(^|/)(anr|tombstones?)/', n) or re.search(r'(^|/)(anr_|tombstone|traces|bugreport)[^/]*$', n, re.I) for n in names)
+
+
 def is_log_file(p):
     p = Path(p)
-    if p.suffix.lower() in ('.zip', '.gz', '.trace', '.traces', '.anr'):
+    if p.suffix.lower() in ('.zip', '.gz'):
+        return _anr_pack(p)
+    if p.suffix.lower() in ('.trace', '.traces', '.anr'):
         return True
     if p.suffix.lower() in LOG_EXT:
         try:

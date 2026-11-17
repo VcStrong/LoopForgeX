@@ -45,9 +45,16 @@ function fixPanel(q,ids){
   if(run.length){const ss={};run.forEach(x=>(ss[x['会话']]=ss[x['会话']]||[]).push(x));
     Object.values(ss).forEach(g=>rows.push(`<div style="margin:4px 0"><span class="badge st-开发中">🔧 修复中</span> ${g.map(t).join('；')}
       <span class="small mut">· ${esc(g[0]['开始时间'])} 开始，已 ${mins(g[0]['开始时间'])} 分钟 · <span class="mono">${esc((g[0]['仓库']||'').replace(/^\/Users\/[^/]+/,'~'))}</span> ${esc(g[0]['分支']||'')}</span>
+      ${g[0]['代码基线']?`<div class="small mut mono" style="margin:2px 0 0 18px">📍 代码：${esc(g[0]['代码基线'])}</div>`:''}
       ${(g[0]['动作']||[]).length?`<div class="small mut mono" style="margin:2px 0 0 18px;white-space:pre-wrap">${g[0]['动作'].map(a=>'› '+esc(a)).join('\n')}</div>`:''}</div>`))}
-  const byWhy={};block.forEach(x=>(byWhy[x['原因']]=byWhy[x['原因']]||[]).push(x));       // 同一个原因合成一条
-  Object.entries(byWhy).forEach(([why,g])=>rows.push(`<div style="margin:4px 0"><span class="badge st-已暂停2">⛔ 需要你处理</span> ${g.map(x=>`${t(x)} <a class="small" data-bunq="${esc(x['编号'])}" title="移出修复队列">移出</a>`).join('；')}<div class="small" style="color:var(--s4);margin-left:18px">${esc(why)}</div></div>`));
+  const byWhy={};block.forEach(x=>{const k=x['仓库']+'\n'+x['原因'];(byWhy[k]=byWhy[k]||[]).push(x)});       // 同一个仓库、同一个原因合成一条
+  Object.values(byWhy).forEach(g=>{const why=g[0]['原因'],repo=g[0]['仓库'],m=g.map(x=>x['阻塞起']).filter(Boolean).sort()[0];
+    const dirty=/未提交的改动|待提交|有改动/.test(why);
+    rows.push(`<div style="margin:4px 0"><span class="badge st-已暂停2">⛔ 需要你处理</span> ${g.map(x=>`${t(x)} <a class="small" data-bunq="${esc(x['编号'])}" title="移出修复队列">移出</a>`).join('；')}${m?` <span class="small mut">· 受阻 ${mins(m)} 分钟</span>`:''}
+    <div class="small" style="color:var(--s4);margin-left:18px">${esc(why)}</div>
+    ${dirty?`<div class="row small" style="margin:3px 0 0 18px;gap:6px;flex-wrap:wrap"><button class="small pri" data-fxblk="${esc(repo)}" data-fxm="stash" title="把挡住修复的改动收起来（git stash，-m 写明来源；svn 存补丁）：随时能恢复，收起后修复立刻开始">收起改动并继续</button>
+      <button class="small" data-fxblk="${esc(repo)}" data-fxm="view">看改动</button>
+      <button class="small" data-fxblk="${esc(repo)}" data-fxm="commit" data-fxid="${esc(g[0]['编号'])}" title="这些改动就是这个 Bug 的修复：只提交勾选的文件（git 本地提交不 push；svn 等你点「提交到 svn」），标记已修复">改动就是这个 Bug 的修复…</button></div>`:''}</div>`)});
   if(wait.length)rows.push(`<div style="margin:4px 0"><span class="badge st-已批准开发">⏳ 排队 ${wait.length}</span> ${wait.map(x=>`${t(x)} <a class="small" data-bunq="${esc(x['编号'])}">移出</a>`).join('；')}${wait[0]['原因']?`<div class="small mut" style="margin-left:18px">${esc(wait[0]['原因'])}，结束后按顺序接着修</div>`:''}</div>`);
   const failRow=x=>`<div style="margin:4px 0"><span class="badge st-已暂停2">⚠ 没修成</span> ${t(x)} <span class="small mut">${esc(x['时间']||'')}</span>
     <div class="small" style="margin-left:18px;white-space:pre-wrap;max-height:4.5em;overflow:hidden" title="${esc(x['原因']||'')}">${esc(x['原因']||'')}</div>
@@ -56,6 +63,30 @@ function fixPanel(q,ids){
   if(fail.length>3)rows.push(`<details><summary class="small mut">还有 ${fail.length-3} 条没修成</summary>${fail.slice(3).map(failRow).join('')}</details>`);
   warn.forEach(w=>rows.push(`<div style="margin:4px 0"><span class="badge st-已暂停2">⚠ 会话警告</span> Bug ${esc(w.Bug.join('、'))}：${esc(w['警告'])}</div>`));
   return `<div class="card2" style="margin-bottom:10px;border-color:${block.length||fail.length?'var(--s4)':'var(--line)'}"><div class="bd"><b class="small">修复进度</b>${rows.join('')}</div></div>`}
+// 排队受阻：看挡住修复的改动（按和 Bug 的关系分组），收起 / 提交成某个 Bug 的修复
+async function fixBlockDlg(repo,mode,bid){
+  let v;try{v=await api('/api/zentao/fixblock?repo='+enc(repo))}catch(e){return toast(e.message)}
+  if(!v['文件'].length){toast('仓库里已经没有挡住修复的改动，刷新看看');return render()}
+  const grp={'本 Bug':'和排队 Bug 的分析代码位置一致','可能相关':'和分析代码位置同目录','无关':'和排队的 Bug 都没关系（如 claude_project_memory/ 下的笔记）'};
+  const bugs=v['Bug'];bid=bid||(bugs[0]||{})['编号']||'';
+  const row=f=>`<div style="margin:3px 0"><label class="row" style="gap:6px;color:var(--fg)"><input type="checkbox" data-fbf="${esc(f['路径'])}" ${mode==='commit'?(f['关系']==='本 Bug'?'checked':''):(f['关系']!=='本 Bug'?'checked':'')}>
+    <span class="mono small">${esc(f['状态'])} ${esc(f['路径'])}</span>${f['Bug']?` <span class="small mut">Bug ${esc(f['Bug'])}</span>`:''}</label>
+    ${f['diff']?`<details style="margin-left:22px"><summary class="small mut">diff</summary><pre class="mono" style="font-size:12px;max-height:260px;overflow:auto">${esc(f['diff'])}</pre></details>`:''}</div>`;
+  const secs=Object.keys(grp).map(k=>{const fs=v['文件'].filter(f=>f['关系']===k);return fs.length?`<h3 style="margin:10px 0 4px">${k} <span class="small mut" style="font-weight:400">${fs.length} 个 · ${grp[k]}</span></h3>${fs.map(row).join('')}`:''}).join('');
+  openDlg('挡住修复队列的改动',`<div class="form" style="max-width:900px">
+    <p class="small"><span class="mono">${esc(repo.replace(/^\/Users\/[^/]+/,'~'))}</span> ${esc(v['分支']||'')} · 排队的 Bug：${bugs.map(b=>esc(b['编号']+' '+b['标题'].slice(0,30))).join('；')}</p>
+    ${secs}
+    <p class="small mut">「收起」用 ${v['svn']?'补丁 + svn revert（补丁存在知识库 Bug/收起的改动/，svn patch 恢复）':'git stash push -m「kb 修复队列：…」（git stash list 能看到，git stash apply 恢复）'}；只收勾选的文件，没勾的不动。</p>
+    <div class="row" style="gap:8px;flex-wrap:wrap"><button class="pri" id="fbStash">收起勾选的改动并继续</button>
+      <span style="margin-left:auto" class="small">提交成 <select id="fbBug">${bugs.map(b=>`<option value="${esc(b['编号'])}" ${b['编号']===bid?'selected':''}>Bug ${esc(b['编号'])}</option>`).join('')}</select> 的修复</span>
+      <button id="fbCommit" title="${v['svn']?'记成这个 Bug 待提交的文件，再点「提交到 svn」':'只 git commit 勾选的文件（不 push），并在知识库标记已修复'}">提交勾选的并标记已修复</button></div></div>`);
+  const picked=()=>[...dlg.querySelectorAll('[data-fbf]:checked')].map(c=>c.dataset.fbf);
+  $('#fbStash').onclick=async()=>{const fs=picked();if(!fs.length)return toast('先勾选要收起的文件');
+    try{toast((await post('/api/zentao/fixblock/stash',{repo,files:fs})).msg.split('\n')[0]);dlg.close();render()}catch(e){toast(e.message)}};
+  $('#fbCommit').onclick=async()=>{const fs=picked(),id=$('#fbBug').value;if(!fs.length)return toast('先勾选这个 Bug 的修复改了哪些文件');
+    if(!await kbConfirm(`把勾选的 ${fs.length} 个文件${v['svn']?'记成 Bug '+id+' 待提交到 svn 的修复':'提交（本地，不 push）为 Bug '+id+' 的修复'}，并标记已修复？`))return;
+    try{toast((await post('/api/zentao/fixblock/commit',{id,files:fs})).msg.split('\n')[0]);dlg.close();render()}catch(e){toast(e.message)}};
+}
 function fixDlg(b){const f=b['修复'];
   openDlg(`Bug ${b['编号']} 修复（知识库标记）`,`<div class="form"><p><b>${esc(b['标题'])}</b></p>
     <p><span class="badge ${f['状态']==='已修复'?'st-已完成':'st-已暂停2'}">${esc(f['状态'])}</span> <span class="small mut">${esc(f['时间']||'')} · ${esc(f['标记']||'')}</span></p>
@@ -101,8 +132,14 @@ function bugTable(bugs,ps,st){
     <td><span class="badge ${BUG_ST[b['状态']]||''}">${esc(b['状态'])}</span>${on('严重')?` <span class="small mut">严重${esc(b['严重'])}</span>${b['线上']?' <span class="badge st-已暂停2">线上</span>':''}${b['平台']?` <span class="small mut">${esc(b['平台'])}</span>`:''}`:''}</td>
     <td>${anCell(b)}${fixCell(b)}</td>
     ${on('归属')?`<td>${ownerSel(b,ps)}</td>`:''}</tr>`).join('')}</table></div>${ignBar}`}
-async function analyze(ids,repo){
-  try{const r=await post('/api/zentao/analyze',repo?{ids,repo}:{ids});toast(r.msg.split('\n')[0]);render()}
+// 已通过 / 在修复队列里的重新分析：先说清会移出修复队列，确认了才带 force（管家、自动分析不会对它们发起分析）
+async function reanalyze(id){const b=bugIndex[id]||{},f=b['修复']||{},a=b['分析']||{};
+  if(f['状态']==='修复中')return toast('正在修复，等修复会话结束再重新分析');
+  const q=f['状态']==='排队中',ok=a['状态']==='已通过'&&!a['过时'];
+  if((q||ok)&&!await kbConfirm(`Bug ${id} ${q?'在修复队列里':'的分析已审核通过'}：重新分析后分析会变回「待审核」${q?'，并移出修复队列（审核通过后要重新点「修复」）':''}。确定重新分析？`))return;
+  analyze([id],'',q||ok)}
+async function analyze(ids,repo,force){
+  try{const r=await post('/api/zentao/analyze',Object.assign(repo?{ids,repo}:{ids},force?{force:true}:{}));toast(r.msg.split('\n')[0]);render()}
   catch(e){if(!e.need)return toast(e.message);const n=e.need;
     openDlg('选择分析用的代码仓库',`<div class="form"><p class="small">${esc(e.message)}</p>
       ${n['候选'].map((p,i)=>`<label class="row" style="color:var(--fg)"><input type="radio" name="anR" value="${esc(p)}" ${i?'':'checked'}> <span class="mono small">${esc(p)}</span></label>`).join('')}
@@ -110,7 +147,7 @@ async function analyze(ids,repo){
       <p class="mut small">会记住「${esc(n['产品']||'这个产品')}」用这个仓库，下次不再问。</p>
       <div class="row"><button class="pri" id="anGo">开始分析</button></div></div>`);
     $('#anPick').onclick=async e=>{e.preventDefault();const p=await pickDir($('#anP').value.trim());if(p){$('#anP').value=p;document.querySelector('[name=anR][value="*"]').checked=true}};
-    $('#anGo').onclick=()=>{const v=document.querySelector('[name=anR]:checked').value;const p=v==='*'?$('#anP').value.trim():v;if(!p)return toast('请选择或填写仓库路径');dlg.close();analyze(ids,p)}}}
+    $('#anGo').onclick=()=>{const v=document.querySelector('[name=anR]:checked').value;const p=v==='*'?$('#anP').value.trim():v;if(!p)return toast('请选择或填写仓库路径');dlg.close();analyze(ids,p,force)}}}
 // 标记已修复：一个居中小弹框，提交号和说明都可空（叠在分析弹框上，取消回到分析弹框）
 function fixedDlg(id){
   const d=document.createElement('dialog');d.className='mini';
@@ -145,6 +182,7 @@ async function analysisDlg(id){
     <p><b>${esc(b['标题'])}</b></p>
     <p style="font-size:15px">结论：<b>${esc(a['摘要'])}</b></p>
     <h3 style="margin:12px 0 4px">代码位置 <span class="small mut" style="font-weight:400">${esc(a['仓库']||'')}</span></h3>
+    ${a['代码基线']?`<div class="small mut mono" title="分析会话开始前按「⏱ 时机 → Bug 分析前」更新代码后的基线">📍 分析时的代码：${esc(a['代码基线'])}</div>`:''}
     ${(a['代码位置']||[]).map(x=>`<div style="margin:6px 0"><span class="mono small"><b>${esc(x['路径'])}:${x['行']}</b></span>${x['分支']?` <span class="small mut">（分支 ${esc(x['分支'])}）</span>`:''} <span class="small ${x['核对'].startsWith('⚠')?'':'mut'}" style="${x['核对'].startsWith('⚠')?'color:var(--s4)':''}">${esc(x['核对'])}</span>
       <div class="small">${esc(x['说明'])}</div>${x['代码']?`<pre class="mono" style="font-size:12px;overflow:auto;max-height:240px;margin:4px 0">${esc(x['代码'])}</pre>`:''}</div>`).join('')||'<p class="mut">没有给出代码位置</p>'}
     ${sec('原因',a['原因'])}${sec('修复思路',a['思路'])}${sec('影响范围',a['影响'])}${sec('自测要点',a['自测'])}${sec('还缺的信息',a['缺少'])}${sec('审核意见',a['意见'])}${(a['意见历史']||[]).length?`<h3 style="margin:12px 0 4px">之前的审核意见 <span class="small mut" style="font-weight:400">已被替换，不再给修复会话</span></h3>${a['意见历史'].map(h=>`<div class="small mut" style="white-space:pre-wrap">· ${esc(h['时间']||'')} ${esc(h['意见']||'')}</div>`).join('')}`:''}</div>`);
@@ -156,7 +194,9 @@ async function analysisDlg(id){
       const r=await post('/api/zentao/fix',{ids:[id],note});toast(r.msg.split('\n')[0]);dlg.close();render()}
     catch(e){toast(e.message);btn.disabled=false;render()}};
   $('#rvRe').onclick=async()=>{const note=$('#rvN').value.trim();if(!note){toast('打回要写意见：哪里不对、希望往哪个方向查');$('#rvN').focus();return}
-    try{const m=await post('/api/zentao/review',{id,action:'打回',note});toast(m.msg);dlg.close();analyze([id])}catch(e){toast(e.message)}};
+    if(f&&f['状态']==='修复中')return toast('正在修复，等修复会话结束再打回');
+    if(f&&f['状态']==='排队中'&&!await kbConfirm(`Bug ${id} 在修复队列里：打回后会移出修复队列，重新分析审核通过后要再点「修复」。确定？`))return;
+    try{const m=await post('/api/zentao/review',{id,action:'打回',note});toast(m.msg);dlg.close();analyze([id],'',true)}catch(e){toast(e.message)}};
 }
 async function ignoreBugs(ids,on){try{toast((await post('/api/zentao/ignore',{ids,on})).msg);render()}catch(e){toast(e.message)}}
 function bindBugs(root){
@@ -164,7 +204,8 @@ function bindBugs(root){
   root.querySelectorAll('[data-bignall]').forEach(b=>b.onclick=async()=>{const ids=b.dataset.bignall.split(',');if(await kbConfirm(`忽略这 ${ids.length} 个陈旧 Bug？只在知识库标记，不改 Bug 平台，随时能取消。`))ignoreBugs(ids,true)});
   root.querySelectorAll('[data-bshowign]').forEach(a=>a.onclick=()=>{bugShowIgn=!bugShowIgn;render()});
   root.querySelectorAll('[data-bsort]').forEach(a=>a.onclick=()=>{bugSort=a.dataset.bsort;try{localStorage.setItem('kb.bugSort',bugSort)}catch(_){}render()});
-  root.querySelectorAll('[data-ban]').forEach(b=>b.onclick=()=>analyze([b.dataset.ban]));
+  root.querySelectorAll('[data-ban]').forEach(b=>b.onclick=()=>reanalyze(b.dataset.ban));
+  root.querySelectorAll('[data-fxblk]').forEach(b=>b.onclick=e=>{e.preventDefault();fixBlockDlg(b.dataset.fxblk,b.dataset.fxm,b.dataset.fxid)});
   root.querySelectorAll('[data-banall]').forEach(b=>b.onclick=async()=>{const ids=b.dataset.banall.split(',');if(ids.length>6&&!await kbConfirm(`分析 ${ids.length} 条会启动多个后台会话，确定？`))return;analyze(ids)});
   root.querySelectorAll('[data-bcol]').forEach(c=>c.onchange=()=>{const k=c.dataset.bcol;bugCols=c.checked?[...new Set([...bugCols,k])]:bugCols.filter(x=>x!==k);
     try{localStorage.setItem('kb.bugCols',JSON.stringify(bugCols))}catch(_){}render()});
@@ -232,7 +273,7 @@ async function bugsPage(){
   <div class="fchips">${OW.map(o=>`<button class="fchip ${o===bugF.owner?'on':''}" data-bo="${o}">${o}<b>${cnt(o)}</b></button>`).join('')}
     <label class="small mut" style="margin-left:8px"><input type="checkbox" id="zAll" ${bugF.st==='全部'?'checked':''}> 含已关闭</label>
     <input type="text" id="zQ" value="${esc(bugF.q)}" placeholder="筛选：标题、期名、执行…" style="margin-left:auto;width:220px"></div>
-  ${(d.sessions||[]).length?`<div class="card2" style="margin-bottom:10px"><div class="bd small">${d.sessions.map(x=>`<div>${x['状态']==='运行中'?(x['类型']==='修复'?'🔧 修复中':'● 分析中'):'⚠'} Bug ${esc(x.Bug.join('、'))} · ${esc(x['引擎']||'')} · <span class="mono">${esc(x['仓库'].replace(/^\/Users\/[^/]+/,'~'))}</span> · ${esc(x['开始时间'])}${x['警告']?` <b style="color:var(--s4)">${esc(x['警告'])}</b>`:''}</div>`).join('')}</div></div>`:''}
+  ${(d.sessions||[]).length?`<div class="card2" style="margin-bottom:10px"><div class="bd small">${d.sessions.map(x=>`<div>${x['状态']==='运行中'?(x['类型']==='修复'?'🔧 修复中':'● 分析中'):'⚠'} Bug ${esc(x.Bug.join('、'))} · ${esc(x['引擎']||'')} · <span class="mono">${esc(x['仓库'].replace(/^\/Users\/[^/]+/,'~'))}</span> · ${esc(x['开始时间'])}${x['参与']?` · ${esc(x['参与'])}`:''}${x['警告']?` <b style="color:var(--s4)">${esc(x['警告'])}</b>`:''}</div>`).join('')}</div></div>`:''}
   ${bugTable(list,d.periods,bugF.st)}`;
   const save=()=>{try{localStorage.setItem('kb.bugF',JSON.stringify(bugF))}catch(_){}};
   app.querySelectorAll('[data-bo]').forEach(b=>b.onclick=()=>{bugF.owner=b.dataset.bo;save();bugsPage()});

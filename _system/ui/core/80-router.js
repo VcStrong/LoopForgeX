@@ -12,6 +12,7 @@ async function route(h){
   if(h==='/settings')return P.settings();
   if(h==='/phones')return P.phones();
   if(h==='/bugs')return P.bugs();
+  if(h==='/archive')return P.archive();
   if(h==='/anr')return P.anr();
   if(h.startsWith('/tool/'))return P.tool(h.slice(6));
   if(h.startsWith('/s/')){const [q,s]=h.slice(3).split('\u0001');return P.search(q,s)}
@@ -19,7 +20,7 @@ async function route(h){
   return P.home();
 }
 async function render(){
-  const h=curHash();
+  const h=curHash();if(h!==render._h){render._h=h;if(app)app._pgKey=null}   // 换了页面：期页面下次整块写，不和别的页 morph
   try{await route(h)}catch(e){if(app)app.innerHTML=`<p>出错：${esc(e.message)}</p><p><a href="#/">返回首页</a></p>`;else console.error(e)}
   sideNav();
   if(KB.hooks.afterRender){try{KB.hooks.afterRender(h)}catch(e){console.error(e)}}
@@ -28,7 +29,8 @@ async function render(){
 let pagePending=false;
 const curPeriod=()=>{const h=decodeURIComponent(location.hash.slice(1)||'/');return h.startsWith('/p/')?h.slice(3):null};
 const canRender=()=>!Object.values(drafts).some(x=>x)&&!dlg.open&&!document.activeElement.matches('input,textarea,select')&&!($('#tmBox iframe')&&!$('#tmBox').hidden);   // 开着「我的终端」时不重画（重画 = iframe 重建、shell 断开）
-function softRender(){if(!canRender()){pagePending=true;return}pagePending=false;const y=scrollY;render().then(()=>scrollTo(0,y))}
+function softRender(){if(!canRender()){pagePending=true;return}pagePending=false;const y=scrollY;if(app)app._morphed=false;
+  render().then(()=>{if(!(app&&app._morphed))scrollTo(0,y)})}   // morph 刷新时浏览器的滚动锚定已经保住位置，再 scrollTo 反而会错位；整块重写的才拉回
 function onEvt(ev){
   const h=decodeURIComponent(location.hash.slice(1)||'/'), p=curPeriod();
   if(ev.kind==='dev'&&p===ev.period){if($('#pushBox')){pushBox(p);if($('#tkMsg'))talkBox(p)}else{devBox(p);talkBox(p)}}
@@ -90,12 +92,12 @@ const KB={
   version:1,
   get app(){return app},
   setApp(el){app=typeof el==='string'?$(el):el;return app},
-  pages:{home,overview,brief:briefPage,period,bugs:bugsPage,anr:anrPage,phones:phonesPage,base:basePage,settings:settingsPage,docs,tool:toolPage,search},
+  pages:{home,overview,brief:briefPage,period,archive:archivePage,bugs:bugsPage,anr:anrPage,phones:phonesPage,base:basePage,settings:settingsPage,docs,tool:toolPage,search},
   routes:{},
   route,render,softRender,canRender,navRefresh,curHash,
   hooks:{afterRender:null,nav:null},
   on(kind,fn){(evSubs[kind]=evSubs[kind]||[]).push(fn);return()=>{evSubs[kind]=evSubs[kind].filter(f=>f!==fn)}},
-  api,post,esc,enc,toast,openDlg,confirm:kbConfirm,prompt:kbPrompt,md,mdInline,badge,fileUrl,readFile,showImg,since,when,size,
+  api,post,esc,enc,toast,openDlg,confirm:kbConfirm,prompt:kbPrompt,md,mdInline,mdEnhance,badge,fileUrl,readFile,showImg,preview,loadVendor,since,when,size,
   askOpen,addDlg,taskNav,logout,pickDir,PICK_OPT,   // pickDir(起始路径) → 选中的本地路径或 null；PICK_OPT 放进模板自己的仓库下拉框
   site:()=>api('/api/site').then(s=>(KB.siteCache=s)),siteCache:null,   // 最近一次 /api/site 的结果（模板在 afterRender 里可直接用）
   get briefOpts(){return briefOpts},   // 执行判断 / 交给管家 / 理解预览：配合 KBUI.judg、KBUI.bind 用
@@ -109,7 +111,9 @@ const KB={
     if($('#sf'))$('#sf').onsubmit=e=>{e.preventDefault();const q=$('#q').value.trim();if(q)location.hash='#/s/'+enc(q+'\u0001'+($('#scope')?$('#scope').value:'all'))};
     if($('#addBtn'))$('#addBtn').onclick=()=>askOpen(true);   // 「＋ 添加」= 交给管家（新建一期 / 事项在总览和侧栏里）
     window.addEventListener('hashchange',render);render();navRefresh();
-    connectEvents();startLate();
+    connectEvents();startLate();engInit();loadVendor('idiomorph').catch(()=>{});   // 局部刷新（morphHTML）用
+    // Markdown 渲染库（marked + DOMPurify）启动后再拉，不拖慢首屏；拉到后当前页重画一次，换成完整渲染
+    setTimeout(()=>loadVendor('marked','purify').then(()=>{mdEngine();softRender()}).catch(()=>{}),300);
   }
 };
 window.KB=KB;

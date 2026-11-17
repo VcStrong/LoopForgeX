@@ -15,6 +15,7 @@ from kblib.ai.flows import flow_docs, flow_for, flow_text, flows, get_flow
 from kblib import lazy
 _urlimport = lazy('kblib.sources.urlimport')      # 上层模块：用到时才 import（不形成循环）
 _fixlink = lazy('kblib.sources.fixlink')      # 上层模块：用到时才 import（不形成循环）
+_plugins = lazy('kblib.plugins.registry')      # 同层：挂了「QA用例」插件时提示缺 QA 用例怎么补
 
 
 PATH_RE = re.compile(r'(?:~|/(?:Users|Volumes|home|opt|private|data|srv))/[^\s，。；;、()（）【】「」"\'<>]+')
@@ -367,6 +368,9 @@ def _sdd_prepare_result(d, root, branch, docs, start, created, out, n_files, sec
             '接口相关的文字资料（协议、字段）写进「服务端接口」作为 API 修改描述；拿不准的放「备注」，不要编造链接。',
             '3. 填完运行 /sdd-next 推进（物料由 SDD 自己的 /sdd-material 下载）；SDD 下载失败（如 Confluence 需登录）时，'
             f'用 {KB_DIR}/ 里的同名资料补充，并用 kb_log 记录。']
+    hint = _plugins.qa_case_hint(d.name)
+    if hint:
+        res.append('4. ' + hint.removeprefix('- '))
     return '\n'.join(res)
 
 

@@ -10,7 +10,7 @@ AI 处理完用 kb_task_item 把这一条的结论记回来。
 """
 from pathlib import Path
 
-from kblib.core.common import PERIODS, KBError, now
+from kblib.core.common import HIST, PERIODS, KBError, now
 from kblib.core.periods import is_task, load_meta, log, period_dir, period_names, save_meta, set_status
 from kblib.core.notes import note_title, notes_of
 from kblib.ai.devsession import _NO_BG, _dev_spawn, _session_id, dev_chat, dev_session
@@ -111,6 +111,23 @@ def task_item_set(name, key, status='', conclusion='', by='Claude'):
     return f'已记下 {key}：{status or ""} {conclusion[:80] if conclusion else ""}'.strip()
 
 
+def _material_hints(d, m):
+    """事项里有日志包 / 日志文件夹、解密方式时，告诉会话怎么用：没确认看哪份就先找、再 kb_ask 确认。"""
+    packs = sorted(p for p in (d / '其他资料' / '日志包').glob('*') if not p.name.startswith('.') and p.name != HIST) \
+        if (d / '其他资料' / '日志包').is_dir() else []
+    titles = [note_title(n) for n in notes_of(d, m=m)]
+    out = []
+    if packs:
+        if any(t.startswith('要解析的日志') for t in titles):
+            out.append('- 日志：用户已指定，只看「要解析的日志」里那几份（在 其他资料/日志/）')
+        else:
+            out.append(f'- 日志：{"、".join(str(p) for p in packs)} 里有很多份，用户没指定看哪份。先用 kb_log_pack（path=上面的路径，find=日期 / 关键词）'
+                       '按现象、发生时间、录屏找出相关的几份，用 kb_ask 说明你选了哪几份、为什么，等确认后用 kb_log_pack pick 记下，再往下分析')
+    if any(t.startswith('解密方式') for t in titles):
+        out.append('- 解密：日志是加密的，先按「解密方式」那条解密再分析（解密产物放临时目录，不提交进代码库）')
+    return out
+
+
 def _item_prompt(d, m, x, note, fresh):
     """推动一条：不走开发流程（SDD 等），只给这一条和补充信息，怎么查、怎么改由 AI 自己判断。"""
     how = {'ANR': f'用 kb_anr（id={x.get("编号")}）看合并后的关键堆栈和样本原文', '崩溃': f'用 kb_anr（id={x.get("编号")}）看堆栈和样本原文',
@@ -118,6 +135,7 @@ def _item_prompt(d, m, x, note, fresh):
     sup = [f'- 工程：{m["开发仓库"]}'] if m.get('开发仓库') else []
     sup += [f'- {"分支" if n.get("类型") == "分支" else "补充"}：{note_title(n) if n.get("类型") == "分支" else (n.get("内容") or note_title(n))}'
             for n in notes_of(d, m=m)]
+    sup += _material_hints(d, m)
     head = (f'你是由知识库网页启动的【后台无人值守】会话，处理事项「{d.name}」里的一条。终端里没有人，'
             '不要在回复里提问，也不要用 AskUserQuestion；要问用户就用 kb_ask（iteration 填事项名），再用 kb_wait_answer 等回答。\n\n') if fresh else ''
     return (head + f'这一条（{x["键"]}）：{x["标题"]}\n{x["内容"] if x["内容"] != x["标题"] else ""}'

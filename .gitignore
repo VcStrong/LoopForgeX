@@ -19,6 +19,7 @@
 !/_system/ui/
 !/_system/requirements.txt
 !/_system/bin/
+!/_system/tests/
 !/tools/
 /tools/*
 !/tools/make-public.py

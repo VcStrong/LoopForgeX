@@ -10,12 +10,13 @@
 svn 工作副本同样支持：分支填 trunk、branches/xxx 或分支名（自动找 branches/<名>）；svn switch 切过去、svn update 拉最新；
   运行后新文件 svn add，只把插件改过的文件 svn commit（svn 提交就是推到服务器）；最后 switch 回原来的目录。
 """
+import re
 import threading
 import time
 import uuid
 from pathlib import Path
 
-from kblib.core.common import PERIODS, KBError, now
+from kblib.core.common import PERIODS, KBError, now, sess_env
 from kblib.core.periods import load_meta, log, period_dir, period_names
 from kblib.core.baseinfo import base_load
 from kblib.infra import hosts
@@ -84,6 +85,41 @@ def _step(j, text):
     j['步骤'].append((time.strftime('%H:%M:%S'), text))
 
 
+def _commit_msg(rp, p):
+    """插件提交说明：plugin.json「提交说明」；仓库提交要带「TAG: xxx」（commit-msg 钩子校验，如 VV Commit Template）时，
+    沿用这个分支最近提交里的 TAG 行，不然钩子会拒绝提交。"""
+    msg = p.get('提交说明') or f'chore: {p["名称"]}'
+    if 'TAG:' in msg:
+        return msg
+    log_ = _git(rp, 'log', '-30', '--format=%B').stdout
+    tag = next((ln.strip() for ln in log_.splitlines() if re.match(r'^TAG:\s*[A-Za-z0-9_\-]+\s*$', ln.strip())), '')
+    return f'{msg}\n\n{tag}' if tag else msg
+
+
+def _wait_repo(j, rp, me='', limit=QUEUE_MAX):
+    """排队拿仓库：同一进程里同一仓库的插件任务一个一个来，别的会话（开发 / 修复）在改就等；me 是发起方自己，不算占用。
+    拿到返回锁（用完 release），超过 limit 秒抛错。"""
+    from kblib.bugs.fix import _repo_busy
+    with _LOCK:
+        lk = _REPO_LOCKS.setdefault(str(rp), threading.Lock())
+    t0, said = time.time(), ''
+    while True:
+        if lk.acquire(blocking=False):
+            busy = _repo_busy(rp, me=me)
+            if not busy:
+                return lk
+            lk.release()
+        else:
+            busy = '另一个插件任务正在这个仓库里运行'
+        if busy != said:
+            _step(j, f'排队：{busy}，空出来后自动继续')
+            said = busy
+        j['状态'] = '排队中'
+        if time.time() - t0 > limit:
+            raise KBError(f'排队超过 {limit // 60} 分钟，已放弃：{busy}')
+        time.sleep(QUEUE_POLL)
+
+
 def _run(j, p, d, root, branch, push):
     rp = Path(root).expanduser()
     if not rp.exists():
@@ -103,25 +139,7 @@ def _run(j, p, d, root, branch, push):
         branch = branch or cur
         _step(j, f'仓库 {rp}，当前分支 {cur or "（游离）"}，目标分支 {branch}' + ('' if remote else '，没有远端'))
 
-    from kblib.bugs.fix import _repo_busy
-    with _LOCK:
-        lk = _REPO_LOCKS.setdefault(str(rp), threading.Lock())
-    t0, said = time.time(), ''
-    while True:
-        if lk.acquire(blocking=False):
-            busy = _repo_busy(rp)
-            if not busy:
-                break
-            lk.release()
-        else:
-            busy = '另一个插件任务正在这个仓库里运行'
-        if busy != said:
-            _step(j, f'排队：{busy}，空出来后自动继续')
-            said = busy
-        j['状态'] = '排队中'
-        if time.time() - t0 > QUEUE_MAX:
-            raise KBError(f'排队超过 {QUEUE_MAX // 3600} 小时，已放弃：{busy}')
-        time.sleep(QUEUE_POLL)
+    lk = _wait_repo(j, rp)
     j['状态'] = '运行中'
     try:
         if kind == 'svn':
@@ -162,7 +180,7 @@ def _run_locked(j, p, d, rp, cur, branch, remote, push):
             _step(j, '已拉到最新')
         before = _git_changed(rp)
         _step(j, f'运行插件「{p["名称"]}」…')
-        out = run_plugins('手动运行', d, str(rp), branch, (load_meta(d).get('SDD目录', '') if d else ''), only=p['id'])
+        out = run_plugins('manual', d, str(rp), branch, (load_meta(d).get('SDD目录', '') if d else ''), only=p['id'])
         _step(j, out or '没有运行')
         if '失败' in out.split('\n')[0] or '没有运行' in out.split('\n')[0]:
             raise KBError('插件没跑成功，没有提交')
@@ -175,7 +193,7 @@ def _run_locked(j, p, d, rp, cur, branch, remote, push):
             _step(j, f'{len(changed)} 个文件改动，按你的选择没有提交')
             return f'完成：{len(changed)} 个文件改动，未提交'
         git('add', '--', *changed)
-        msg = p.get('提交说明') or f'chore: {p["名称"]}'
+        msg = _commit_msg(rp, p)
         git('commit', '-m', msg, '--', *changed, msg='提交')
         h = git('rev-parse', '--short', 'HEAD')
         _step(j, f'已提交 {h}「{msg}」（{len(changed)} 个文件）')
@@ -220,7 +238,7 @@ def _run_locked_svn(j, p, d, rp, cur, branch, push):
         _step(j, '已 svn update 到 r' + hosts.head(loc, 'svn'))
         before = _git_changed(rp)
         _step(j, f'运行插件「{p["名称"]}」…')
-        out = run_plugins('手动运行', d, loc, branch, (load_meta(d).get('SDD目录', '') if d else ''), only=p['id'])
+        out = run_plugins('manual', d, loc, branch, (load_meta(d).get('SDD目录', '') if d else ''), only=p['id'])
         _step(j, out or '没有运行')
         if '失败' in out.split('\n')[0] or '没有运行' in out.split('\n')[0]:
             raise KBError('插件没跑成功，没有提交')
@@ -285,6 +303,87 @@ def plugin_run_start(pid, target, repo='', push=True, by='用户（网页）'):
             _step(j, f'✗ {j["结果"]}')
     threading.Thread(target=go, daemon=True).start()
     return jid
+
+
+def plugin_run_sync(pid, target, repo='', push=False, by='终端'):
+    """终端 kb plugin run：和网页「运行一次」同一个流程（时机「手动运行一次」：排队等占用、切分支、拉最新、运行），
+    在当前进程里跑完再返回每一步。push：插件改了文件就提交并推送（默认不提交，留给你检查）。"""
+    p = get_plugin(pid)
+    if p.get('错误'):
+        raise KBError(p['错误'])
+    d, root, branch = _resolve(target, repo)
+    j = {'编号': 'cli', '插件': p['名称'], '目标': target, '状态': '运行中', '步骤': [], '结果': '', '开始': now(), '发起': by}
+    try:
+        j['结果'] = _run(j, p, d, root, branch, push)
+    except KBError as e:
+        raise KBError('\n'.join(f'{t} {x}' for t, x in j['步骤']) + f'\n✗ {e}') from None
+    return '\n'.join(f'{t} {x}' for t, x in j['步骤']) + f'\n{j["结果"]}'
+
+
+CALL_QUEUE_MAX = 10 * 60       # 会话里按需调用最多排队 10 分钟（工具调用不能一直挂着）
+
+
+def _caller():
+    """发起 kb_plugin_call 的会话：开发 / 跟进会话 → 期名，Bug 修复会话 → an:<编号>；终端 / 网页 → 空。"""
+    s = sess_env('KB_SESSION', '')
+    return s if s.startswith('an:') else (sess_env('KB_PERIOD', '') if s == 'dev' else '')
+
+
+def plugin_call_now(p, d, args=(), by='Claude'):
+    """开发 / 跟进 / Bug 修复会话里按需调用时机插件（如缺多语言 key 时拉一次多语言）：和「运行一次」同一套排队，
+    但就在仓库当前分支上运行——不切分支、不 pull、不 push（会话正在这个分支上干活）；只把插件改过的文件单独提交（git），
+    提交说明用 plugin.json 的「提交说明」。参数：仓库=<路径>（默认本期开发仓库 / 会话的仓库）、提交=否（只运行不提交）。"""
+    kw = dict(str(a).split('=', 1) for a in args if '=' in str(a))
+    m = load_meta(d) if d else {}
+    root = (kw.get('仓库') or m.get('开发仓库') or sess_env('KB_REPO', '')).strip()
+    if not root:
+        raise KBError('不知道在哪个仓库运行：带上 iteration（期名），或 args=["仓库=<路径>"]')
+    rp = Path(root).expanduser()
+    if not rp.is_dir():
+        raise KBError(f'路径错误：{rp} 不存在')
+    kind, top = hosts._top(str(rp))
+    if not kind:
+        raise KBError(f'{rp} 不是 git 仓库，也不是 svn 工作副本')
+    rp = Path(top)
+    commit = kw.get('提交', '是') not in ('否', '不', 'no', 'false', '0')
+    j = {'编号': 'call', '插件': p['名称'], '状态': '运行中', '步骤': [], '结果': ''}
+    branch = hosts.branch_of(str(rp), 'svn') if kind == 'svn' else _git(rp, 'branch', '--show-current').stdout.strip()
+    _step(j, f'仓库 {rp}，在当前分支 {branch or "（游离）"} 上运行（不切分支、不推送）')
+    lk = _wait_repo(j, rp, me=_caller(), limit=CALL_QUEUE_MAX)
+    try:
+        before = _git_changed(rp)
+        out = run_plugins('manual', d, str(rp), branch, m.get('SDD目录', ''), only=p['id'])
+        _step(j, out or '没有运行')
+        first = (out or '没有运行').split('\n')[0]
+        if '失败' in first or '没有运行' in first:
+            raise KBError('\n'.join(x for _, x in j['步骤']) + '\n✗ 插件没跑成功，没有提交')
+        after = _git_changed(rp)
+        changed = sorted(f for f in set(after) | set(before) if before.get(f) != after.get(f))
+        if not changed:
+            j['结果'] = '完成：没有文件改动（仓库里已是平台最新的多语言 / 插件没改东西），不用提交'
+        elif not commit or kind == 'svn':
+            j['结果'] = (f'完成：{len(changed)} 个文件改动，' + ('svn 工作副本不自动提交' if kind == 'svn' else '按 提交=否 没有提交')
+                        + '：\n' + '\n'.join(f'  {f}' for f in changed[:50]))
+        else:
+            msg = _commit_msg(rp, p)
+            gone = [f for f in changed if not (rp / f).exists()]
+            for f in [f for f in changed if f not in gone]:
+                _git(rp, 'add', '--', f)
+            if gone:
+                _git(rp, 'rm', '--cached', '--quiet', '--', *gone)
+            r = _git(rp, 'commit', '-m', msg, '--', *changed)
+            if r.returncode != 0:          # 多半是仓库的提交规范（钩子）不认这个说明：拉到的文件已暂存，交给会话按规范提交，别停
+                j['结果'] = (f'已拉到，{len(changed)} 个文件已 git add 暂存，但自动提交被仓库拒绝：{(r.stderr or r.stdout).strip()[-300:]}\n'
+                            f'请按仓库提交规范只提交这些文件（git commit -- <这些文件>，说明用「{msg.splitlines()[0]}」并补上规范要求的内容），然后继续：\n'
+                            + '\n'.join(f'  {f}' for f in changed[:50]))
+                return '\n'.join(f'{t} {x}' for t, x in j['步骤']) + f'\n{j["结果"]}'
+            h = _git(rp, 'rev-parse', '--short', 'HEAD').stdout.strip()
+            j['结果'] = f'完成：已单独提交 {h}「{msg.splitlines()[0]}」（{len(changed)} 个文件，没有推送）'
+            if d:
+                log(d, '插件', f'「{p["名称"]}」按需调用（{by}）：分支 {branch} 提交 {h}（{len(changed)} 个文件）')
+    finally:
+        lk.release()
+    return '\n'.join(f'{t} {x}' for t, x in j['步骤']) + f'\n{j["结果"]}'
 
 
 def plugin_job(jid):

@@ -14,6 +14,17 @@
 })();
 const $=s=>document.querySelector(s), dlg=$('#dlg');
 let app=$('#app');      // 页面渲染的目标容器：经典版是 #app，模板用 KB.setApp(el) 换
+// 局部刷新：用 idiomorph（github.com/bigskysoftware/idiomorph，htmx / Turbo 8 的 morph 刷新）把新 HTML 合进现有 DOM，
+// 只改变了的节点，焦点、光标、滚动、展开的 details 都保留（整块 innerHTML 重写会全部收起、页面变矮、滚动被拉回）。
+// keepFilled：新 HTML 里标了 data-keep 的容器（devBox / stackBox 这类异步填的块，HTML 里只是「加载中…」占位）现在有内容就原样保留，等它自己刷新。
+// 库没加载到就退回 innerHTML。事件都用 el.onclick= 赋值绑定，morph 后照常重新绑定，不会重复。
+function morphHTML(el,html,o={}){
+  if(!window.Idiomorph){el.innerHTML=html;return}
+  try{Idiomorph.morph(el,html,{morphStyle:'innerHTML',ignoreActiveValue:true,restoreFocus:true,callbacks:{
+    beforeAttributeUpdated:(a,n,t)=>!(a==='open'&&n.tagName==='DETAILS')&&!(t==='remove'&&a.startsWith('data-')),   // 展开状态、脚本记的 data-init / data-loaded 等标记不动
+    beforeNodeMorphed:(a,b)=>!(o.keepFilled&&b.nodeType===1&&b.hasAttribute('data-keep')&&a.id===b.id&&a.hasChildNodes())}})}
+  catch(e){console.error(e);el.innerHTML=html}
+}
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const enc=encodeURIComponent;
 const ORDER=['收集中','已批准开发','开发中','已完成','已暂停'];
@@ -34,6 +45,25 @@ function kbAsk(msg,o={}){return new Promise(done=>{
 const kbConfirm=(msg,o)=>kbAsk(msg,o), kbPrompt=(msg,def,o)=>kbAsk(msg,{...o,input:true,def});
 async function api(u,opt){const r=await fetch(u,opt);const j=await r.json();if(r.status===401&&j.login){location.href='/login';throw new Error('要先登录')}if(!r.ok){const e=new Error(j.error||r.status);e.need=j.need;throw e}return j}
 const post=(u,b)=>api(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+// 拖放进来的文件：文件夹展开成里面的文件（名字带相对路径，如 logs/anr/anr_1.txt），跳过 .DS_Store 和隐藏文件；
+// 太多或太大返回 null 并提示压成 zip。直接用 dataTransfer.files 的话，文件夹是个读不了的 File，上传会报 Failed to fetch。
+const DROP_MAX_N=200, DROP_MAX_BYTES=500<<20;
+async function dropFiles(e,lim={}){const MAX_N=lim.n||DROP_MAX_N, MAX_B=lim.bytes||DROP_MAX_BYTES;
+  const dt=e.dataTransfer;if(!dt)return [];
+  const ents=[...(dt.items||[])].filter(it=>it.kind==='file').map(it=>it.webkitGetAsEntry&&it.webkitGetAsEntry());  // 要在事件里同步取，之后就清空了
+  if(!ents.length||ents.some(x=>!x))return [...dt.files].filter(f=>!f.name.startsWith('.'));
+  const out=[],hidden=n=>n.startsWith('.')||n==='__MACOSX';let size=0,dirs=0;
+  const fileOf=en=>new Promise((ok,no)=>en.file(ok,no));
+  const readAll=async dir=>{const r=dir.createReader(),all=[];for(;;){const b=await new Promise((ok,no)=>r.readEntries(ok,no));if(!b.length)return all;all.push(...b)}};
+  const walk=async(en,pre)=>{
+    if(hidden(en.name)||out.length>MAX_N||size>MAX_B)return;
+    if(en.isDirectory){dirs++;for(const c of await readAll(en))await walk(c,pre+en.name+'/');return}
+    const f=await fileOf(en);size+=f.size;
+    out.push(pre?new File([f],pre+f.name,{type:f.type,lastModified:f.lastModified}):f)};
+  try{for(const en of ents)await walk(en,'')}catch(err){toast('读取拖进来的文件失败：'+(err.message||err)+'，可以压成 zip 再拖');return null}
+  if(out.length>MAX_N||size>MAX_B){toast(`文件太多（超过 ${MAX_N} 个或 ${MAX_B>=1<<30?(MAX_B/(1<<30))+'GB':(MAX_B>>20)+'MB'}），请压成 zip 再拖`);return null}
+  if(!out.length&&dirs)toast('文件夹是空的（隐藏文件不传）');
+  return out}
 const badge=s=>`<span class="badge st-${esc(s)}">${esc(s)}</span>`;
 const fileUrl=p=>'/file?path='+enc(p);
 

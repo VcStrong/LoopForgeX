@@ -5,6 +5,7 @@
   jobs <关键词…>               按分支 / 关键词模糊找任务 → [{"名称", "地址", "分"}]
   builds <任务名或地址> [数量]  最近的构建 → {"任务", "地址", "构建": [构建]}
   build <构建地址>             一次构建 → 构建
+  download <产物地址> <文件>    下载产物（「安装到手机」用）：先写 <文件>.part，旁边 <文件>.size 记总大小供看进度，完成后改名 → {"文件", "大小"}
 构建：{"编号", "地址", "结果", "进行中", "时间", "耗时", "版本", "分支", "提交", "说明", "产物": [{"名称", "路径", "地址", "类型"}]}
 不带子命令（对话里按需调用）：给分支 / 关键词 / 地址，输出给人和 AI 看的文字。
 """
@@ -145,6 +146,35 @@ def build_of(b, commit=True):
             '参数': {k: v for k, v in params.items() if isinstance(v, (str, int, float, bool))}, '产物': arts}
 
 
+def download(url, dest):
+    """下载产物到 dest（凭据只在插件里用）。边下边写 .part，总大小写进 .size，知识库按 .part 的大小算进度。"""
+    host = lambda u: urllib.parse.urlsplit(u)[:2]
+    if host(url) != host(BASE):
+        die(f'只下载这个 Jenkins 上的产物：{url}')
+    req = urllib.request.Request(url, headers={'User-Agent': 'kb-jenkins'})
+    if USER and PW:
+        req.add_header('Authorization', 'Basic ' + base64.b64encode(f'{USER}:{PW}'.encode()).decode())
+    part, size = dest + '.part', dest + '.size'
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r, open(part, 'wb') as f:
+            open(size, 'w').write(r.headers.get('Content-Length') or '0')
+            while True:
+                buf = r.read(1 << 20)
+                if not buf:
+                    break
+                f.write(buf)
+    except urllib.error.HTTPError as e:
+        die(f'下载失败 {e.code}：{url}' + ('（要登录：在基础信息条目里填 用户名 + API 令牌）' if e.code in (401, 403) else ''))
+    except (urllib.error.URLError, OSError) as e:
+        die(f'下载失败：{getattr(e, "reason", e)}（是否需要 VPN / 内网？）')
+    os.replace(part, dest)
+    try:
+        os.remove(size)
+    except OSError:
+        pass
+    return {'文件': dest, '大小': os.path.getsize(dest)}
+
+
 def job_url(x):
     if x.startswith('http'):
         return x.split('/api/')[0].rstrip('/') + '/'
@@ -199,6 +229,10 @@ def main():
         print(json.dumps(jobs(a[1:]), ensure_ascii=False))
     elif cmd == 'builds':
         print(json.dumps(builds(a[1], int(a[2]) if len(a) > 2 else None), ensure_ascii=False))
+    elif cmd == 'download':
+        if len(a) < 3:
+            die('download <产物地址> <保存到的文件>')
+        print(json.dumps(download(a[1], a[2]), ensure_ascii=False))
     elif cmd == 'build':
         print(json.dumps(build_of(get(a[1], TREE_BUILD)), ensure_ascii=False))
     else:

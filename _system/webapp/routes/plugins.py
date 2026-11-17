@@ -30,7 +30,8 @@ def _get_api_plugin_content(self, u, q):
 
 @get('/api/period/builds')
 def _get_api_period_builds(self, u, q):
-    return self._guard(lambda: kb.period_builds(q.get('name', ''), fresh=q.get('fresh') == '1'))
+    return self._guard(lambda: dict(kb.period_builds(q.get('name', ''), fresh=q.get('fresh') == '1'),
+                                    安装=bool(kb._adb()) and kb.period_android(q.get('name', '')) is not False))
 
 
 @post('/api/plugin/task', page_only=True)
@@ -63,8 +64,7 @@ def _post_api_plugin_run2(self, u, n, body):
 
 @post('/api/plugin/run', page_only=True)
 def _post_api_plugin_run(self, u, n, body):
-    return self._guard(lambda: {'msg': kb.run_plugin_now(body.get('id', ''), body.get('period', ''),
-                                                         body.get('event') or '开发开始')})
+    return self._guard(lambda: {'msg': kb.plugin_run_sync(body.get('id', ''), body.get('period', ''), push=False, by='用户（网页）')})
 
 
 @post('/api/period/builds', page_only=True)
@@ -75,3 +75,25 @@ def _post_api_period_builds(self, u, n, body):
 @post('/api/build/mapping', page_only=True)
 def _post_api_build_mapping(self, u, n, body):
     return self._guard(lambda: {'msg': kb.build_mapping(body.get('url', ''), body.get('version', ''))})
+
+
+@get('/api/build/install')
+def _get_api_build_install(self, u, q):
+    """「安装到手机」弹框：渠道包（含默认）和手机；build 空 = 本期最近一次成功的构建。"""
+    return self._guard(lambda: kb.install_options(q.get('name', ''), q.get('build', '')))
+
+
+@get('/api/build/install/latest')
+def _get_api_build_install_latest(self, u, q):
+    return self._guard(lambda: kb.install_latest(q.get('name', '')))
+
+
+@get('/api/build/install/job')
+def _get_api_build_install_job(self, u, q):
+    return self._guard(lambda: kb.install_job(q.get('id', '')))
+
+
+@post('/api/build/install', page_only=True)
+def _post_api_build_install(self, u, n, body):
+    return self._guard(lambda: {'job': kb.install_start(body.get('period', ''), body.get('build', ''), body.get('path', ''),
+                                                        body.get('serial', ''), bool(body.get('force')), bool(body.get('uninstall')))})

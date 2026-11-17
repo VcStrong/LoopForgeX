@@ -14,9 +14,10 @@ from kblib.core.common import DEV_OK, KBError, ROOT, now, sess_env
 from kblib.core.periods import load_meta, log, period_dir, period_names, save_meta, set_status
 from kblib.ai.flows import flow_done, flow_for, flow_text, get_flow, period_flow
 from kblib.ai.engines import engine_bin, engine_popen, period_engine
-from kblib.plugins.registry import _sources_prompt, run_plugins
+from kblib.ai import team
+from kblib.plugins.registry import _sources_prompt, i18n_hint, i18n_issue_tip, run_plugins
 from kblib.ai.devprep import _dev_target, _git, _git_root, _no_flow_msg, _sdd_repo
-from kblib.infra import hosts
+from kblib.infra import hosts, timing
 from kblib import lazy
 _talk = lazy('kblib.ai.talk')
 _devices = lazy('kblib.ai.devices')      # 上层模块：用到时才 import（不形成循环）
@@ -71,6 +72,7 @@ def ask(period, question, context='', options=None, recommend='', files=None, st
          'AI建议': (recommend or '').strip(), '文件': [str(x) for x in files or []],
          '状态': '待回答', '回答': '', '回答人': '', '回答时间': ''}
     dnd = bool(m.get('免打扰'))
+    tip = i18n_issue_tip(d.name, f'{question} {context} {recommend}')      # 问的是「要人在 AS 拉多语言」：插件能用就提示直接调
     if dnd:
         q.update(状态='AI决策', 回答=q['AI建议'] or '（AI 自行决策）', 回答人='AI（免打扰）', 回答时间=now())
     qs.append(q)
@@ -78,10 +80,10 @@ def ask(period, question, context='', options=None, recommend='', files=None, st
     log(d, '待确认' if not dnd else '免打扰决策', f'{qid} {q["问题"][:80]}' + (f' → {q["回答"][:60]}' if dnd else ''))
     if dnd:
         return (f'{qid}：免打扰已开启，不用等待。按你的建议执行：{q["AI建议"] or "（未给建议，自行选最稳妥的方案）"}；'
-                '并用 kb_log 记录理由。')
+                '并用 kb_log 记录理由。' + tip)
     _notify(f'知识库 · {d.name} 需要确认', q['问题'])
     return (f'{qid} 已发到网页，等待用户确认。现在调用 kb_wait_answer(iteration="{d.name}", id="{qid}") 等待；'
-            '拿到回答前不要继续做依赖它的事，也不要自行决定。')
+            '拿到回答前不要继续做依赖它的事，也不要自行决定。' + tip)
 
 
 def wait_answer(period, qid, timeout=240):
@@ -315,6 +317,8 @@ def _dev_finish(name, code=None):
     m = load_meta(d)
     s = m.get('开发会话') or {}
     s.update(状态='已结束', 结束时间=now(), 退出码=code, **res)
+    for lf in (s.get('历史日志') or []) + [s.get('日志')]:      # 角色团：每一轮的日志都数一次（同一份只算一次）
+        team.tally(s, lf, m, d, s.get('场景', ''))
     if why:
         s['未续跑原因'] = why
     m['开发会话'] = s
@@ -422,6 +426,10 @@ def dev_session(name):
     return s
 
 
+PUSH_RULE = ('推送：只可以 git push <远端> HEAD:refs/for/<分支> 推 Gerrit 送审（不要带 submit、打分、强推）；'
+             '推其他分支、改 remote、git reset --hard、git checkout -- . 会被拒，需要时用 kb_ask 请用户执行')   # REQ-024 / CR-002：约定说明，不依赖套件 hook
+
+
 def _dev_prompt(name, root, branch, f, docs):
     v = dict(期名=name, 仓库=str(root), 分支=branch, 文档目录=str(docs),
              资料目录=str(Path(docs) / (f.get('资料目录名') or 'kb-materials')))
@@ -440,12 +448,13 @@ kb_set_status 改为「开发中」（已是开发中则跳过）。工具结果
 需要时把回答写回对应的流程文档，然后继续。kb_ask 若提示免打扰，直接按你的建议执行。
 【基础信息】测试账号、Wi-Fi / 代理 / VPN、环境配置等先查基础知识库（kb_base）；密码等机密在真正要用时才 kb_base_secret 读取，
 不要写进代码、文档、提交、日志或回复。缺少需要的账号或配置时用 kb_ask 向用户要。
-【手机】要在手机上装包、测试前先 kb_devices 看、kb_device_claim 申请（要几台申请几台），只在申请到的手机上操作
+【手机】要在手机上装包、测试前先 kb_devices 看、kb_device_claim 申请（要几台申请几台，只填 count，不要照历史记录点名序列号），只在申请到的手机上操作
 （adb -s <序列号> / agent-device --serial），别动别的期占着的手机；测完 kb_device_release。
 【不阻断的问题】手机不够或没连（如 case 要多台手机而只连了一台）、缺测试账号、环境不满足等，让某些验证做不了、但不影响继续开发的：
 不要停下等，也不要悄悄跳过——马上用 kb_issue 记下（写清要什么，如「需要 3 台手机：主持 + 2 个麦上用户」），能做的先做，
 测不了的 case 如实记 BLOCKED，然后继续。用户会在网页看到并收到通知，条件具备后点「复测」补测。
 【记录】每完成一个阶段或一个任务，用 kb_log 记一句进度；关键决定、接口变更、与需求不一致之处也 kb_log。
+【推送】{PUSH_RULE}。
 【完成】全部完成后 kb_set_status 改为「已完成」，并 kb_log 记录分支和提交。
 【停止】kb_wait_answer 返回「已撤回」时立即停止。遇到无法继续的错误，用 kb_ask 说明情况并等待指示，不要放弃退出。""" + _NO_BG
 
@@ -486,20 +495,34 @@ def _dev_env(name, branch, root):
 
 
 def _dev_spawn(d, root, branch, prompt, resume_id='', **extra):
-    """启动（或用 --resume 接着上一轮对话续跑）后台会话；进程退出后自动 _dev_finish。"""
-    eng = period_engine(load_meta(d))
+    """启动（或用 --resume 接着上一轮对话续跑）后台会话；进程退出后自动 _dev_finish。
+    角色团场景按类型：跟进 → 跟进，复测不挂，其他 → 开发（只在流程确认点预审）；续跑不重复附加。"""
+    m0 = load_meta(d)
+    eng = period_engine(m0)
     (d / DEV_DIR).mkdir(exist_ok=True)
     ts = f'{datetime.now():%Y%m%d-%H%M%S}'
     logf = d / DEV_DIR / f'{ts}.jsonl'
-    proc = engine_popen(eng, prompt, f'kb·{d.name}', logf, root, resume_id, dict(_dev_env(d.name, branch, root), KB_SESSION='dev'))
+    hint = i18n_hint(d.name, root)      # 每轮都带（含 --resume 续跑 / 跟进 / 网页消息）：续跑的上下文可能比这条规矩旧
+    if hint:
+        prompt += ('\n\n【多语言】' + hint.removeprefix('- ')
+                   + '。不要去找 Android Studio 的多语言插件，也不要让用户在 AS 里拉：知识库的插件就是同一套逻辑。')
+    typ = extra.get('类型', (m0.get('开发会话') or {}).get('类型', '') if resume_id else '')
+    scene = {'跟进': '跟进', '复测': ''}.get(typ, '开发')
+    proc = engine_popen(eng, prompt, f'kb·{d.name}', logf, root, resume_id, dict(_dev_env(d.name, branch, root), KB_SESSION='dev'),
+                        scene=scene, period=m0)
     _PROCS[d.name] = proc
     m = load_meta(d)
     old = m.get('开发会话') or {}
     s = {'pid': proc.pid, '状态': '运行中', '开始时间': old.get('开始时间') if resume_id else now(), '本轮开始': now(),
          '仓库': str(root), '分支': branch, '日志': str(logf), '权限': eng['名称'], '备注': old.get('备注', ''),
          '流程': old.get('流程', ''), '引擎': eng['id'], '类型': old.get('类型', ''), '范围': old.get('范围', ''), **extra}
+    if scene:
+        s['场景'] = scene
     if resume_id:
         s['历史日志'] = (old.get('历史日志') or []) + [old.get('日志')]
+        for k in ('角色', '角色日志'):
+            if old.get(k):
+                s[k] = old[k]
         if old.get('已汇报'):
             s['已汇报'] = True
         s['开始时间'] = old.get('开始时间') or now()
@@ -571,6 +594,18 @@ def pull_rebase(root):
     return f'{br} 已是最新（{new}）' if old == new else f'{br} 已拉取 {old} → {new}'
 
 
+def _fetch_now(root):
+    """切分支时机设成「只 fetch」：只 git fetch，不合并。"""
+    r = _git(root, 'fetch', '--prune', timeout=300)
+    br = _git(root, 'branch', '--show-current').stdout.strip()
+    return f'{br} 已 fetch（设置为只 fetch，没合并）' if r.returncode == 0 else f'⚠ git fetch 失败：{(r.stderr or r.stdout).strip()[-300:]}'
+
+
+def _switch_pull(root):
+    """切开发分支时机（switch）：按设置拉最新或只 fetch。"""
+    return pull_rebase(root) if timing.timing_policy('switch', str(root))[0] == timing.PULL else _fetch_now(root)
+
+
 def switch_branch(root, branch):
     """用户在网页上确认「切到开发分支」后执行：切换前在当前分支 git pull --rebase，切换后在新分支再 git pull --rebase。
     已跟踪的文件有改动不切（未跟踪文件不影响）；本地没有的分支从 origin 拉；
@@ -586,7 +621,7 @@ def switch_branch(root, branch):
     if not local and not remote:
         raise KBError(f'{root.name} 本地和 origin 都没有分支「{branch}」。请先在仓库里从正确的基线分支建好（如 git switch -c {branch} origin/<基线>），'
                       '或重新输入分支名')
-    steps = ['切换前：' + pull_rebase(root)]
+    steps = ['切换前：' + _switch_pull(root)]
     if local:
         r = _git(root, 'switch', branch)
     else:
@@ -595,7 +630,7 @@ def switch_branch(root, branch):
     if r.returncode:
         raise KBError(f'切换分支失败：{(r.stderr or r.stdout).strip()[:500]}')
     steps.append(f'已切换到 {branch}' + ('' if local else '（从 origin 拉取）'))
-    steps.append('切换后：' + pull_rebase(root))
+    steps.append('切换后：' + _switch_pull(root))
     return steps
 
 
@@ -622,16 +657,17 @@ def dev_start(period, note='', repo='', branch='', keep_branch=False):
     steps = []
     if branch or keep_branch:
         root = Path(repo) if repo else _sdd_repo(d, m, '')
-        steps = switch_branch(root, branch) if branch else ['拉取：' + pull_rebase(root)]
+        steps = switch_branch(root, branch) if branch else ['拉取：' + _switch_pull(root)]
         cur = _git(root, 'branch', '--show-current').stdout.strip()
         repo = str(root)
         m['开发分支'] = cur
         save_meta(d, m)
         log(d, '确认开发分支', f'{root.name} · {cur}' + (f'（网页确认切换：{"；".join(steps)}）' if branch else f'（沿用当前分支；{steps[0]}）'))
     root, branch, f, docs = _dev_target(d, m, repo)
-    if not steps:                                       # 开发前更新代码（刚切过分支的已经拉过）
-        up = hosts.sync(str(root), 'git')
-        log(d, '更新代码', f'开发前：{up}')
+    if not steps:                                       # 开发前更新代码（时机 dev_start；刚切过分支的已经按「切开发分支」拉过）
+        base = timing.code_update('dev_start', str(root), 'git', d=d)
+    else:
+        base = timing.code_update('switch', str(root), 'git', d=d, done='；'.join(steps))
     eng = period_engine(dict(m, 开发会话={}))
     engine_bin(eng)
     if m.get('状态') not in DEV_OK:
@@ -642,8 +678,9 @@ def dev_start(period, note='', repo='', branch='', keep_branch=False):
     m['开发仓库'] = str(root)
     m['SDD目录'] = str(docs)
     m['开发会话'] = {'备注': note, '流程': f['id'], '引擎': eng['id']}
+    m['代码基线'] = base
     save_meta(d, m)
-    plug = run_plugins('开发开始', d, root, branch, docs)
+    plug = run_plugins('dev_start', d, root, branch, docs)
     prompt = _dev_prompt(d.name, root, branch, f, docs) + _sources_prompt(m)
     if note and note not in ('网页「开始开发」批准', '网页「分析推动」'):
         prompt += f'\n\n【用户这次的要求】{note}\n（按这个要求推进；和流程冲突时以用户要求为准，拿不准用 kb_ask 问）'

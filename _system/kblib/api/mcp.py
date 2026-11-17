@@ -60,6 +60,7 @@ INSTRUCTIONS = """本地知识库（按「期」管理需求 / 设计图 / 接�
    开发中需要用户确认时（等人审阅方案 / 接口、待确认问题、方案取舍、操作被拦截等），
    用 kb_ask 发到网页（写清问题、背景、选项、你的建议 recommend），再用 kb_wait_answer 等回答并照做，拿到回答前不要自行决定。
    这一期开了「免打扰」时 kb_ask 会直接返回：按你的建议执行，并用 kb_log 记录理由。免打扰由用户在网页随时开关。
+   角色团开启时，用 Agent 调专家子 agent 不算换流程；专家不替代流程命令。
 8. 基础知识库（所有期共用的基础上下文）：用户给出网站账号密码、测试某功能用的账号、Wi-Fi / 代理 / VPN、环境配置等通用信息时，
    用 kb_base_save 存进去（密码、令牌、密钥等字段标记 机密=true，只存钥匙串）；回答问题、开发、测试前先用 kb_base 查。
    机密明文只在真正执行时用 kb_base_secret 读取，绝不写进代码、文档、提交、知识库记录或回复里；只属于某一期的信息仍记在那一期。
@@ -75,7 +76,7 @@ INSTRUCTIONS = """本地知识库（按「期」管理需求 / 设计图 / 接�
 7. 原型图和设计稿要分清：PRD / Axure 里的图是原型图或参考图（存在 需求/原型图/），只用来理解交互和逻辑；
    要实现的产品图是「设计稿地址」那一项（Figma 或蓝湖链接），用 kb_import_design 导入到「设计图」。
    导入需求条目时，若条目带设计稿地址，必须一并导入设计稿。开发时 UI（布局、尺寸、颜色、文案、字号）以设计稿为准，原型与设计稿冲突时以设计稿为准并用 kb_log 记录。
-9. 手机是多个期共用的：在手机上装包、测试前先 kb_devices 看、kb_device_claim 申请，只在申请到的手机上操作（adb -s <序列号>），
+9. 手机是多个期共用的：在手机上装包、测试前先 kb_devices 看、kb_device_claim 申请（只填台数，不要照历史点名序列号，由知识库分配），只在申请到的手机上操作（adb -s <序列号>），
    不要往别的期占着的手机装包（会覆盖对方的包、打断对方测试），测完 kb_device_release。
    手机不够或没连、缺测试账号、环境不满足等让部分验证做不了、但不影响继续开发的问题，用 kb_issue 记下（写清要什么），然后继续，不要停下等；
    用户会在网页看到并收到通知，条件具备后在网页点「复测」补测。复测会话测完用 kb_test_report 汇报。
@@ -130,7 +131,7 @@ TOOLS = [
      S(iteration=STR('期名'), id=STR('编号，如 T001'), content=STR('新内容'), category=CAT,
        kind={'type': 'string', 'enum': NOTE_KINDS}, title=STR('新标题'), url=STR('新链接'), source=STR('来自'),
        delete={'type': 'boolean', 'description': 'true 表示删除这条'}), ['iteration', 'id']),
-    ('kb_search', '全文检索知识库文档和已登记代码。多个关键词用空格分隔（同时命中优先）。',
+    ('kb_search', '全文检索知识库文档和已登记代码。多个关键词用空格分隔（同时命中优先）。结果不够时自动模糊补充：同义词 / 常见错别字（基础/同义词.txt 可加）、拼音或首字母、相似词纠错，结果头会写明改写了什么。',
      S(query=STR('关键词'), iteration=STR('限定某一期'), category=CAT,
        scope={'type': 'string', 'enum': ['all', 'docs', 'code'], 'description': '范围，默认 all'},
        repo=STR('限定某个代码仓库'), limit={'type': 'integer', 'description': '条数，默认 10，最多 50'}), ['query']),
@@ -177,10 +178,12 @@ TOOLS = [
      ['iteration', 'id']),
     ('kb_devices', '查看连着的手机和占用情况：哪台空闲、哪台被哪一期（哪个分支）占着。手机是多个期共用的，装包测试前先看。',
      S(iteration=STR('期名')), ['iteration']),
-    ('kb_device_claim', '申请手机给这一期测试（优先本期已占着的，再挑空闲的）：返回能用的序列号，只在这些手机上装包、操作'
+    ('kb_device_claim', '申请手机给这一期测试：只填台数 count，由知识库分配（本期已占着的优先，再挑最近最少用的空闲手机，'
+                        '几期并行时分散到不同手机）；不要照历史记录点名 serials。返回能用的序列号，只在这些手机上装包、操作'
                         '（adb -s <序列号> / agent-device --serial）。不够时自动记成非阻断问题并通知用户，你继续开发。',
      S(iteration=STR('期名'), count={'type': 'integer', 'description': '要几台，默认 1（多台场景一次申请够）'},
-       serials={'type': 'array', 'items': {'type': 'string'}, 'description': '指定序列号（可空）'},
+       serials={'type': 'array', 'items': {'type': 'string'}, 'description': '一般不填。点名的不可用时自动换成空闲手机'},
+       strict={'type': 'boolean', 'description': '确实要特定那台（如 case 要求特定机型）才设 true：严格按 serials，不换'},
        reason=STR('用途，如「TASK-5 多人送礼：主持 + 2 个麦上用户」')), ['iteration']),
     ('kb_device_release', '释放这一期占着的手机（测完就释放，别的期才能用）。',
      S(iteration=STR('期名'), serials={'type': 'array', 'items': {'type': 'string'}, 'description': '只释放这些；空 = 全部'}),
@@ -239,8 +242,9 @@ TOOLS = [
     ('kb_builds', '这一期（事项）在构建平台（如 Jenkins）上的构建：任务、每次构建的结果、完整版本、提交、安装包和 mapping 地址、这个包上报的 Bug。'
                   '找测试包装机、对版本、给 ANR / 崩溃取 mapping 时用；只读，不触发构建。',
      S(iteration=STR('期 / 事项名'), count={'type': 'integer', 'description': '每个任务取几次构建（默认 5）'}), ['iteration']),
-    ('kb_task_item', '记下事项里某一条的处理结果（网页上每条单独「推动」时，处理完用它把结论记回这一条）。不带 item = 列出这个事项的条目和状态。',
-     S(iteration=STR('事项名'), item=STR('条目键，如 anr:6c8592be、bug:82613、E001'),
+    ('kb_task_item', '记下事项里某一条的处理结果（网页上每条单独「推动」时，处理完用它把结论记回这一条）。不带 item = 列出这个事项的条目和状态；'
+                     'add = 给事项新记一条要处理的问题（问管家收到新现象、已有事项时用），之后 kb_propose_push 让用户点「▶ 推动」。',
+     S(iteration=STR('事项名'), item=STR('条目键，如 anr:6c8592be、bug:82613、E001'), add=STR('新记一条：现象描述'),
        status=STR('已解决 / 没解决 / 待确认 / 推动中'), conclusion=STR('结论一两句：根因、改了什么、提交号')), ['iteration']),
     ('kb_stack_plan', '全栈方案会话交回「需求规格 + 设计对照 + 影响分析 + 接口契约」（网页「出方案」启动的会话最后调用一次）。交回后等用户在网页上拍板，不要自己拍板。',
      S(iteration=STR('期名'), plan=STR('方案 JSON 字符串：{摘要, 需求:[{编号 REQ-001, 标题, 描述, 验收:[…], 端, 设计, 来源}], 设计对照:{缺设计, 设计多出, 缺状态, 端不一致, 无法核对}, 各端:[{端, 涉及, 原因, 改动:[…], 工作量, 风险, 技术栈/目录/脚手架（新产品模式）}], 工程名（新产品模式）, 接口:[{方法, 路径, 说明, 类型, 调用端}], 数据:[…], 待确认:[{问题, 建议}]}'),
@@ -265,7 +269,7 @@ TOOLS = [
                      '远程仓库没法直接读文件时用它；本机仓库直接读也可以。',
      S(repo=STR('仓库地址，如 /Users/me/app 或 user@host:/srv/app'), op=STR('ls / tree / cat / grep / find / git-log / git-show'),
        arg=STR('路径（相对仓库根目录）/ 搜索词 / 文件名通配 / 提交号')), ['repo', 'op']),
-    ('kb_plugin_call', '调用按需「工具」插件（用户自己装的，如按会话编号拉取外部系统的会话内容）。不带 plugin = 列出可用插件和参数说明。'
+    ('kb_plugin_call', '调用按需「工具」插件（用户自己装的，如按会话编号拉取外部系统的会话内容；也包括能按需运行一次的时机插件，如开发中缺多语言 key 时的「多语言拉取」）。不带 plugin = 列出可用插件和参数说明。'
                        '插件需要的账号由知识库从基础信息交给插件，不要自己找密码。',
      S(plugin=STR('插件 id（先不带参数调用一次看有哪些）'), args={'type': 'array', 'items': {'type': 'string'}, 'description': '传给插件的参数'},
        iteration=STR('相关的期 / 事项名（可空；填了会在它的记录里记一笔调用）')), []),
@@ -275,6 +279,19 @@ TOOLS = [
     ('kb_anr_create', 'ANR / 崩溃日志的文字（用户贴给你的）→ 归档成问题（同一问题自动合并计数）并归到事项（没有就新建）。'
                       '用户给了日志就直接调，不要问版本、来源这些；之后用 kb_propose_push 让用户确认工程和分支开始推动。',
      S(text=STR('日志原文（完整贴进来）')), ['text']),
+    ('kb_log_pack', '日志包（.zip / .tar.gz）或日志文件夹（里面常按日期分了几十上百份）：只回概况（多少文件、日期范围、子目录），不列清单；'
+                    '带 iteration = 先把整份放进事项「其他资料/日志包/」（上传的暂存文件用完就删，之后用返回的路径）；'
+                    'find = 按关键词 / 日期 / 通配找（最多列 30 个）；pick = 把挑中的放进「其他资料/日志/」并记一条「要解析的日志」。'
+                    '用户点名了哪份就直接 pick；没点名不要列清单问他，推动后由分析会话找出相关日志再 kb_ask 确认。不要用 kb_add_material / kb_anr_add 整份归档。',
+     S(path=STR('压缩包或文件夹的本地路径'), iteration=STR('事项名（放进事项、挑的时候必填）'),
+       find=STR('找文件：关键词、日期（如 2026-11-14）或通配（如 *main*.log）'),
+       pick={'type': 'array', 'items': {'type': 'string'}, 'description': '挑哪些：文件名、日期或通配，如 ["2026-11-14"]、["*main*.log"]'},
+       note=STR('补充说明，如为什么挑这份'), password=STR('压缩包密码（zip 设了密码时；从基础信息 kb_base_secret 取，不要写进回答）')), ['path']),
+    ('kb_decrypt_add', '给事项登记解密程序 / 解密文件 / 解密工程（日志是加密的，要用它解密后才能分析）：文件归到「其他资料/解密/」，'
+                       '工程目录只登记路径不拷贝，地址记成链接；再记一条「解密方式」（含用法），处理事项的会话照着解密。',
+     S(iteration=STR('事项名'), path=STR('解密程序 / 文件 / 工程的本地路径'), url=STR('解密工程的仓库或下载地址'),
+       how=STR('用法，如：java -jar decode.jar <日志> 或 python decode.py -k key.bin <日志>'),
+       kind={'type': 'string', 'enum': ['程序', '文件', '工程'], 'description': '不传按路径判断'}, source=STR('来自谁')), ['iteration']),
     ('kb_propose_push', '在网页「问管家」对话里放一个「▶ 推动」确认按钮（带默认工程和分支），用户点了就开始分析、修改、自测。'
                         '推动 / 修复要动代码，必须这样让用户点，不要自己推动，也不要让用户自己去页面找。',
      S(iteration=STR('事项名')), ['iteration']),
@@ -380,7 +397,7 @@ def _call_tool(name, a):
     if name == 'kb_devices':
         return devices_text(g('iteration'))
     if name == 'kb_device_claim':
-        return device_claim(g('iteration'), g('count') or 1, g('serials'), g('reason') or '')
+        return device_claim(g('iteration'), g('count') or 1, g('serials'), g('reason') or '', bool(g('strict')))
     if name == 'kb_device_release':
         return device_release(g('iteration'), g('serials'))
     if name == 'kb_issue':
@@ -404,6 +421,9 @@ def _call_tool(name, a):
     if name == 'kb_anr_mapping':
         return anr_mapping(g('version'), g('path'))
     if name == 'kb_task_item':
+        if g('add'):
+            from kblib.tasks.memo import task_item_add
+            return task_item_add(g('iteration'), g('add'), by='Claude（问管家）')
         if not g('item'):
             return '\n'.join(f'- {x["键"]} ［{x["状态"]}］{x["标题"]}' + (f'\n  结论：{x["结论"]}' if x.get('结论') else '')
                              for x in task_items(g('iteration'))) or '这个事项还没有条目'
@@ -430,6 +450,14 @@ def _call_tool(name, a):
     if name == 'kb_anr_create':
         task, pids, desc = anr_intake_text(g('text'), by='Claude（问管家）')
         return f'{desc}。事项：{task}；接着用 kb_propose_push 让用户确认工程和分支'
+    if name == 'kb_log_pack':
+        from kblib.steward.logpack import pack_keep, pack_list, pack_pick
+        if g('pick'):
+            return pack_pick(g('iteration'), g('path'), g('pick'), g('note') or '', g('password') or '')
+        return pack_keep(g('iteration'), g('path'), g('find') or '') if g('iteration') else pack_list(g('path'), g('find') or '')
+    if name == 'kb_decrypt_add':
+        from kblib.steward.logpack import decrypt_add
+        return decrypt_add(g('iteration'), g('path') or '', g('url') or '', g('how') or '', g('kind') or '', g('source') or '')
     if name == 'kb_propose_push':
         return propose_push(g('iteration'))
     if name == 'kb_steward':

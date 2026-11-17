@@ -450,25 +450,41 @@
     const col = dockMode ? !S.dockOpen : S.insCollapsed;
     box.classList.toggle('tpl-col', col);
     box.classList.toggle('tpl-asking', jn > 0);
+    box._dock = dockMode; box._col = col;
     if (col) {
-      box.innerHTML = `<button type="button" class="tpl-ipill" id="tplInsT" aria-expanded="false"><i class="tpl-pulse ${acts().some(a => !a['等你']) ? '' : 'idle'}"></i>AI 洞察${jn ? `<b>${jn} 件需要你判断</b>` : ''}</button>`;
-      $('#tplInsT').onclick = () => { if (dockMode) S.dockOpen = true; else { S.insCollapsed = false; LS('ins', '0') } drawInsight(); if (!S.moved && S.mode === 'home') fitCurrent(true) };
+      setInsHtml(box, `<button type="button" class="tpl-ipill" id="tplInsT" aria-expanded="false"><i class="tpl-pulse ${acts().some(a => !a['等你']) ? '' : 'idle'}"></i>AI 洞察${jn ? `<b>${jn} 件需要你判断</b>` : ''}</button>`);
       return;
     }
     const working = I.acts.filter(a => !a['等你']);
     const body = esc(I.body).replace(/\[(\d+)\]/g, (_, i) => { const c = (I.cites || [])[i - 1]; return c && c['链接'] ? `<a href="${esc(c['链接'])}"><sup>${i}</sup></a>` : `<sup>${i}</sup>` });
     const showJ = I.js.slice(0, S.insAll ? 8 : (docked() ? 1 : 2));
-    box.innerHTML = `<div class="tpl-ihd"><span class="tpl-itag"><i class="tpl-pulse ${working.length ? '' : 'idle'}"></i>${esc(I.tag)}</span><span class="tpl-sp"></span>
+    const html = `<div class="tpl-ihd"><span class="tpl-itag"><i class="tpl-pulse ${working.length ? '' : 'idle'}"></i>${esc(I.tag)}</span><span class="tpl-sp"></span>
         <button type="button" class="tpl-tb tpl-ix" id="tplInsT" title="收起" aria-expanded="true" aria-label="收起 AI 洞察">–</button></div>
       <div class="tpl-ib"><b class="tpl-ititle">${esc(I.title)}</b>${body ? `<p class="tpl-ibody">${body}</p>` : ''}
       ${working.length ? `<div class="tpl-iacts">${working.slice(0, 3).map(a => `<a href="${esc(a['链接'] || '#/')}" class="tpl-iact"><i style="background:${esc(a['颜色'])}">${esc(a['角色'][0])}</i><span><b>${esc(a['角色'])}</b> ${esc(a['状态'])}${(a['步骤'] || []).length ? `<small class="tpl-caret">${esc(a['步骤'][a['步骤'].length - 1])}</small>` : ''}</span></a>`).join('')}</div>` : I.who === 'AI' ? '<div class="tpl-iacts tpl-mut">AI 会接着往下做，暂时不需要你。</div>' : ''}
       ${jn ? `<div class="tpl-ijh">需要你判断 <span>${jn} 件</span></div><div class="kbt tpl-kbt">${showJ.map(j => `<div class="tpl-ij">${KBUI.judg(j)}</div>`).join('')}</div>
         ${jn > showJ.length ? `<button type="button" class="tpl-more" id="tplInsMore">还有 ${jn - showJ.length} 件</button>` : ''}` : `<div class="tpl-iok">${I.all && S.mode === 'focus' ? `这一期没有要你判断的事；别处还有 ${I.all} 件。` : '现在没有需要你判断的事。'}</div>`}
       </div>`;
-    if (window.KBUI) { KBUI.css(); KBUI.bind(box, S.brief || {}, briefOpts) }
-    $('#tplInsT').onclick = () => { if (dockMode) S.dockOpen = false; else { S.insCollapsed = true; LS('ins', '1') } drawInsight(); if (!S.moved && S.mode === 'home') fitCurrent(true) };
-    const mo = $('#tplInsMore'); if (mo) mo.onclick = () => { S.insAll = true; drawInsight() };
+    if (setInsHtml(box, html) && window.KBUI) { KBUI.css(); KBUI.bind(box, S.brief || {}, briefOpts) }
   }
+  // 内容没变就不碰 DOM；鼠标 / 手指按在洞察上时推迟重绘（按下和松开之间按钮被换掉，click 就丢了）
+  function setInsHtml(box, html) {
+    if (box._html === html) return false;
+    if (box._press) { box._pending = true; return false }
+    box.innerHTML = html; box._html = html; return true;
+  }
+  (() => {
+    const box = $('#tplInsight'); if (!box) return;
+    const release = () => { if (!box._press) return; box._press = false; if (box._pending) { box._pending = false; setTimeout(drawInsight, 0) } };
+    box.addEventListener('pointerdown', () => { box._press = true });
+    addEventListener('pointerup', release, true); addEventListener('pointercancel', release, true);
+    const toggle = open => { if (box._dock) S.dockOpen = open; else { S.insCollapsed = !open; LS('ins', open ? '0' : '1') } drawInsight(); if (!S.moved && S.mode === 'home') fitCurrent(true) };
+    box.addEventListener('click', e => {
+      if (box._col) { e.preventDefault(); toggle(true); return }      // 收起态：点胶囊任何位置都展开
+      if (e.target.closest('#tplInsT')) { e.preventDefault(); toggle(false); return }
+      if (e.target.closest('#tplInsMore')) { e.preventDefault(); S.insAll = true; drawInsight() }
+    });
+  })();
 
   // ---------------------------------------------------------------- 弹出菜单：筛选 / 地点 / 更多
   const pop = $('#tplPop');

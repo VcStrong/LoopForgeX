@@ -30,8 +30,24 @@ def _post_api_zentao_sync(self, u, n, body):
 
 @post('/api/zentao/analyze', page_only=True)
 def _post_api_zentao_analyze(self, u, n, body):
-    return self._guard(lambda: {'msg': kb.bug_analyze_in(body.get('ids') or [], body['repo']) if body.get('repo')
-                                else kb.bug_analyze(body.get('ids') or [])})
+    force = bool(body.get('force'))          # 网页上确认过「会移出修复队列」才带
+    return self._guard(lambda: {'msg': kb.bug_analyze_in(body.get('ids') or [], body['repo'], force=force) if body.get('repo')
+                                else kb.bug_analyze(body.get('ids') or [], force=force)})
+
+
+@get('/api/zentao/fixblock')
+def _get_api_zentao_fixblock(self, u, q):
+    return self._guard(lambda: kb.fix_block_view(q.get('repo', '')))
+
+
+@post('/api/zentao/fixblock/stash', page_only=True)
+def _post_api_zentao_fixblock_stash(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.fix_block_stash(body.get('repo', ''), body.get('files') or None)})
+
+
+@post('/api/zentao/fixblock/commit', page_only=True)
+def _post_api_zentao_fixblock_commit(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.fix_block_commit(str(body.get('id', '')), body.get('files') or [])})
 
 
 @post('/api/zentao/fix', page_only=True)

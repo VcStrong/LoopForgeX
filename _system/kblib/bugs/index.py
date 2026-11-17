@@ -6,6 +6,7 @@ import re
 import threading
 from kblib.core.common import KBError, PERIODS, ROOT, load_settings, now, safe_name, save_settings
 from kblib.core.periods import (
+    unarchive_if,
     _guess_task_kind,
     create_task,
     is_task,
@@ -396,6 +397,9 @@ def _sync_one(c, pers, by, full):
                 bugs.pop(bid, None)
             continue
         e['归属'] = _zt_assign(e, pers, people)
+        to = (e['归属'] or {}).get('名称')
+        if to and e.get('状态') != '已关闭' and (not old or (old.get('归属') or {}).get('名称') != to):
+            unarchive_if(to, f'归来新的 Bug {bid}')          # 归档的期又来了 Bug：回到列表里
         if old and e.get('分析') and old.get('修改原值') != e['修改原值']:
             e['分析']['过时'] = True    # 分析之后平台上有改动：结论可能过时
         e['同步时间'] = now()
@@ -534,6 +538,7 @@ def bug_assign(bid, target, by='Claude', bind=True):
     m = load_meta(d)
     kind = '事项' if is_task(m) else '期'
     e['归属'] = {'类型': kind, '名称': d.name, '依据': '手动', '时间': now()}
+    unarchive_if(d.name, f'归来 Bug {bid}')
     msg = f'Bug {bid} 已归到{kind}「{d.name}」{msg_new}'
     g = next((g for g in e.get('分组') or [] if g.get('强')), None)
     if kind == '期' and bind and g:

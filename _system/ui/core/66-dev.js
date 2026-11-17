@@ -46,7 +46,7 @@ async function talkBox(name){
   $('#tkActN').textContent=gs.length?`（${gs.length} 个会话${gs.some(g=>g['运行中'])?'，有会话在跑':''}）`:'（暂无）';
   if(!D.dataset.init){D.dataset.init=1;D.open=gs.some(g=>g['运行中'])}
   if(box.matches(':hover'))return;      // 正在看，先不刷新
-  box.innerHTML=gs.map(g=>`<div class="sess">── ${esc(g['时间'])} · ${esc(g['名称'])}${g['运行中']?' · <span style="color:var(--s1)">● 运行中</span>':''} ──</div>${g['动作'].slice().reverse().map(actLine).join('')}`).join('')||'<span class="mut small">还没有会话动作</span>';
+  box.innerHTML=gs.map(g=>`<div class="sess">── ${esc(g['时间'])} · ${esc(g['名称'])}${g['运行中']?' · <span style="color:var(--s1)">● 运行中</span>':''}${g['参与']?' · '+esc(g['参与']):''} ──</div>${g['动作'].slice().reverse().map(actLine).join('')}`).join('')||'<span class="mut small">还没有会话动作</span>';
 }
 const STEP={done:['done','✓ 完成'],skipped:['skip','跳过'],pending:['','未开始']};
 const fileLink=(p,t)=>p?`<a data-rf="${esc(p)}">${esc(t||p.split('/').pop())}</a>`:'';
@@ -64,7 +64,7 @@ async function devBox(name){
   const pend=v['待确认'].filter(q=>q['状态']==='待回答'),done=v['待确认'].filter(q=>q['状态']!=='待回答').reverse();
   const spRun=SP?((v['在跑']||[]).length?`<a id="dvToStack" title="到「全栈」看各端进度">${v['在跑'].map(x=>`<span class="badge st-开发中">● ${esc(x)}</span>`).join(' ')}</a>`:'<span class="mut">现在没有 AI 在跑</span>'):'';
   const sess=SP&&!run&&!legacy?spRun:!s?'<span class="mut">还没有启动过后台开发</span>':run?`<span class="badge st-开发中">● 后台${s['类型']==='复测'?'复测':'开发'}中</span> <span class="small mut">已运行 <span data-since="${esc(s['开始时间'])}">${since(s['开始时间'])}</span> · ${esc((s['仓库']||'').split('/').pop())} · ${esc(s['分支']||'')} · ${esc(s['权限']||'')}${s['续跑次数']?' · 已自动续跑 '+s['续跑次数']+' 次':''}</span>`
-    :`<span class="badge st-${s['状态']==='已结束'&&!s['出错']&&!s['退出码']?'已完成':'已暂停'}">${esc(s['状态'])}</span> <span class="small mut">${esc(s['结束时间']||'')}${s['退出码']?' · 退出码 '+s['退出码']:''}${s['费用']?' · $'+(+s['费用']).toFixed(2):''}${s['续跑次数']?' · 自动续跑 '+s['续跑次数']+' 次':''}</span>${s['未续跑原因']?`<div class="small" style="color:var(--warn)">${esc(s['未续跑原因'])}</div>`:''}`;
+    :`<span class="badge st-${s['状态']==='已结束'&&!s['出错']&&!s['退出码']?'已完成':'已暂停'}">${esc(s['状态'])}</span> <span class="small mut">${esc(s['结束时间']||'')}${s['退出码']?' · 退出码 '+s['退出码']:''}${s['费用']?' · $'+(+s['费用']).toFixed(2):''}${s['续跑次数']?' · 自动续跑 '+s['续跑次数']+' 次':''}</span>${s['参与']?` <span class="small" title="这次会话派过的角色团专家">${esc(s['参与'])}</span>`:''}${s['未续跑原因']?`<div class="small" style="color:var(--warn)">${esc(s['未续跑原因'])}</div>`:''}`;
   const can=!['已完成'].includes(v['状态']);
   const rt=v['复测']||{},ts2=rt['测试'],plan=rt['待复测'],phones=v['设备'];
   const freeN=phones?phones.filter(x=>x['空闲']||x['本期']).length:0;
@@ -87,7 +87,7 @@ async function devBox(name){
   const testHtml=ts2?`<div class="small"><b>🧪 测试</b>　识别到 ${ts2['文件数']} 个测试文件${ts2['用例']?` · ${ts2['用例']} 个 case：`+Object.entries(ts2['统计']).map(([k,n])=>esc(k)+' '+n).join(' / '):''}${ts2['环境阻塞']?` · <b style="color:var(--warn)">${ts2['环境阻塞']} 个因手机 / 账号 / 环境没测成</b>`:''}
     ${plan?`<div style="margin-top:4px">${plan['自动']?`⏰ 空闲手机够 <b>${plan['手机']}</b> 台时自动复测（现在空闲 ${freeN} 台，每分钟检查）　<a data-noauto>取消自动复测</a>`:`🔁 待复测${plan['原因']?'：'+esc(plan['原因']):''}　<span class="mut">条件具备后点「🔁 复测」，或设成手机够了自动复测</span>`}${plan['失败']?`<div style="color:var(--warn)">上次自动复测没能开始：${esc(plan['失败'])}</div>`:''}</div>`:''}
     ${last?`<div class="mut" style="margin-top:4px">上次${esc(last['类型']==='复测'?'复测':'测试')}（${esc(last['时间'])}）：通过 ${last['通过']} / 失败 ${last['失败']} / 阻塞 ${last['阻塞']}${last['小结']?' · '+esc(last['小结'].slice(0,120)):''}</div>`:''}</div>`:'';
-  const devHtml=phones?`<div class="small" style="margin-bottom:4px"><b>📱 手机</b>　<span class="mut">${phones.length} 台，空闲 ${phones.filter(x=>x['空闲']).length} · 多个期共用，后台不碰别的期占着的手机</span></div>${phoneRows(phones,name)}`:'';
+  const devHtml=phones?`<div class="small" style="margin-bottom:4px"><b>📱 手机</b>　<span class="mut">${phones.length} 台，空闲 ${phones.filter(x=>x['空闲']).length} · 多个期共用，后台不碰别的期占着的手机</span> <span id="instLatest">${instLatest[name]?instLatestBtn(instLatest[name]):''}</span></div>${phoneRows(phones,name)}`:'';
   const qCard=q=>`<div class="q" data-q="${esc(q['编号'])}"><div class="small mut">🔔 ${esc(q['编号'])}${q['阶段']?' · '+esc(q['阶段']):''} · ${esc(q['时间'])}</div>
     <div style="font-weight:600;margin-top:2px">${esc(q['问题'])}</div>
     ${q['背景']?`<div class="ctx md">${md(q['背景']).html}</div>`:''}
@@ -127,8 +127,12 @@ async function devBox(name){
   const acts=v['动作'];
   const barHtml=`<div class="top"><b>会话</b>${sess}<span class="sp"></span>
  <label class="small mut" title="这一期 AI 开发用的引擎（全栈各端没单独指定时也用它）；在「⚙ 设置」里管理">AI <select id="dvEng" ${run?'disabled':''}><option value="">默认（${esc(v['默认引擎'])}）</option>${v['引擎列表'].map(x=>`<option value="${esc(x.id)}" ${x.id===v['引擎']?'selected':''}>${esc(x['名称'])}</option>`).join('')}</select></label>
+ ${(u=>`<label class="small mut" title="角色团：后台会话按场景请专家子 agent（产品经理、架构师…）出意见；只对 Claude 引擎生效。全局开关和每期上限在「⚙ 设置 → 角色团」">🧑‍🤝‍🧑 <select id="dvTeam"><option value="跟随" ${v['角色团']!=='关'?'selected':''}>跟随全局（${v['角色团全局']?'开':'关'}）</option><option value="关" ${v['角色团']==='关'?'selected':''}>关</option></select>${
+   v['角色团']!=='关'&&v['角色团全局']&&!v['角色团引擎支持']?' <span style="color:var(--warn)">这一期的引擎不支持角色团</span>':''}${
+   u['合计']?` <span ${u['合计']>=u['上限']?'style="color:var(--warn)"':''} title="${esc(Object.entries(u['按角色']||{}).map(([k,n])=>k+' '+n).join('、'))}">本期 ${u['合计']}/${u['上限']}${u['合计']>=u['上限']?' · 已用完，不再派角色':''}</span>`:''}</label>`)(v['角色调用']||{合计:0,上限:30})}
     ${SP?'':`<span class="small mut" title="开发流程跟着端和仓库走：在「全栈 → 各端」里给每个端选">流程 ${(v['各端流程']||[]).length?v['各端流程'].map(x=>`${esc(x['端'])} <b>${esc(x['流程'])}</b>`).join('，'):`<b>${esc(v['当前流程'])}</b>`}${v['流程']?' <span class="badge" title="老的期在这里统一指定过流程">整期统一</span> <a id="dvFlowEnd" title="取消整期统一的流程，改为在「全栈 → 各端」按端选">改为按端</a>':''} · <a id="dvFlowGo">按端选 →</a></span>`}
     <span class="sw ${v['免打扰']?'on':''}" id="dvDnd" title="整期生效：出方案、完善需求、各端开发、单端开发的提问都由 AI 按自己的建议决策并记录"><i></i>🌙 免打扰（整期）</span>${btn}</div>
+    ${v['代码基线']&&!SP?`<div class="small mut mono" title="${esc(v['代码基线详情']||'')}">📍 代码：${esc(v['代码基线'])}</div>`:''}
     ${v['免打扰']?`<div class="small mut" style="margin-top:4px">免打扰已开启（整期）：需要确认的地方由 AI 按自己的建议决策，结果记在「${SP?'确认与问题':'开发'}」里的「已处理的确认」和记录里。</div>`:''}`;
   const bar=$('#sessBar');if(bar&&bar.innerHTML!==barHtml)bar.innerHTML=barHtml;
   box.innerHTML=`    <div class="two"><div class="stack">
@@ -146,6 +150,7 @@ async function devBox(name){
   devCache.name=name;devCache.html=box.innerHTML;devCache.bar=barHtml;devCache.sig=sig;
   const aa=box.querySelector('[data-allact]');if(aa)aa.onclick=e=>{e.preventDefault();e.stopPropagation();allActs(name)};
   box.querySelectorAll('[data-rf]').forEach(a=>a.onclick=()=>readFile(a.dataset.rf));
+  if(phones)instLatestLoad(name);
   box.querySelectorAll('.q').forEach(el=>{const id=el.dataset.q,ta=el.querySelector('textarea'),q=pend.find(x=>x['编号']===id);
     ta.oninput=()=>drafts[id]=ta.value;
     el.querySelectorAll('[data-opt]').forEach(b=>b.onclick=()=>{ta.value=q['选项'][+b.dataset.opt];drafts[id]=ta.value;ta.focus()});
@@ -164,6 +169,7 @@ async function devBox(name){
       try{if($('#dvD').checked!==v['免打扰'])await post('/api/dnd',{period:name,on:$('#dvD').checked});
         await devStart({period:name,confirm:$('#dvC').value,note:$('#dvN').value})}
       catch(e){toast(e.message);b.disabled=false;b.textContent='▶ 确认开始'}};$('#dvC').focus()};
+  const tg=$('#dvTeam');if(tg)tg.onchange=async()=>{try{const r=await post('/api/period/team',{period:name,mode:tg.value});toast(r.msg);devBox(name)}catch(e){toast(e.message)}};
   const eg=$('#dvEng');if(eg)eg.onchange=async()=>{try{const r=await post('/api/period/engine',{period:name,id:eg.value});toast(r.msg);devBox(name)}catch(e){toast(e.message)}};
   const fe=$('#dvFlowEnd');if(fe)fe.onclick=async()=>{if(!await kbConfirm('取消这一期统一指定的流程？之后每个端按「全栈 → 各端」里选的流程（没选就自动匹配）。'))return;
     try{const r=await post('/api/period/flow',{period:name,id:''});toast(r.msg);devBox(name);stackBox(name)}catch(e){toast(e.message)}};
@@ -232,4 +238,14 @@ function needDlg(body,n){
     else{b.repo=n['仓库'];if(v==='keep')b.keepBranch=true;else{b.branch=v==='sw:*'?$('#ndB').value.trim():v.slice(3);if(!b.branch)return toast('请填写分支名')}}
     const g=$('#ndGo');g.disabled=true;g.textContent='处理中…';
     try{await devStart(b)}catch(e){toast(e.message);g.disabled=false;g.textContent='继续开始开发'}};
+}
+
+// 手机卡片「安装最新构建」：本期是 Android 端（或认不出端）且有成功的 apk 构建才显示；其他端不显示
+const instLatest={};
+const instLatestBtn=x=>x['可装']?`<button class="small" data-instl="${esc(x['地址'])}" title="${esc(x['任务'])} #${x['编号']}${x['版本']?' · 版本 '+esc(x['版本']):''}">📲 安装最新构建 #${x['编号']}</button>`:'';
+async function instLatestLoad(name){
+  const bind=()=>{const b=document.querySelector('#instLatest [data-instl]');if(b)b.onclick=()=>installDlg(name,b.dataset.instl)};bind();
+  const t=instLatest[name];if(t&&Date.now()-t._t<90000)return;
+  try{const x=await api('/api/build/install/latest?name='+enc(name));x._t=Date.now();instLatest[name]=x;
+    const el=$('#instLatest');if(el&&curPeriod()===name){el.innerHTML=instLatestBtn(x);bind()}}catch(_){}
 }

@@ -75,7 +75,7 @@ def steward_auto():
 
 def api_zentao(period='', owner=''):
     bugs = kb.zentao_bugs_json(period, owner)
-    names = kb.period_names()
+    names = [n for n in kb.period_names() if not kb.is_archived(kb.load_meta(kb.PERIODS / n))]    # 归属下拉不列归档的
     tasks = [n for n in names if kb.is_task(kb.load_meta(kb.PERIODS / n))]
     return {'status': kb.zentao_status(), 'bugs': bugs, 'periods': [n for n in names if n not in tasks], 'tasks': tasks,
             'sessions': [x for x in reversed(kb.an_sessions()) if x.get('类型') != '修复' and (x.get('状态') == '运行中' or x.get('警告'))][:10],
@@ -129,10 +129,13 @@ def _safe(fn, *a):
 
 def api_overview():
     kb.init()
-    periods = []
+    periods, archived, days = [], 0, kb.archive_days()
     for n in kb.period_names():
         d = kb.PERIODS / n
         m = kb.load_meta(d)
+        if kb.is_archived(m, days):         # 归档的不发给页面（侧栏、总览、各套界面、下拉框都不列），也不算资料数
+            archived += 1
+            continue
         mats = kb._materials(d)
         no_note = sum(1 for p in mats['设计图'] if p.suffix.lower() in kb.IMG_EXT
                       and not p.with_name(p.name + kb.NOTE_SUFFIX).exists())
@@ -156,6 +159,7 @@ def api_overview():
                         'pendingQ': sum(1 for q in m.get('待确认') or [] if q['状态'] == '待回答'),
                         'issues': sum(1 for q in m.get('非阻断问题') or [] if q['状态'] == '待处理'),
                         'retest': bool(m.get('待复测')), 'autoRetest': bool((m.get('待复测') or {}).get('自动')),
+                        'doneAt': kb.done_time(m),
                         'dnd': bool(m.get('免打扰')), 'navHidden': (m.get('侧栏') or {}).get('状态') == '隐藏',
                         'kind': '事项' if kb.is_task(m) else '期', 'taskKind': m.get('事项类型', ''),
                         'priority': m.get('优先级', ''), 'from': m.get('来自', ''),
@@ -193,7 +197,7 @@ def api_overview():
         ph = kb.devices() if kb._adb() else None
     except Exception:
         ph = None
-    return {'root': str(kb.ROOT), 'periods': periods,
+    return {'root': str(kb.ROOT), 'periods': periods, 'archived': archived,
             'phones': None if ph is None else {'total': len(ph), 'free': sum(1 for x in ph if x['空闲'])}, 'repos': repos, 'inbox': inbox, 'docs': docs,
             'statuses': kb.STATUSES, 'cats': kb.CATS, 'autoRefresh': AUTO, 'zentao': zentao,
             'taskKinds': kb.TASK_KINDS, 'taskPri': kb.TASK_PRI, 'anr': _anr_counts(),
@@ -278,6 +282,17 @@ def dev_tick():
             print('stack_tick:', repr(e), flush=True)
 
 
+def health_auto():
+    """AI 引擎自检：启动 1 分钟后一次，之后每小时看一眼（6 小时内没有真实会话结果的才真的跑）。"""
+    time.sleep(60)
+    while True:
+        try:
+            kb.health_tick()
+        except Exception as e:
+            print('health_tick:', repr(e), flush=True)
+        time.sleep(3600)
+
+
 def _period_stamp(d, m):
     dirs = [d] + [d / c for c in kb.CATS] + [x for c in kb.CATS if (d / c).is_dir() for x in (d / c).iterdir() if x.is_dir()]
     return [_mt(x) for x in dirs + [d / '期信息.json', d / '记录.md', kb.ZT_FILE]]
@@ -323,6 +338,9 @@ def watcher():
                     _publish({'kind': 'overview'})
                 if check('adds', _add_stamp(), kb.add_sessions):
                     _publish({'kind': 'adds'})
+                es = [_mt(kb.HEALTH_FILE)]
+                if check('engine', es, lambda: es):          # AI 引擎状态变了：各界面的「AI」标记刷新
+                    _publish({'kind': 'engine'})
                 for n in kb.period_names():
                     d = kb.PERIODS / n
                     m = kb.load_meta(d)
@@ -362,10 +380,11 @@ def api_period(name):
         mats[c] = [_file_info(p) for p in items]
         h = d / c / kb.HIST
         hist[c] = [_file_info(p) for p in sorted(h.iterdir(), reverse=True)] if h.exists() else []
-    return {'name': d.name, 'dir': str(d), 'meta': m, 'materials': mats, 'history': hist,
+    return {'name': d.name, 'dir': str(d), 'meta': m, 'materials': mats, 'history': hist, 'archived': kb.is_archived(m),
             'notes': {c: [{**n, '显示标题': kb.note_title(n)} for n in kb.notes_of(d, c, m)] for c in kb.CATS},
             'noteKinds': kb.NOTE_KINDS,
             'log': _log_lines(d), 'cats': kb.CATS, 'statuses': kb.STATUSES, 'autoRefresh': AUTO,
+            '角色团': m.get('角色团') or '跟随', '角色调用': kb.team_usage(m),
             'guide': _try(kb.period_guide, d.name), 'bugs': kb.zentao_bugs_json(d.name), 'fixq': kb.fix_queue(), 'taskKinds': kb.TASK_KINDS, 'taskPri': kb.TASK_PRI}
 
 
@@ -409,4 +428,77 @@ p{color:#c92a2a;min-height:1.5em;margin:8px 0 0;font-size:13px}</style></head><b
 body:JSON.stringify({password:document.getElementById('p').value})});if(r.ok)location.href='/';else document.getElementById('e').textContent=(await r.json()).error||'登录失败'}</script>
 </body></html>'''
 
-__all__ = ['AUTO', 'BaseHTTPRequestHandler', 'DOC_FIRST', 'LOGIN_PAGE', 'PAGE', 'PAGE_SKIP', 'Path', 'REFRESH_HOURS', 'STEWARD_MIN', 'SimpleCookie', 'ThreadingHTTPServer', 'UI_DIR', 'UI_TYPES', '_SUBS', '_SUBS_LOCK', '_add_stamp', '_anr_counts', '_dev_stamp', '_file_info', '_fp', '_global_stamp', '_log_lines', '_mt', '_page_view', '_period_stamp', '_publish', '_safe', '_try', 'api_base', 'api_doc', 'api_docs', 'api_overview', 'api_overview_view', 'api_period', 'api_zentao', 'auto_refresh', 'dev_tick', 'doc_files', 'hashlib', 'json', 'kb', 'mimetypes', 'os', 'parse_qs', 'queue', 're', 'shutil', 'steward_auto', 'sys', 'threading', 'time', 'ui_file', 'ui_page', 'unquote', 'urlparse', 'uuid', 'watcher', 'zentao_auto']   # 路由文件 from webapp.shared import * 要用到下划线开头的帮助函数
+
+# ---------------------------------------------------------------- 资料文件原样下发（/file?path= 和 /fs/<绝对路径>）
+# 预览要用：正确的 Content-Type、Range（视频拖进度、大文件分段）、流式发送（不整个读进内存）。
+# 只给知识库和已登记仓库里的文件（kb._allowed）。html / svg / xml 一律带 CSP sandbox：直接在新窗口打开也不执行脚本、拿不到本站权限；
+# ?js=1 时是 sandbox allow-scripts（仍是隔离的不透明来源，碰不到知识库接口）。?dl=1 = 下载。
+FILE_TYPES = {'.md': 'text/markdown; charset=utf-8', '.log': 'text/plain; charset=utf-8', '.txt': 'text/plain; charset=utf-8',
+              '.json': 'application/json; charset=utf-8', '.csv': 'text/csv; charset=utf-8', '.webp': 'image/webp',
+              '.svg': 'image/svg+xml', '.mp4': 'video/mp4', '.m4a': 'audio/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+              '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.flac': 'audio/flac', '.aac': 'audio/aac',
+              '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}
+SANDBOX_EXT = {'.html', '.htm', '.xhtml', '.svg', '.xml', '.xsl', '.shtml', '.mht', '.mhtml'}
+
+
+def send_file(h, p, q):
+    """h：请求处理器；p：要发的文件（未 resolve 也行）；q：查询参数（js / dl）。"""
+    try:
+        p = Path(p).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return h._send(404, {'error': '无此文件'})
+    if not p.is_file() or not kb._allowed(p):
+        return h._send(404, {'error': '无此文件'})
+    ext = p.suffix.lower()
+    ctype = FILE_TYPES.get(ext) or mimetypes.guess_type(p.name)[0] or 'application/octet-stream'
+    if ctype.startswith('text/') and 'charset' not in ctype:
+        ctype += '; charset=utf-8'
+    total = p.stat().st_size
+    start, end, code = 0, total - 1, 200
+    rng = h.headers.get('Range', '')
+    m = re.fullmatch(r'bytes=(\d*)-(\d*)', rng.strip()) if rng else None
+    if m and (m.group(1) or m.group(2)):
+        if m.group(1):
+            start = int(m.group(1))
+            end = min(int(m.group(2)), total - 1) if m.group(2) else total - 1
+        else:                                            # bytes=-500：最后 500 字节
+            start = max(0, total - int(m.group(2)))
+        if start > end or start >= total:
+            h.send_response(416)
+            h.send_header('Content-Range', f'bytes */{total}')
+            h.send_header('Content-Length', '0')
+            h.end_headers()
+            return
+        code = 206
+    h.send_response(code)
+    h.send_header('Content-Type', ctype)
+    h.send_header('Content-Length', str(end - start + 1))
+    h.send_header('Accept-Ranges', 'bytes')
+    h.send_header('Cache-Control', 'no-store')
+    h.send_header('X-Content-Type-Options', 'nosniff')
+    if ext in SANDBOX_EXT:
+        h.send_header('Content-Security-Policy', 'sandbox allow-scripts' if q.get('js') == '1' else 'sandbox')
+    if code == 206:
+        h.send_header('Content-Range', f'bytes {start}-{end}/{total}')
+    from urllib.parse import quote
+    disp = 'attachment' if q.get('dl') == '1' else 'inline'
+    h.send_header('Content-Disposition', f"{disp}; filename*=UTF-8''{quote(p.name)}")
+    h.end_headers()
+    if h.command == 'HEAD':
+        return
+    left = end - start + 1
+    try:
+        with p.open('rb') as fp:
+            fp.seek(start)
+            while left > 0:
+                chunk = fp.read(min(left, 1 << 20))
+                if not chunk:
+                    break
+                h.wfile.write(chunk)
+                left -= len(chunk)
+    except (BrokenPipeError, ConnectionResetError):   # 视频拖进度时浏览器会主动断开旧请求
+        pass
+
+
+__all__ = ['AUTO', 'FILE_TYPES', 'SANDBOX_EXT', 'send_file', 'BaseHTTPRequestHandler', 'DOC_FIRST', 'LOGIN_PAGE', 'PAGE', 'PAGE_SKIP', 'Path', 'REFRESH_HOURS', 'STEWARD_MIN', 'SimpleCookie', 'ThreadingHTTPServer', 'UI_DIR', 'UI_TYPES', '_SUBS', '_SUBS_LOCK', '_add_stamp', '_anr_counts', '_dev_stamp', '_file_info', '_fp', '_global_stamp', '_log_lines', '_mt', '_page_view', '_period_stamp', '_publish', '_safe', '_try', 'api_base', 'api_doc', 'api_docs', 'api_overview', 'api_overview_view', 'api_period', 'api_zentao', 'auto_refresh', 'dev_tick', 'doc_files', 'health_auto', 'hashlib', 'json', 'kb', 'mimetypes', 'os', 'parse_qs', 'queue', 're', 'shutil', 'steward_auto', 'sys', 'threading', 'time', 'ui_file', 'ui_page', 'unquote', 'urlparse', 'uuid', 'watcher', 'zentao_auto']   # 路由文件 from webapp.shared import * 要用到下划线开头的帮助函数

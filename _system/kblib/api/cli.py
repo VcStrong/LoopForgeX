@@ -20,7 +20,9 @@ from kblib.core.periods import (
 from kblib.core.notes import NOTE_KINDS, add_note, update_note
 from kblib.core.repos import add_repo, link_repo
 from kblib.core.search import reindex, search
-from kblib.plugins.registry import PLUGIN_DIR, call_plugin, plugins, run_plugin_now
+from kblib.plugins.registry import PLUGIN_DIR, call_plugin, plugins
+from kblib.plugins.run import plugin_run_sync
+from kblib.infra.timing import timing_get
 from kblib.api.overview import overview, period_detail
 from kblib.sources.urlimport import _fetch, fetch_url, verify_source
 from kblib.sources.refresh import refresh_all, refresh_sources
@@ -115,13 +117,14 @@ def main(argv=None):
     x.add_argument('name', nargs='?', default='')
     x.add_argument('sid', nargs='?', default='')
     x.add_argument('--all', action='store_true')
-    x = sp.add_parser('plugin', help='插件：kb plugin（列出）；kb plugin run <插件> <期名> [开发开始|开发完成]（手动运行一次）；'
+    x = sp.add_parser('plugin', help='插件：kb plugin（列出）；kb plugin run <插件> <期名或分支> [仓库路径] [--push]（手动运行一次：和网页一样先切分支、拉最新）；'
                                      'kb plugin call <工具插件> [参数…]（按需调用）')
     x.add_argument('action', nargs='?', default='list', choices=['list', 'run', 'call'])
     x.add_argument('plugin', nargs='?', default='')
     x.add_argument('name', nargs='?', default='')
     x.add_argument('event', nargs='?', default='')
     x.add_argument('rest', nargs='*', default=[])
+    x.add_argument('--push', action='store_true', help='plugin run：插件改了文件就提交并推送')
     x = sp.add_parser('stats', help='工作统计（统计插件算）：kb stats [今天|本周|本月|近7天|近30天|全部]；--facts 输出给插件的原始事实 JSON')
     x.add_argument('range', nargs='?', default='')
     x.add_argument('--facts', action='store_true')
@@ -287,12 +290,12 @@ def main(argv=None):
         elif a.cmd == 'plugin':
             if a.action == 'run':
                 if not a.plugin or not a.name:
-                    raise KBError('用法：kb plugin run <插件> <期名> [开发开始|开发完成]')
-                r = run_plugin_now(a.plugin, a.name, a.event or '开发开始')
+                    raise KBError('用法：kb plugin run <插件> <期名或分支> [仓库路径] [--push]')
+                r = plugin_run_sync(a.plugin, a.name, '' if a.event in ('', '开发开始', '开发完成', '手动运行') else a.event, push=a.push)
             elif a.action == 'call':
                 r = call_plugin(a.plugin, [x for x in [a.name, a.event] + a.rest if x], by='终端')
             else:
-                r = '\n'.join(f'{p["id"]}：{p.get("名称", "")} · ' + (p.get('错误') or (f'已挂载（{"、".join(p["时机"]) or "按需调用"}）' if p['启用'] else '未挂载'))
+                r = '\n'.join(f'{p["id"]}：{p.get("名称", "")} · ' + (p.get('错误') or (f'已挂载（{"、".join(timing_get(t)["名称"] for t in p["时机"]) or "按需调用"}）' if p['启用'] else '未挂载'))
                               + f' · {p["目录"]}' for p in plugins()) or f'没有插件（放到 {PLUGIN_DIR}/<名称>/plugin.json）'
         print(r)
     except KBError as e:

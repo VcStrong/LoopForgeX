@@ -27,7 +27,8 @@ function classicNav(d){
   if(d){const lo=$('#logout');lo.hidden=!d.auth;lo.onclick=logout;
     const navItem=p=>`<a class="nav" data-nav="/p/${esc(p.name)}" href="#/p/${enc(p.name)}" title="${esc(p.name)} · ${esc(p.status)}"><span class="d" style="background:${DOT[p.status]||'var(--s0)'}"></span><span class="t">${esc(p.name)}</span><span class="x" data-navx="${esc(p.name)}" title="从侧栏移除（在总览里可以加回）">✕</span>${p.pendingQ?`<span class="n q">${p.pendingQ}</span>`:''}${p.issues?`<span class="n w">${p.issues}</span>`:''}${p.openBugs?`<span class="n b" title="${p.openBugs} 个 Bug 没解决">🐞${p.openBugs}</span>`:''}</a>`;
     const pv=d.periods.filter(p=>p.kind!=='事项'&&!p.navHidden),ph=d.periods.filter(p=>p.kind!=='事项'&&p.navHidden).length;
-    $('#navPs').innerHTML=pv.map(navItem).join('')+(ph?`<a class="nav" href="#/" title="在总览的期卡片上点「加到侧栏」"><span class="t mut small">已移出 ${ph} 期，在总览加回</span></a>`:'');
+    const pOn=pv.filter(p=>p.status!=='已完成'),pDone=pv.filter(p=>p.status==='已完成');   // 做完的排在后面，满几天自动归档、不再出现
+    $('#navPs').innerHTML=pOn.map(navItem).join('')+(pDone.length?`<div class="small" style="opacity:.5;padding:6px 10px 2px">最近完成</div>${pDone.map(navItem).join('')}`:'')+(ph?`<a class="nav" href="#/" title="在总览的期卡片上点「加到侧栏」"><span class="t mut small">已移出 ${ph} 期，在总览加回</span></a>`:'');
     const bt=d.periods.filter(p=>p.kind==='事项'&&!(p.plugins||[]).length&&(p.batch?p.batch['侧栏']:p.status!=='已完成'));
     const batchItem=p=>{const b=p.batch||{},nm=b['来源']==='anr'?batchName(p.name):p.name;
       return `<a class="nav" data-nav="/p/${esc(p.name)}" href="#/p/${enc(p.name)}" title="${esc(p.name)} · ${esc(p.status)}${b['总数']?` · 已处理 ${b['已处理']}/${b['总数']}${b['待确认']?`，待确认 ${b['待确认']}`:''}`:''}"><span class="d" style="background:${DOT[p.status]||'var(--s0)'}"></span><span class="t">${esc(nm)}</span><span class="x" data-navx="${esc(p.name)}" title="从侧栏移除（在 ANR / 崩溃、总览里能找回；有新问题会自动回来）">✕</span>${p.pendingQ?`<span class="n q">${p.pendingQ}</span>`:''}${b['总数']?`<span class="n${b['待确认']?' q':''}">${b['已处理']}/${b['总数']}</span>`:''}${p.openBugs?`<span class="n b" title="${p.openBugs} 个 Bug 没解决">🐞${p.openBugs}</span>`:''}</a>`};
@@ -35,6 +36,7 @@ function classicNav(d){
     $('#navAnrTs').innerHTML=src('anr');$('#navBugTs').innerHTML=src('bug');
     $('#navTs').innerHTML=src('');
     document.querySelectorAll('[data-navx]').forEach(x=>x.onclick=e=>{e.preventDefault();e.stopPropagation();taskNav(x.dataset.navx,false)});
+    if($('#navArc')){$('#navArc').textContent=d.archived||'';$('#navArc').parentElement.style.display=d.archived?'':'none'}
     $('#navPh').textContent=d.phones?`${d.phones.free}/${d.phones.total}`:'';$('#navPh').parentElement.hidden=!d.phones;   // 本机没装 adb 就不显示「手机」
     const nb=$('#navBug');nb.textContent=d.zentao&&d.zentao.pending?d.zentao.pending:'';nb.title='待归纳（未关闭）';nb.classList.toggle('w',!!(d.zentao&&d.zentao.pending));
     $('#navEnt').innerHTML=entries.map(x=>{const ts=d.periods.filter(p=>(p.plugins||[]).includes(x.id)&&p.status!=='已完成'),q=ts.reduce((a,p)=>a+(p.pendingQ||0),0);

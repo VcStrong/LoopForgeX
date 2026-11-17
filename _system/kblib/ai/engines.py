@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -13,6 +14,7 @@ from kblib.core.common import PROG, KBError, PERIODS, ROOT, SYS, load_settings, 
 from kblib.core.periods import load_meta, log, period_dir, period_names, save_meta
 from kblib.core.repos import load_repos
 from kblib.ai.flows import BUILTIN_FLOWS, FLOW_FIELDS, FLOW_VARS
+from kblib.ai import team
 from kblib import lazy
 _devsession = lazy('kblib.ai.devsession')      # 上层模块：用到时才 import（不形成循环）
 
@@ -106,9 +108,16 @@ def rules_text():
     return ('\n\n用户定的长期规矩（必须遵守）：\n' + '\n'.join(f'- {x}' for x in rs)) if rs else ''
 
 
-def engine_cmd(e, prompt, title='kb', resume_id=''):
-    """拼出运行命令（参数逐个替换变量，不经过 shell）。"""
+def engine_cmd(e, prompt, title='kb', resume_id='', scene='', period=None, auto=False, end=''):
+    """拼出运行命令（参数逐个替换变量，不经过 shell）。
+    scene：角色团场景（管家 / 方案 / Bug分析 / 开发·Android …）；end：会话所在端（@端 换算，也可以写在 scene 的 · 后面）；period：期信息或期名（期级覆盖、本期剩余次数）；auto：管家自动发起。
+    scene 为空、续跑（上下文里已有）、不挂角色团时，命令行和原来逐字一致。"""
     prompt = prompt + rules_text()
+    if scene and not resume_id:
+        try:
+            prompt += team.team_text(scene, period, end, eng=e, auto=auto)
+        except Exception as x:          # noqa: BLE001 — 场景表写坏了也不能让会话起不来：不挂角色团
+            print(f'角色团：场景「{scene}」生成提示词出错，不挂角色团：{x!r}', file=sys.stderr, flush=True)
     args = e.get('续跑参数') if resume_id and e.get('续跑参数') else e.get('启动参数')
     v = {'提示词': prompt, '标题': title, '会话ID': resume_id}
     return [engine_bin(e)] + [re.sub(r'\{(提示词|标题|会话ID)\}', lambda mm: v[mm.group(1)], a) for a in args or []]
@@ -299,31 +308,200 @@ def set_role_engine(role, eid):
 _CLEAN_ENV = ('CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT')
 
 
-def engine_popen(e, prompt, title, logf, cwd, resume_id='', env_extra=None, extra_args=None):
+def engine_popen(e, prompt, title, logf, cwd, resume_id='', env_extra=None, extra_args=None, scene='', period=None, auto=False, end=''):
     """后台启动引擎，输出写进日志文件（第一行记下用的引擎和输出格式，解析日志时用）。"""
-    cmd = engine_cmd(e, prompt, title, resume_id) + list(extra_args or [])
+    cmd = engine_cmd(e, prompt, title, resume_id, scene, period, auto, end) + list(extra_args or [])
     env = {k: v for k, v in os.environ.items() if k not in _CLEAN_ENV}
     env.update(env_extra or {})
     with open(logf, 'ab') as fh:
         fh.write((json.dumps({'type': 'kb.engine', 'engine': e['id'], 'format': e.get('输出格式')}, ensure_ascii=False)
                   + '\n').encode())
         fh.flush()
-        return subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
+        proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
                                 start_new_session=True, env=env)
+    _watch_health(e, proc, logf)
+    return proc
 
 
-def engine_run(e, prompt, cwd, timeout=300, extra_args=None, title='kb·单次'):
-    """前台跑一次，返回 (退出码, 解析出的结果)。"""
+def engine_run(e, prompt, cwd, timeout=300, extra_args=None, title='kb·单次', scene='', period=None, env_extra=None, auto=False, end=''):
+    """前台跑一次，返回 (退出码, 解析出的结果)；结果里带「角色」（这次派过的角色团专家，没派不带）。"""
     env = {k: v for k, v in os.environ.items() if k not in _CLEAN_ENV}
+    env.update(env_extra or {})
     try:
-        r = subprocess.run(engine_cmd(e, prompt, title) + list(extra_args or []), cwd=cwd, capture_output=True, text=True, errors='replace', timeout=timeout,
+        r = subprocess.run(engine_cmd(e, prompt, title, '', scene, period, auto, end) + list(extra_args or []), cwd=cwd, capture_output=True, text=True, errors='replace', timeout=timeout,
                            env=env, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         raise KBError(f'{e["名称"]} {timeout // 60} 分钟没有返回')
     res = _devsession._result_of(r.stdout, e.get('输出格式'), limit=200000)
     if not res.get('结果'):
         res['结果'] = (r.stdout.strip() or r.stderr.strip())[-2000:]
+    if scene:
+        got = team.team_count_text(r.stdout)
+        if got:
+            res['角色'] = got
+    health_from_run(e, r.returncode, res, (r.stdout or '') + '\n' + (r.stderr or ''), '会话')
     return r.returncode, res
+
+
+# ---------------------------------------------------------------- 引擎能不能用（网页常驻显示）
+# 不花额外费用的来源：每个后台会话结束时看结果（engine_popen / engine_run 都会记）；
+# 没有真实会话时，网页每 6 小时对在用的引擎跑一次极短的自检（只回复 OK，不调工具）。
+HEALTH_FILE = SYS / 'cache' / '引擎状态.json'
+PROBE_HOURS = 6
+_HEALTH_LOCK = threading.Lock()
+_BAD = [(r'invalid api key|invalid x-api-key|api key|apikey|authentication_error|unauthori[sz]ed|\b401\b|not logged in|please (run )?/?login|login required|oauth token|token (has )?expired|credentials',
+         '没登录或登录失效 / API key 不对'),
+        (r'credit balance|insufficient[_ ]quota|quota|billing|payment|usage limit|limit reached|out of credits|额度', '额度用完或账单问题'),
+        (r'rate[_ ]limit|\b429\b|too many requests', '被限流（请求太多）'),
+        (r'overloaded|\b529\b|\b503\b|service unavailable', '服务端过载 / 暂时不可用'),
+        (r'enotfound|econnrefused|econnreset|etimedout|getaddrinfo|network (is )?unreachable|could not resolve|connection (error|refused|reset)|fetch failed|ssl',
+         '网络连不上'),
+        (r'forbidden|\b403\b|permission denied for model|model .* not (found|available)|not_found_error', '没有权限 / 模型不可用'),
+        (r'command not found|no such file or directory|找不到 .* 的命令', '命令找不到（没安装或路径不对）')]
+
+
+def _health_load():
+    try:
+        return json.loads(HEALTH_FILE.read_text('utf-8'))
+    except (OSError, ValueError):
+        return {}
+
+
+def _health_set(eid, ok, why='', src='会话', name=''):
+    """记一次结果；从可用 / 未检测 变成不可用时发一次通知。"""
+    with _HEALTH_LOCK:
+        h = _health_load()
+        old = h.get(eid) or {}
+        st = '可用' if ok else '不可用'
+        x = {'状态': st, '原因': '' if ok else (why or '')[:300], '时间': time.strftime('%Y-%m-%d %H:%M:%S'), '来源': src,
+             'ts': time.time(), '名称': name or old.get('名称', eid)}
+        if ok:
+            x['上次失败'] = old.get('原因') if old.get('状态') == '不可用' else old.get('上次失败', '')
+        h[eid] = x
+        HEALTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = HEALTH_FILE.with_suffix('.tmp')
+        tmp.write_text(json.dumps(h, ensure_ascii=False, indent=1), 'utf-8')
+        tmp.replace(HEALTH_FILE)
+    if not ok and old.get('状态') != '不可用':
+        try:
+            _devsession._notify('知识库 · AI 引擎不可用', f'{x["名称"]}：{x["原因"]}（网页右上角「AI」看详情）')
+        except Exception:
+            pass
+    elif ok and old.get('状态') == '不可用':
+        try:
+            _devsession._notify('知识库 · AI 引擎恢复', f'{x["名称"]} 又能用了')
+        except Exception:
+            pass
+
+
+def _classify(code, res, text):
+    """→ True 可用 / (False, 原因) 不可用 / None 看不出（任务本身没做完之类，不算引擎问题）。"""
+    if code in (-15, -9, 143, 137, -2, 130):           # 被停掉的（网页「停止」、重启）
+        return None
+    out = ((res or {}).get('结果') or '')
+    plain = [ln for ln in (text or '').splitlines()[-200:] if ln.strip() and not ln.lstrip().startswith(('{', '['))]
+    blob = (out if len(out) <= 600 else '') + '\n' + '\n'.join(plain)[-3000:]   # 只看简短的最终结果和非 JSON 的报错行，任务内容不算
+    failed = code not in (0, None) or (res or {}).get('出错')
+    if failed:
+        low = blob.lower()
+        for pat, why in _BAD:
+            if re.search(pat, low):
+                line = next((ln.strip() for ln in blob.splitlines() if re.search(pat, ln.lower())), '')
+                return False, why + (f'：{line[:200]}' if line else '')
+        if code not in (0, None) and not (res or {}).get('轮数') and len([ln for ln in (text or '').splitlines() if ln.strip()]) <= 3:
+            return False, f'启动就退出了（退出码 {code}）：' + ((text or '').strip()[-200:] or '没有输出')
+        return None
+    return True
+
+
+def health_from_run(e, code, res, text='', src='会话'):
+    try:
+        r = _classify(code, res, text)
+        if r is True:
+            _health_set(e['id'], True, src=src, name=e.get('名称'))
+        elif r:
+            _health_set(e['id'], False, r[1], src=src, name=e.get('名称'))
+    except Exception as x:              # 记状态出错不能影响会话本身
+        print('engine health:', repr(x), flush=True)
+
+
+def _watch_health(e, proc, logf):
+    def run():
+        code = proc.wait()
+        try:
+            with open(logf, 'rb') as fh:
+                fh.seek(max(0, Path(logf).stat().st_size - 400000))
+                tail = fh.read().decode('utf-8', 'ignore')
+        except OSError:
+            tail = ''
+        health_from_run(e, code, _devsession._result_of(tail, e.get('输出格式')), tail)
+    threading.Thread(target=run, daemon=True).start()
+
+
+def engines_in_use():
+    """在用的引擎：默认引擎 + 角色里指定的 + 各期选的。"""
+    s = load_settings()
+    ids = [s.get('默认引擎') or DEFAULT_ENGINE] + [v for v in (s.get('角色引擎') or {}).values() if v]
+    for n in period_names():
+        eid = load_meta(PERIODS / n).get('AI引擎')
+        if eid:
+            ids.append(eid)
+    known = {e['id'] for e in engines()}
+    return [x for i, x in enumerate(ids) if x in known and x not in ids[:i]]
+
+
+def engine_probe(eid, src='自检'):
+    """极短的自检：只回复 OK，不调工具。→ 这次的状态。"""
+    e = get_engine(eid)
+    t0 = time.time()
+    try:
+        engine_bin(e)
+        env = {k: v for k, v in os.environ.items() if k not in _CLEAN_ENV}
+        r = subprocess.run(engine_cmd(e, '这是连通性自检。不要调用任何工具，只回复两个字母：OK', 'kb·自检'), cwd=str(ROOT),
+                           capture_output=True, text=True, errors='replace', timeout=120, env=env, stdin=subprocess.DEVNULL)
+        res = _devsession._result_of(r.stdout, e.get('输出格式'))
+        txt = (r.stdout or '') + '\n' + (r.stderr or '')
+        c = _classify(r.returncode, res, txt)
+        if c is None:
+            c = (False, f'自检没通过（退出码 {r.returncode}）：' + ((res.get('结果') or txt).strip()[-200:] or '没有输出'))
+        if c is True and 'ok' not in (res.get('结果') or txt).lower():
+            c = (False, '自检没有按要求回复：' + ((res.get('结果') or txt).strip()[-200:] or '没有输出'))
+    except KBError as x:
+        c = (False, str(x))
+    except subprocess.TimeoutExpired:
+        c = (False, '2 分钟没有回复（网络慢或卡住）')
+    _health_set(e['id'], c is True, '' if c is True else c[1], src=src, name=e['名称'])
+    return dict(engine_health_one(e), 耗时=round(time.time() - t0))
+
+
+def engine_health_one(e, h=None):
+    h = _health_load() if h is None else h
+    x = dict(h.get(e['id']) or {})
+    x.pop('ts', None)
+    return {'id': e['id'], '名称': e['名称'], '默认': e.get('默认', False), '状态': x.get('状态') or '未检测', **{k: v for k, v in x.items() if k != '状态'}}
+
+
+def engine_health():
+    """网页常驻显示：在用的引擎各自能不能用；总体 = 默认引擎的状态（有在用的不可用时提示）。"""
+    h = _health_load()
+    use = engines_in_use()
+    items = [dict(engine_health_one(e, h), 在用=e['id'] in use) for e in engines()]
+    dft = next((x for x in items if x['默认']), items[0] if items else {})
+    bad = [x for x in items if x['在用'] and x['状态'] == '不可用']
+    return {'总体': '不可用' if dft.get('状态') == '不可用' else '部分不可用' if bad else dft.get('状态', '未检测'),
+            '默认': dft.get('名称', ''), '引擎': items}
+
+
+def health_tick(force=False):
+    """网页启动时和每 6 小时：在用的引擎，这段时间没有真实会话的结果就自检一次。"""
+    h = _health_load()
+    for eid in engines_in_use():
+        x = h.get(eid) or {}
+        if force or time.time() - (x.get('ts') or 0) > PROBE_HOURS * 3600:
+            try:
+                engine_probe(eid)
+            except Exception as e:
+                print('engine probe:', repr(e), flush=True)
 
 
 def engine_test(eid):
@@ -333,7 +511,10 @@ def engine_test(eid):
     code, res = engine_run(e, '这是知识库的连通性测试。请调用知识库 MCP 工具 kb_overview（在你的工具列表里可能叫 '
                               'mcp__kb__kb_overview、mcp_kb_kb_overview 之类），然后只回复一行：「测试成功：共 N 期」。'
                               '调用不到就回复「测试失败：」加原因。', ROOT)
-    return {'成功': code == 0 and '测试成功' in (res.get('结果') or ''), '退出码': code,
+    ok = code == 0 and '测试成功' in (res.get('结果') or '')
+    if ok:
+        _health_set(e['id'], True, src='测试', name=e['名称'])
+    return {'成功': ok, '退出码': code,
             '结果': (res.get('结果') or '').strip()[:1500], '耗时': round(time.time() - t0)}
 
 
@@ -444,7 +625,13 @@ def flow_draft(path, use_ai=False):
 - 开发步骤写成编号步骤，写清用什么命令推进、推进到什么状态算完成、停下等人时怎么用 kb_ask。
 - 只输出一个 JSON 对象，键为上面的配置项名称，不要输出其他文字，不要调用任何工具。"""
     eng = get_engine()
-    code, res = engine_run(eng, prompt, ROOT)
+    if team.team_on(None, eng) and team.scene_roles('流程设计')[1]:     # 角色团：请产品经理设计开发步骤和确认点（子 agent 一次可能超过 5 分钟）
+        prompt = prompt.replace('不要输出其他文字，不要调用任何工具。',
+                                '不要输出其他文字。只可调用 Agent 工具请产品经理（subagent_type=product-manager）设计开发步骤和确认点，'
+                                '不要调用其他任何工具；最后只输出 JSON。')
+        code, res = engine_run(eng, prompt, ROOT, timeout=900, scene='流程设计', env_extra={'KB_SESSION': 'flow'})
+    else:
+        code, res = engine_run(eng, prompt, ROOT, timeout=900, env_extra={'KB_SESSION': 'flow'})
     try:
         got = json.loads(re.search(r'\{.*\}', res.get('结果') or '', re.S).group(0))
     except (ValueError, AttributeError):

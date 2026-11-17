@@ -11,9 +11,10 @@ from kblib.core.periods import load_meta, log, period_dir
 from kblib.core.repos import load_repos
 from kblib.core.search import index_docs
 from kblib.ai.engines import engine_popen, role_engine
+from kblib.ai import team
 from kblib.ai.devprep import _git, _git_root, repo_candidates, want_branches
 from kblib.infra.hosts import is_remote
-from kblib.infra import hosts
+from kblib.infra import hosts, timing
 from kblib.ai.devsession import _alive, _dev_result, _notify
 from kblib.bugs.sources import bug_sources
 from kblib.bugs.index import ZT_DIR, _zt_recheck, zt_load, zt_save
@@ -90,6 +91,47 @@ def bug_end(e, ends):
     t = ' '.join(str(e.get(k) or '') for k in ('标题', '简介', '产品', '模块')).lower()
     hit = [k for k in ends if any(w in t for w in END_WORDS.get(k, ()))]
     return hit[0] if len(hit) == 1 else ''
+
+
+_PF_END = {'安卓': 'Android', 'iOS': 'iOS', '服务端': '服务端', '前端': 'Web'}
+
+
+def bug_team_end(bugs):
+    """角色团 @端 换算用：这组 Bug 是哪个端（按文字认，认不出看平台字段，默认 Android）。"""
+    for e in bugs:
+        end = bug_end(e, END_WORDS) or _PF_END.get(str(e.get('平台') or ''), '')
+        if end:
+            return end
+    return 'Android'
+
+
+def _owner_meta(bugs):
+    """这组 Bug 归属的期 / 事项合起来的期信息（只给角色团用）：任何一期选了「关」就关，剩余次数按用得最多的那期算
+    （统计时各归属期都会加，这样不会让哪一期超限）；只有一期就是它本身；没有归属 → None。"""
+    ms = [load_meta(d) for d in _owner_dirs(bugs)]
+    if len(ms) <= 1:
+        return ms[0] if ms else None
+    used = max(ms, key=lambda m: int((m.get('角色调用') or {}).get('合计') or 0))
+    out = {'名称': ms[0].get('名称', ''), '角色调用': used.get('角色调用') or {},
+           '各端': {k: v for m in ms for k, v in (m.get('各端') or {}).items()}}
+    if any(m.get('角色团') == '关' for m in ms):
+        out['角色团'] = '关'
+    return out
+
+
+def _owner_dirs(bugs):
+    """这些 Bug 归属的期 / 事项目录（去重；没归属或目录不在了的跳过）：更新代码的结果写进那里的记录。"""
+    out = []
+    for e in bugs:
+        o = e.get('归属') or {}
+        if o.get('类型') in ('期', '事项') and o.get('名称'):
+            try:
+                d = period_dir(o['名称'])
+            except KBError:
+                continue
+            if d not in out:
+                out.append(d)
+    return out
 
 
 def _bug_repo(e):
@@ -182,8 +224,22 @@ def _an_prompt(root, items, cur_branch):
     return '\n'.join(out)
 
 
-def bug_analyze(ids, by='用户（网页）'):
-    """网页「分析」：按仓库分组，各起一个后台只读会话。不作为 MCP 工具提供（对话里的 AI 直接自己分析，用 kb_bug_analysis 提交）。"""
+def an_locked(e):
+    """这个 Bug 现在不该重新分析的原因：修复中 / 排队修复中 / 分析已通过（没过时）。空串 = 可以分析。"""
+    f, a = e.get('修复') or {}, e.get('分析') or {}
+    if f.get('状态') == '修复中':
+        return '正在修复'
+    if f.get('状态') == '排队中':
+        return '在修复队列里'
+    if a.get('状态') == '已通过' and not a.get('过时'):
+        return '分析已审核通过'
+    return ''
+
+
+def bug_analyze(ids, by='用户（网页）', force=False, auto=False):
+    """网页「分析」：按仓库分组，各起一个后台只读会话。不作为 MCP 工具提供（对话里的 AI 直接自己分析，用 kb_bug_analysis 提交）。
+    已通过 / 排队中 / 修复中的 Bug 默认跳过（管家、自动分析、问管家都不许重新分析）；
+    force=True 只给网页上用户确认过「会移出修复队列」的重新分析：排队中的先移出队列，修复中的仍然跳过。"""
     ids = [str(i).strip() for i in (ids if isinstance(ids, (list, tuple)) else [ids]) if str(i).strip()]
     if not ids:
         raise KBError('没有要分析的 Bug')
@@ -202,12 +258,24 @@ def bug_analyze(ids, by='用户（网页）'):
         if bid in busy:
             skipped.append(f'{bid}（正在分析）')
             continue
+        lock = an_locked(e)
+        if lock == '正在修复' or (lock and not force):
+            skipped.append(f'{bid}（{lock}，不重新分析' + ('' if lock == '正在修复' else '；确实要重新分析请在网页 Bug 上点并确认') + '）')
+            continue
         root, branch, why = _bug_repo(e)
         if not root:
             need.append(e)
             continue
         note = (e.get('分析') or {}).get('意见', '') if (e.get('分析') or {}).get('状态') == '需重分析' else ''
         groups.setdefault(root, []).append((e, branch, why, note))
+    if force:                          # 用户确认过：排队中的移出修复队列，免得分析变回「待审核」后被悄悄移出
+        dq = [e for es in groups.values() for e, *_ in es if (e.get('修复') or {}).get('状态') == '排队中'] + \
+             [e for e in need if (e.get('修复') or {}).get('状态') == '排队中']
+        if dq:
+            for e in dq:
+                e.pop('修复', None)
+                _bug_fix._fx_log(e, f'重新分析，移出修复队列（{by}）')
+            zt_save(data)
     if need and not groups:
         raise KBNeed(f'不知道 Bug {"、".join(e["编号"] for e in need)} 该在哪个代码仓库里分析：先把它归到有开发仓库的期 / 事项，或选一个仓库',
                      {'需要': '分析仓库', 'Bug': [e['编号'] for e in need], '产品': need[0].get('产品', ''),
@@ -224,17 +292,24 @@ def bug_analyze(ids, by='用户（网页）'):
             sid = datetime.now().strftime('%Y%m%d-%H%M%S-') + uuid_hex()[:4]
             (ZT_DIR / '分析会话').mkdir(parents=True, exist_ok=True)
             logf = ZT_DIR / '分析会话' / f'{sid}.jsonl'
-            busy_repo = _bug_fix._repo_busy(root)          # 分析代码前更新：有会话在改这个仓库就只 fetch，不动它的工作区
-            up = hosts.sync(root, branch=next((b for _, b, _, _ in part if b), ''), fetch_only=bool(busy_repo))
+            # 分析前更新代码（时机 bug_analyze）：按设置；有会话在改这个仓库就只 fetch，不动它的工作区。结果也写进归属的期
+            base = timing.code_update('bug_analyze', root, branch=next((b for _, b, _, _ in part if b), ''),
+                                      label=f'Bug {"、".join(x[0]["编号"] for x in part)}')
+            up = base['结果']
+            for pd in _owner_dirs(x[0] for x in part):
+                log(pd, '更新代码', base['记录'])
             cur = hosts.branch_of(root) if (Path(root) / '.svn').exists() and not (Path(root) / '.git').exists() \
                 else _git(Path(root), 'branch', '--show-current').stdout.strip()
             git0 = _wc_status(root)
+            bugs = [x[0] for x in part]
+            scene, bend = 'Bug分析', bug_team_end(bugs)
             proc = engine_popen(eng, _an_prompt(root, part, cur), f'kb·分析·Bug {"、".join(x[0]["编号"] for x in part)}', logf, root,
-                                env_extra={'KB_SESSION': 'an:' + sid}, extra_args=_readonly_args(eng))
+                                env_extra={'KB_SESSION': 'an:' + sid}, extra_args=_readonly_args(eng),
+                                scene=scene, end=bend, period=_owner_meta(bugs), auto=auto)
             _AN[sid] = proc
             rec = {'编号': sid, 'pid': proc.pid, '状态': '运行中', '开始时间': now(), '仓库': root, '分支': cur,
                    'Bug': [x[0]['编号'] for x in part], '日志': str(logf), '引擎': eng['名称'], '发起': by, 'git前': git0,
-                   '更新代码': up}
+                   '更新代码': up, '代码基线': base, '场景': scene, '端': bend, **({'强制': True} if force else {})}
             items_all = _an_load()
             items_all.append(rec)
             _an_save(items_all)
@@ -253,7 +328,7 @@ def bug_analyze(ids, by='用户（网页）'):
     return '\n'.join(out) or '没有可分析的 Bug'
 
 
-def bug_analyze_in(ids, root, by='用户（网页）'):
+def bug_analyze_in(ids, root, by='用户（网页）', force=False):
     """网页弹窗选了仓库：记住 产品 → 仓库，再分析。"""
     r = _repo_root(root)
     if not r:
@@ -263,7 +338,7 @@ def bug_analyze_in(ids, root, by='用户（网页）'):
         e = data['Bug'].get(str(bid))
         if e:
             _an_learn(e, r)
-    return bug_analyze(ids, by)
+    return bug_analyze(ids, by, force=force)
 
 
 def _wc_status(root):
@@ -277,6 +352,14 @@ def _wc_status(root):
     return _git(rp, 'status', '--porcelain').stdout
 
 
+def _wc_changed(before, after):
+    """git / svn status 前后对比：多出来、变了的那些行里的文件名。"""
+    b = set((before or '').splitlines())
+    return [ln[3:].strip() if len(ln) > 3 and ln[2] == ' ' else ln.split(None, 1)[-1].strip()
+            for ln in (after or '').splitlines() if ln.strip() and ln not in b] + \
+           [f'（恢复了）{ln[3:].strip()}' for ln in b if ln.strip() and ln not in set((after or '').splitlines())]
+
+
 def _an_finish(sid, code=None):
     items = _an_load()
     x = next((i for i in items if i['编号'] == sid), None)
@@ -285,6 +368,12 @@ def _an_finish(sid, code=None):
     res = _dev_result(x.get('日志', ''))
     git1 = _wc_status(x['仓库'])
     x.update(状态='已结束', 结束时间=now(), 退出码=code, 结果=(res.get('结果') or '')[:1500], 费用=res.get('费用'))
+    try:                                   # 角色团：按 Bug 归属的期累加（没有归属只记在会话记录里）
+        data0 = zt_load()
+        team.tally_dirs(x, x.get('日志', ''), _owner_dirs(data0['Bug'][b] for b in x.get('Bug', []) if b in data0['Bug']),
+                        x.get('场景', ''))
+    except Exception as ex:                # noqa: BLE001 — 统计出错不能影响收尾
+        print('team tally:', repr(ex), file=sys.stderr)
     if x.get('类型') == '修复':
         data = zt_load()
         done, left = [], []
@@ -310,6 +399,9 @@ def _an_finish(sid, code=None):
             new = []
             pend = [b for b in done if (data['Bug'][b].get('修复') or {}).get('待提交')]
             tail = f'；{len(pend)} 个等你在网页点「提交到 svn」' if pend else ''
+        elif x.get('工作树'):
+            new = x.get('新提交') or []
+            tail = f'；新提交 {len(new)} 个'
         else:
             new = _git(Path(x['仓库']), 'log', '--format=%h %s', f'{x.get("起点", "HEAD")}..HEAD').stdout.strip().splitlines() if x.get('起点') else []
             tail = f'；新提交 {len(new)} 个'
@@ -323,6 +415,13 @@ def _an_finish(sid, code=None):
         return
     if git1 != x.get('git前', git1):
         x['警告'] = '分析前后仓库的 git / svn status 不一样：只读会话可能改了文件，请检查'
+        changed = _wc_changed(x.get('git前', ''), git1)
+        x['改动文件'] = changed[:50]
+        msg = f'只读会话改了文件：{"、".join(changed[:20]) or "（status 输出不同）"}' + ('…' if len(changed) > 20 else '')
+        data0 = zt_load()
+        for pd in _owner_dirs(data0['Bug'][b] for b in x['Bug'] if b in data0['Bug']):
+            log(pd, '⚠ 只读会话', f'Bug 分析会话 {sid}（{x["仓库"]}）{msg}')
+        _notify('知识库 · ⚠ 只读会话改了文件', f'Bug 分析 {"、".join(x["Bug"])}：{msg}')
     x.pop('git前', None)
     data = zt_load()
     done = [b for b in x['Bug'] if (data['Bug'].get(b, {}).get('分析') or {}).get('会话') == sid]
@@ -374,7 +473,11 @@ def bug_analysis(bid, summary, locations=None, cause='', fix='', impact='', self
             locations = json.loads(locations)
         except ValueError:
             locations = [{'path': x.split(':')[0], 'line': (x.split(':') + ['0'])[1], 'note': ''} for x in re.split(r'[\s,，]+', locations) if x]
-    sess = next((x for x in reversed(an_sessions()) if x.get('状态') == '运行中' and str(bid) in x.get('Bug', [])), None)
+    sess = next((x for x in reversed(an_sessions()) if x.get('状态') == '运行中' and x.get('类型') != '修复' and str(bid) in x.get('Bug', [])), None)
+    f = e.get('修复') or {}
+    if f.get('状态') in ('排队中', '修复中') and not (sess or {}).get('强制'):
+        raise KBError(f'Bug {bid} {"正在修复" if f["状态"] == "修复中" else "在修复队列里"}，分析已审核通过：不再提交新分析'
+                      '（会把分析改回「待审核」并移出修复队列）。确实要重新分析，请用户在网页 Bug 上点「重新分析」并确认。')
     root, branch = (sess['仓库'], '') if sess else ('', '')
     if not root:
         root, branch, _ = _bug_repo(e)
@@ -385,6 +488,7 @@ def bug_analysis(bid, summary, locations=None, cause='', fix='', impact='', self
          '影响': impact or '', '自测': selftest or '', '置信度': confidence or '', '缺少': missing or '',
          '仓库': root, '分支': branch, '时间': now(), '基于修改': e.get('修改原值', ''), '修改时间': e.get('修改时间', ''),
          '状态': '待审核', '过时': False, '提交者': by, '会话': sess['编号'] if sess else '',
+         '代码基线': timing.baseline_text(sess.get('代码基线')) if sess else '',
          '历史': (old.get('历史') or [])[-4:] + ([{k: old.get(k) for k in ('时间', '摘要', '状态', '意见')}] if old.get('摘要') else [])}
     e['分析'] = a
     zt_save(data)
@@ -442,6 +546,12 @@ def bug_review(bid, action, note='', by='用户（网页）'):
     elif action == '打回':
         if not (note or '').strip():
             raise KBError('打回要写意见：哪里不对、希望往哪个方向查')
+        f = e.get('修复') or {}
+        if f.get('状态') == '修复中':
+            raise KBError(f'Bug {bid} 正在修复，等修复会话结束再打回')
+        if f.get('状态') == '排队中':          # 网页上确认过「会移出修复队列」
+            e.pop('修复', None)
+            _bug_fix._fx_log(e, f'打回分析，移出修复队列（{by}）')
         a.update(状态='需重分析', 审核时间=now(), 审核人=by, 意见=note.strip())
     else:
         raise KBError('只能「通过」或「打回」')

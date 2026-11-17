@@ -24,9 +24,11 @@ from pathlib import Path
 
 from kblib.core.common import PERIODS, KBError, now
 from kblib.core.periods import load_meta, log, period_dir, period_names, save_meta, set_status
-from kblib.infra import hosts
+from kblib.infra import hosts, timing
+from kblib.plugins import registry as _plugins
 from kblib.ai.devsession import DEV_DIR, _NO_BG, _alive, _dev_env, _dev_result, _notify, _session_id
 from kblib.ai.engines import engine_cmd, engine_popen, role_engine
+from kblib.ai import team
 from kblib.ai.flows import flow_for, flow_text
 from kblib.stack.plan import EMPTY_TREE, _sdir, period_ends, refresh_vcs, sort_ends
 from kblib import lazy
@@ -236,12 +238,13 @@ def _spawn(d, end, kind, prompt, root, resume='', readonly=False):
     (d / DEV_DIR).mkdir(exist_ok=True)
     logf = d / DEV_DIR / f'{end}{kind}-{datetime.now():%Y%m%d-%H%M%S}.jsonl'
     x = m['各端开发'][end]
-    if hosts.is_remote(root):
+    if hosts.is_remote(root):            # 远程主机不挂角色团（那台机器不一定装了套件）
         proc = _remote_popen(d, end, root, eng, prompt, f'kb·{d.name}·{end}{kind}', logf, resume, readonly)
     else:
         env = dict(_dev_env(d.name, x.get('分支', ''), root), KB_SESSION=f'end:{end}')
         proc = engine_popen(eng, prompt, f'kb·{d.name}·{end}{kind}', logf, root, resume_id=resume, env_extra=env,
-                            extra_args=_readonly(eng) if readonly else None)
+                            extra_args=_readonly(eng) if readonly else None,
+                            scene=f'{"开发" if kind == "开发" else "审查"}·端', end=end, period=m)
     _PROCS[(d.name, end, '开发中' if kind == '开发' else '审查中')] = proc
 
     def wait():
@@ -267,18 +270,27 @@ def _start_dev(d, end):
     if x['版本库'] == '本地' and not x.get('起点'):        # 不是版本库的本地目录：不更新代码，记下开工时间，审查按修改时间找改动
         x['起点'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         log(d, '更新代码', f'{end} 开发前：本地目录（不是 git / svn），不更新')
-    if not x.get('起点'):
-        # 开发前更新代码：只在这一端第一次开工时合并（之后各轮只 fetch，免得别人的提交混进「起点..HEAD」让审查看错）
-        up = hosts.sync(root, x['版本库'], branch=x.get('分支', ''))
-        log(d, '更新代码', f'{end} 开发前：{up}')
+    plug = ''
+    if x['版本库'] == '本地':
+        pass
+    elif not x.get('起点'):
+        # 首轮开工前（时机 end_start）：按设置更新代码（仓库被别的会话占着只 fetch），再跑挂在这个时机的插件，然后记审查起点
+        x['代码基线'] = timing.code_update('end_start', root, x['版本库'], branch=x.get('分支', ''), d=d, label=end)
+        if not hosts.is_remote(root):
+            plug = _plugins.run_plugins('end_start', d, root, x['代码基线'].get('分支') or x.get('分支', ''), m.get('SDD目录', ''))
         x['起点'] = hosts.head(root, x['版本库'])
         if x['版本库'] == 'svn':           # 开工前工作副本里原有的改动：验收提交时不碰
             ch, new = hosts.svn_changes(root)
             x['原有改动'] = [pth for _, pth in ch] + new
+    else:
+        # 再开工（时机 end_round）：默认不动；最多只 fetch——合并的话别人的提交会混进「起点..HEAD」让审查看错
+        x['代码基线'] = timing.code_update('end_round', root, x['版本库'], branch=x.get('分支', ''), d=d, label=end)
     resume = x.get('会话', '') if issues is not None else ''
     prompt = _dev_prompt(d, m, end, x, plan, issues if resume else None, x.pop('待办', ''))
     if issues is not None and not resume:          # 会话号丢了：新开，带上打回的问题
         prompt += '\n\n上一轮审查打回的问题：\n' + '\n'.join(f'- {i.get("需求", "")} {i.get("问题", "")}' for i in issues)
+    if plug:
+        prompt += f'\n\n【开工前已运行的插件】（知识库自动运行，结果供参考；插件改动的文件按仓库惯例单独提交）\n{plug}'
     srv = next((p for p in plan['各端'] if p['端'] == '服务端' and p.get('涉及')), None)
     if end != '服务端' and srv and (m.get('各端开发') or {}).get('服务端', {}).get('状态') != '审查通过' and not x.get('联调'):
         x['用mock'] = True                 # 服务端还没过：这一轮按契约 mock，服务端通过后再排一轮联调
@@ -394,6 +406,8 @@ def _finish(name, end, phase, code=None):
     if not x or x.get('状态') != phase:
         return
     res = _dev_result(x.get('日志' if phase == '开发中' else '审查日志', ''))
+    team.tally(x, x.get('日志' if phase == '开发中' else '审查日志', ''), m, d, f'{"开发" if phase == "开发中" else "审查"}·{end}',
+               cumulative=False)
     if phase == '开发中':
         sid = _session_id(x.get('日志', ''))
         if sid:
@@ -683,8 +697,8 @@ def stack_dev_view(d, m):
         x = dev.get(e)
         if not x:
             continue
-        out.append({'端': e, **{k: x.get(k) for k in ('状态', '轮次', '开始时间', '结束时间', '引擎', '等待', '结果', '汇报', '审查', '仓库', '分支', '版本库', '已提交', '已推送')},
-                    '在跑': x.get('状态') in RUNNING and _alive(x.get('pid', 0))})
+        out.append({'端': e, **{k: x.get(k) for k in ('状态', '轮次', '开始时间', '结束时间', '引擎', '等待', '结果', '汇报', '审查', '仓库', '分支', '版本库', '已提交', '已推送', '参与')},
+                    '在跑': x.get('状态') in RUNNING and _alive(x.get('pid', 0)), '代码基线': timing.baseline_text(x.get('代码基线'))})
     return out
 
 

@@ -25,8 +25,18 @@ def _get_ui_preview(self, u, q):
 
 @get('/file')
 def _get_file(self, u, q):
-    p = Path(q.get('path', '')).expanduser().resolve()
-    if not p.is_file() or not kb._allowed(p):
-        return self._send(404, {'error': '无此文件'})
-    ctype = mimetypes.guess_type(p.name)[0] or 'application/octet-stream'
-    return self._send(200, p.read_bytes(), ctype)
+    """资料文件原样下发：Range、流式、CSP sandbox（见 shared.send_file）。"""
+    return send_file(self, q.get('path', ''), q)
+
+
+@get('/api/fileinfo')
+def _get_api_fileinfo(self, u, q):
+    """预览用：文件名、大小、修改时间（只限知识库和已登记仓库里的文件）。"""
+    def run():
+        p = Path(q.get('path', '')).expanduser().resolve()
+        if not p.is_file() or not kb._allowed(p):
+            raise kb.KBError('无此文件')
+        st = p.stat()
+        return {'name': p.name, 'path': str(p), 'size': st.st_size, 'mtime': st.st_mtime,
+                'type': FILE_TYPES.get(p.suffix.lower()) or mimetypes.guess_type(p.name)[0] or ''}
+    return self._guard(run)

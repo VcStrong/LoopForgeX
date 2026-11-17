@@ -1,6 +1,6 @@
 # From 大大王.DT
 """手机占用、非阻断问题、复测。"""
-from kblib.infra import devlock
+from kblib.infra import devlock, timing
 import json
 import os
 import re
@@ -11,6 +11,7 @@ from kblib.core.common import KBError, PERIODS, now, read_text
 from kblib.core.periods import load_meta, log, period_dir, period_names, save_meta
 from kblib.ai.flows import BUILTIN_FLOWS, flow_for, flow_progress, flow_text, flows, get_flow
 from kblib.ai.engines import engine_bin, engines, get_engine, period_engine
+from kblib.ai import team
 from kblib.ai.devprep import _git
 from kblib.ai.devsession import DEV_DIR, _NO_BG, _dev_spawn, _notify, _result_of, dev_session, session_flow
 
@@ -108,42 +109,66 @@ def devices_text(period):
             + '\n要用时 kb_device_claim 申请，只在申请到的手机上装包、操作（adb -s <序列号> / agent-device --serial）。')
 
 
-def device_claim(period, count=1, serials=None, reason=''):
-    """申请手机：优先本期已占着的，再挑空闲的；不够时记成非阻断问题并通知用户。"""
+def device_claim(period, count=1, serials=None, reason='', strict=False):
+    """申请手机：本期已占着的优先，其余空闲的按「最近最少用」挑，几期并行时分散到不同手机。
+    点名 serials 时点名的能用就用；不能用的自动换成空闲手机凑够台数（strict=True 才严格按点名）。"""
     d = period_dir(period)
     m = load_meta(d)
+    serials = [str(x).strip() for x in (serials or []) if str(x).strip()]
     count = max(1, min(int(count or 1), 10))
+    if serials and not strict:
+        count = max(count, len(serials))
     ds = {x['序列号']: x for x in devices(d.name)}
     branch = (m.get('开发会话') or {}).get('分支') or m.get('开发分支', '')
-    got, why = [], []
+    got, why, swap = [], [], []
     with devlock.locked() as data:
         t = time.time()
         for k in [k for k, v in data.items() if not devlock.valid(v, t)]:
             data.pop(k)
+        last = devlock.recent()
 
         def usable(sn):
             c = data.get(sn)
             return ds.get(sn, {}).get('状态') == '在线' and (not c or (c.get('期') == d.name and c.get('方式') != '本人'))
+
+        def pick(n, skip):
+            """本期已占着的优先；空闲的按最近最少用，别的期 agent-device 会话挂着的排后面。"""
+            mine = [sn for sn in ds if sn not in skip and usable(sn) and sn in data]
+            other = sorted((sn for sn in ds if sn not in skip and usable(sn) and sn not in data),
+                           key=lambda sn: (bool((ds[sn]['agent-device'] or {}).get('期') not in ('', d.name, None)),
+                                           float(last.get(sn) or 0)))
+            return (mine + other)[:max(0, n)]
+
+        def why_not(sn):
+            return f'{sn} ' + ('没连着' if sn not in ds else _who(ds[sn]['占用']) if ds[sn]['占用'] else ds[sn]['状态'])
         if serials:
+            bad = []
             for sn in serials:
                 if usable(sn):
                     got.append(sn)
                 else:
-                    why.append(f'{sn} ' + ('没连着' if sn not in ds else _who(ds[sn]['占用']) if ds[sn]['占用'] else ds[sn]['状态']))
+                    bad.append(sn)
+                    why.append(why_not(sn))
+            if bad and not strict:
+                sub = pick(count - len(got), set(got) | set(serials))
+                swap = [(bad[i] if i < len(bad) else '', sn) for i, sn in enumerate(sub)]
+                got += sub
         else:
-            mine = [sn for sn in ds if usable(sn) and sn in data]
-            other = sorted((sn for sn in ds if usable(sn) and sn not in data),
-                           key=lambda sn: bool((ds[sn]['agent-device'] or {}).get('期') not in ('', d.name, None)))
-            got = (mine + other)[:count]
+            got = pick(count, set())
         for sn in got:
             old = data.get(sn) or {}
             data[sn] = {'期': d.name, '方式': '申请', '开始': old.get('开始') or devlock.stamp(), '分支': branch,
                         '仓库': m.get('开发仓库', ''), '型号': ds[sn]['型号'], '用途': (reason or '').strip()[:200], '最后使用': t}
-    need = len(serials) if serials else count
+        devlock.touch_recent(got, t)
+    need = len(serials) if serials and strict else count
     if got:
         log(d, '申请手机', '、'.join(got) + (f'（{reason}）' if reason else ''))
     msg = (f'已为「{d.name}」占用 {len(got)} 台：' + '、'.join(f'{sn}（{ds[sn]["型号"]}）' for sn in got)
            + '。只在这些手机上装包、操作（adb -s <序列号> / agent-device --serial），测完 kb_device_release。') if got else '没有能用的手机。'
+    if swap:
+        msg += ('\n点名的手机不可用（' + '；'.join(why) + '），已换成：'
+                + '、'.join(f'{a or "补位"} → {b}（{ds[b]["型号"]}）' for a, b in swap)
+                + '。以后申请只填台数（count），不用点名序列号，知识库会分配空闲的手机；确实要某台（如 case 要求特定机型）才填 serials 并设 strict=true。')
     if len(got) < need:
         iid, _ = _add_issue(d, f'需要 {need} 台手机，现在只能用 {len(got)} 台' + (f'：{reason}' if reason else ''),
                             devices_text(d.name) + (f'\n\n不可用：{"；".join(why)}' if why else ''), '设备不足', f'{need} 台手机',
@@ -219,8 +244,10 @@ def add_issue(period, title, detail='', kind='', need=''):
     if not (title or '').strip():
         raise KBError('问题标题不能为空')
     iid, new = _add_issue(period_dir(period), title, detail, kind, need)
+    from kblib.plugins.registry import i18n_issue_tip      # 记的是「要拉多语言」：插件能用就让会话直接调，别停
     return (f'{iid} 已{"记下并通知用户" if new else "更新（这个问题之前记过）"}。这是非阻断问题：不用等回答，继续开发；'
-            '因此没测成的 case 如实记 BLOCKED，用户条件具备后会在网页「复测」补测。')
+            '因此没测成的 case 如实记 BLOCKED，用户条件具备后会在网页「复测」补测。'
+            + i18n_issue_tip(period, f'{title} {detail} {need}'))
 
 
 def set_issue(period, iid, status, by='用户（网页）'):
@@ -349,7 +376,7 @@ def _retest_prompt(name, root, branch, f, docs, scope, note):
 【复测步骤】
 {steps}
 
-【手机】先 kb_devices 看；kb_device_claim 申请要用的台数（多台场景一次申请够），只在申请到的手机上装包、操作，别动别的期占着的手机。
+【手机】先 kb_devices 看；kb_device_claim 申请要用的台数（多台场景一次申请够；只填 count，不要点名序列号），只在申请到的手机上装包、操作，别动别的期占着的手机。
 手机还是不够、账号或环境仍不满足的 case：如实记 BLOCKED，用 kb_issue 记下还缺什么，然后接着测其余的。
 【发现缺陷】复测发现代码缺陷时，用 kb_ask 说明现象、证据和修改建议，kb_wait_answer 等用户回答后照做（同意了才改代码，按仓库惯例提交）。
 【基础信息】测试账号等先查 kb_base；机密只在真正要用时 kb_base_secret 读取，不写进任何文件、日志或回复。
@@ -381,6 +408,7 @@ def retest_start(period, scope='未通过', note='', by='用户（网页）'):
     scope = scope if scope in _SCOPE else '未通过'
     eng = period_engine(m)
     engine_bin(eng)
+    m['代码基线'] = timing.code_update('retest', str(root), d=d)        # 复测前（默认不动，只记下基线和落后几个提交）
     m['开发会话'] = {'备注': note, '流程': f['id'], '引擎': eng['id'], '类型': '复测', '范围': scope}
     if m.get('待复测'):
         m['待复测']['自动'] = False
@@ -671,5 +699,8 @@ def dev_overview(period):
             '流程列表': [{'id': x['id'], '名称': x['名称']} for x in flows()], '各端流程': _end_flows(m),
             '引擎': m.get('AI引擎', ''), '默认引擎': get_engine()['名称'],
             '引擎列表': [{'id': x['id'], '名称': x['名称']} for x in engines()],
+            '角色团': m.get('角色团') or '跟随', '角色调用': team.team_usage(m), '角色团全局': team.team_settings()['开启'],
+            '角色团引擎支持': team.is_claude(period_engine(m)),
             '待确认': m.get('待确认') or [], '对话': (m.get('对话') or [])[-8:], '设备': devices(d.name) if _adb() else None,
-            '非阻断问题': m.get('非阻断问题') or [], '复测': retest_info(d, m)}
+            '非阻断问题': m.get('非阻断问题') or [], '复测': retest_info(d, m),
+            '代码基线': timing.baseline_text(m.get('代码基线')), '代码基线详情': (m.get('代码基线') or {}).get('记录', '')}

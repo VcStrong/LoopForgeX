@@ -18,12 +18,13 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from kblib.core.common import KBError, now
+from kblib.core.common import KBError, ROOT, now
 from kblib.core.periods import load_meta, log, period_dir, save_meta, set_status
 from kblib.core.repos import add_repo
 from kblib.infra import hosts
 from kblib.ai.devsession import _NO_BG, _alive, _dev_env, _dev_result, _notify
 from kblib.ai.engines import engine_popen, role_engine
+from kblib.ai import team
 from kblib.stack.plan import _sdir, end_name, period_ends, sort_ends, stack_set_end
 
 PRD_FILE = 'PRD.md'
@@ -125,10 +126,15 @@ def _spawn(d, key, prompt, readonly=True, add_dirs=(), on_done=None):
             if p and not hosts.is_remote(p):
                 extra += ['--add-dir', p]
     env = dict(_dev_env(d.name, '', str(d)), KB_SESSION=f'launch:{key}:{d.name}')
-    proc = engine_popen(eng, prompt + _NO_BG, f'kb·{key}·{d.name}', logf, str(d), env_extra=env, extra_args=extra)
+    scene = {'需求': '需求', '发布': '发布'}.get(key, '')
+    # 只读会话：结束时对比 git 状态。没给 add_dirs（完善需求）就看这一期各端的仓库和知识库自己的仓库
+    git0 = team.wc_snapshot(list(add_dirs) or [v['仓库'] for v in period_ends(d, m).values()] + [str(ROOT)]) if readonly else {}
+    proc = engine_popen(eng, prompt + _NO_BG, f'kb·{key}·{d.name}', logf, str(d), env_extra=env, extra_args=extra, scene=scene, period=m)
     _PROCS[(d.name, key)] = proc
     m = load_meta(d)
-    m.setdefault(SESS, {})[key] = {'状态': '运行中', 'pid': proc.pid, '开始时间': now(), '日志': str(logf), '引擎': eng['名称']}
+    m.setdefault(SESS, {})[key] = {'状态': '运行中', 'pid': proc.pid, '开始时间': now(), '日志': str(logf), '引擎': eng['名称'],
+                                   **({'场景': scene} if scene else {}),
+                                   **({'git前': git0} if git0 else {})}
     save_meta(d, m)
 
     def wait():
@@ -147,6 +153,8 @@ def _sess_finish(name, key, code=None, on_done=None):
         return
     res = _dev_result(s.get('日志', ''))
     s.update(状态='已结束', 结束时间=now(), 退出码=code, 结果=(res.get('结果') or '')[:1500], 费用=res.get('费用'))
+    team.tally(s, s.get('日志', ''), m, d, s.get('场景', ''))
+    team.wc_alarm(d, s, f'{key}会话')
     m[SESS][key] = s
     save_meta(d, m)
     if on_done:
@@ -540,7 +548,7 @@ def launch_view(d, m):
     """stack_get 里新产品相关的部分。"""
     _reap(d, m)
     m = load_meta(d)
-    sess = {k: {kk: s.get(kk) for kk in ('状态', '开始时间', '结束时间', '引擎', '结果')} for k, s in (m.get(SESS) or {}).items()}
+    sess = {k: {kk: s.get(kk) for kk in ('状态', '开始时间', '结束时间', '引擎', '结果', '参与', '警告')} for k, s in (m.get(SESS) or {}).items()}
     for k, s in sess.items():
         s['在跑'] = _running(m, k)
     bld = {}

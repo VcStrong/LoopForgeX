@@ -46,8 +46,14 @@
  *                             dev（某期开发进度，ev.period）、adds（最近添加）、live（连接状态 ev.on）、*（全部）。core 自己已按事件刷新当前页和导航。
  *   KB.api(url, opt)          fetch + JSON，出错抛 Error（e.need = 需要补的信息），401 跳登录；KB.post(url, body)：POST JSON
  *   KB.esc(s) KB.enc(s)       HTML 转义 / encodeURIComponent
- *   KB.toast(文字)            右下角提示；KB.openDlg(标题, html)：全局对话框（#dlg）；KB.confirm(文字, {ok,cancel,danger,title}) → Promise<bool>、KB.prompt(文字, 默认值, {title,ph}) → Promise<文字|null>：站内确认 / 填写框（不要用浏览器原生 confirm / prompt / alert）；KB.md(markdown) → {html, toc}；KB.mdInline(文字)
- *   KB.badge(状态)            状态徽章 html；KB.fileUrl(路径)；KB.readFile(路径)：对话框里看文件；KB.showImg(路径)
+ *   KB.toast(文字)            右下角提示；KB.openDlg(标题, html)：全局对话框（#dlg）；KB.confirm(文字, {ok,cancel,danger,title}) → Promise<bool>、KB.prompt(文字, 默认值, {title,ph}) → Promise<文字|null>：站内确认 / 填写框（不要用浏览器原生 confirm / prompt / alert）；KB.md(markdown, {base 相对路径按哪个目录找}) → {html, toc}（marked + DOMPurify，库没拉到前用内置轻量解析）；KB.mdInline(文字)
+ *   KB.badge(状态)            状态徽章 html；KB.fileUrl(路径)；KB.readFile(路径, 起始行?)：对话框里预览文件（按扩展名选预览器）；KB.showImg(路径)：预览图片（带设计图说明）
+ *   KB.preview                文件预览注册表：register({name, ext:['md',…], render(path, url, box, ctx)})（后注册的优先，ext '*' = 兜底）、find(路径)、list()、open(路径, 起始行)。
+ *                             内置：md（marked + DOMPurify，mermaid / 代码高亮）、html（iframe sandbox，默认不执行脚本）、图片（缩放拖动，svg 用 img）、文字 / 代码（highlight.js，分段加载更多）、
+ *                             pdf（浏览器阅读器）、docx（mammoth）、xlsx / xls / csv（SheetJS）、音视频、二进制（文件信息 + 下载）。ctx = {start, info{name,size,mtime,type}, note, bar 顶栏工具区}
+ *   KB.loadVendor(名字|地址…) 第一次用到才加载 /ui/vendor/ 里的第三方库（marked purify hljs mermaid mammoth xlsx，或任意 js / css 地址），返回 Promise；KB.mdEnhance(el)：md 渲染后高亮代码、画 mermaid
+ *   资料文件接口：/file?path=（Range、流式；html / svg 带 CSP sandbox，?js=1 允许脚本、?dl=1 下载）、/fs/<绝对路径>（同上，按路径给，html 里的相对资源能找到）、
+ *                             /api/fileinfo?path=、/api/text?path=&start=&n=（不带行号的文字，{ok, lines, start, end, total}）。都只限知识库和已登记仓库里的文件
  *   KB.since(时间) KB.when(秒) KB.size(字节)   「3 分钟」/ 日期 / 「1.2 MB」
  *   KB.askOpen(true|false)    打开 / 收起「交给管家」面板；KB.addDlg(tab)：手动新建对话框（tab: 'new' 新期 / 'task' 事项 / 'add' 添加）
  *   KB.taskNav(名称, 显示)    把期 / 事项加到或移出侧栏

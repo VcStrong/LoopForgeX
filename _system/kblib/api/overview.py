@@ -16,12 +16,13 @@ from kblib.core.common import (
     read_text,
 )
 from kblib.core.textx import extract
-from kblib.core.periods import init, is_task, load_meta, period_dir, period_names
+from kblib.core.periods import init, is_archived, is_task, load_meta, period_dir, period_names
 from kblib.core.notes import NOTES_FILE, _materials, note_md, note_title, notes_of  # noqa: F401（_materials 移到 core.notes，这里保留名字给老代码）
 from kblib.core.repos import load_repos
 from kblib.core.search import db, index_repo
 from kblib.core.baseinfo import base_context, base_load
 from kblib.ai.flows import flow_text, period_flow
+from kblib.plugins.registry import i18n_hint, qa_case_hint
 from kblib import lazy
 _bug_index = lazy('kblib.bugs.index')      # 上层模块：用到时才 import（不形成循环）
 _anr_store = lazy('kblib.anr.store')      # 上层模块：用到时才 import（不形成循环）
@@ -33,6 +34,8 @@ def overview():
     nb = len(base_load()['条目'])
     out.append(f'基础知识库：{nb} 条（账号、测试账号、代理 / VPN、环境配置等，所有期共用；用 kb_base 查看）')
     names = period_names()
+    arch = [n for n in names if is_archived(load_meta(PERIODS / n))]       # 归档的只给名字，不展开（kb_search 照样搜得到）
+    names = [n for n in names if n not in arch]
     tasks = [n for n in names if is_task(load_meta(PERIODS / n))]
     names = [n for n in names if n not in tasks]
     out.append(f'\n期（{len(names)}）：' if names else '\n期：（空，先 kb_create_iteration）')
@@ -50,6 +53,9 @@ def overview():
         cnt = ' · '.join(f'{c} {len(v) + len(notes_of(d, c, m))}' for c, v in mats.items())
         repos = '、'.join(m.get('关联仓库') or []) or '无'
         out.append(f'- {n} ｜ {m.get("状态")} ｜ {cnt} ｜ 仓库：{repos} ｜ 更新 {m.get("更新时间", "")}')
+    if arch:
+        out.append(f'\n已归档（{len(arch)}，做完的期 / 事项，资料和结论 kb_search 能搜到，kb_iteration 能看）：' + '、'.join(arch[-40:])
+                   + ('…' if len(arch) > 40 else ''))
     repos = load_repos()
     out.append('\n代码仓库：' + ('' if repos else '（未登记）'))
     with db() as c:
@@ -202,12 +208,16 @@ def dev_package(name, max_chars=60000):
     if bc:
         out.append('\n# 基础知识库（所有期共用：账号、测试账号、代理 / VPN、环境配置；机密用 kb_base_secret 读取，不要写进代码、文档、提交或日志）\n' + bc)
     fl = period_flow(m)
+    qa = qa_case_hint(d.name) if fl.get('准备方式') == 'SDD' else ''      # 挂了 case 生成平台这类插件：缺 QA 用例时用它补
+    i18n_root = m.get('开发仓库') or next((repos[r]['路径'] for r in m.get('关联仓库') or [] if r in repos), '')
+    i18n = i18n_hint(d.name, i18n_root)       # 仓库有 i18n_resource 且挂了多语言拉取：缺 key 先调插件拉
     out.append('\n# 开发约定\n- 状态是「已批准开发」时，开始写代码前调用 kb_set_status 改为「开发中」\n'
                f'- 开发流程：{fl["名称"]}（{fl.get("说明") or "见知识库网页「⚙ 设置」"}）\n'
                + flow_text(fl, '开发约定', 期名=d.name, **({'文档目录': m['SDD目录']} if m.get('SDD目录') else {})).rstrip() + '\n'
                '- 需要用户确认时用 kb_ask 发到网页，再用 kb_wait_answer 等回答；'
                + ('本期已开启免打扰：自行决策并 kb_log 记录理由\n' if m.get('免打扰') else '本期未开启免打扰：拿到回答前不要自行决定\n')
-               + 
-               '- 关键决定、接口变更、与需求不一致之处用 kb_log 记录\n'
+               + (qa + '\n' if qa else '')
+               + (i18n + '\n' if i18n else '')
+               + '- 关键决定、接口变更、与需求不一致之处用 kb_log 记录\n'
                '- 完成后 kb_set_status 改为「已完成」，并记录改动摘要（分支、提交）')
     return '\n'.join(out)

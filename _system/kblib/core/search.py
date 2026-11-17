@@ -20,6 +20,7 @@ from kblib.core.common import (
     read_text,
 )
 from kblib.core.textx import extract
+from kblib.core import fuzzy as _fuzzy
 from kblib.core.periods import load_meta, period_dir, period_names
 from kblib.core.repos import code_wanted, load_repos, repo_files
 from kblib import lazy
@@ -36,6 +37,7 @@ def db():
     create table if not exists chunk(id integer primary key, path text, kind text, period text,
                                      cat text, repo text, start integer, end integer, content text);
     create index if not exists chunk_path on chunk(path);
+    create index if not exists chunk_kind on chunk(kind);
     create virtual table if not exists fts using fts5(content, content='chunk', content_rowid='id',
                                                       tokenize='trigram');
     create trigger if not exists chunk_ai after insert on chunk begin
@@ -169,23 +171,48 @@ def _snippet(content, terms, start):
 
 
 def _query(c, terms, filters, args, limit):
-    long_ = [t for t in terms if len(t) >= 3]
-    short = [t for t in terms if len(t) < 3]
-    where = list(filters)
-    params = []
+    """terms：每项是一个词，或一组可互换的写法（list，组内 OR、组间 AND）。"""
+    groups = [list(t) if isinstance(t, (list, tuple)) else [t] for t in terms]
+    long_ = [g for g in groups if all(len(t) >= 3 for t in g)]
+    short = [g for g in groups if g not in long_]
+    where, params = list(filters), list(args)   # 便宜的过滤条件在前，LIKE 在后
     if long_:
         base = 'select chunk.path, kind, period, cat, repo, start, end, chunk.content from fts join chunk on chunk.id=fts.rowid'
         where.insert(0, 'fts match ?')
-        params.append(' AND '.join('"' + t.replace('"', '""') + '"' for t in long_))
+        params.insert(0, ' AND '.join('(' + ' OR '.join('"' + t.replace('"', '""') + '"' for t in g) + ')' for g in long_))
         order = "order by (kind='doc') desc, (cat='记录'), bm25(fts)"
     else:
         base = 'select path, kind, period, cat, repo, start, end, content from chunk'
-        order = "order by (kind='doc') desc, (cat='记录'), chunk.id desc"
-    for t in short:
-        where.append('chunk.content like ?')
-        params.append(f'%{t}%')
-    sql = f'{base} where {" and ".join(where)} {order} limit ?'
-    return c.execute(sql, params + list(args) + [limit]).fetchall()
+        order = "order by (cat='记录'), chunk.id desc"
+    for g in short:
+        where.append('(' + ' or '.join('chunk.content like ?' for _ in g) + ')')
+        params += [f'%{t}%' for t in g]
+    if long_ or 'kind=?' in filters:
+        sql = f'{base} where {" and ".join(where)} {order} limit ?'
+        return c.execute(sql, params + [limit]).fetchall()
+    # 只有短词（走 LIKE 扫表）：先扫文档（小），不够再扫代码，避免为了「文档优先」把十几万个代码块全扫完再排序
+    rows = []
+    for kind in ('doc', 'code'):
+        o = order if kind == 'doc' else 'order by chunk.id desc'     # 代码块 cat 都是空：按 id 倒序可以边扫边停
+        sql = f'{base} where {" and ".join(["kind=?"] + where)} {o} limit ?'
+        rows += c.execute(sql, [kind] + params + [limit - len(rows)]).fetchall()
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _expand(c, terms, absent=()):
+    """模糊改写：返回 (每个词的候选组, 说明)。同义词总是带上；拼音 / 纠错只给在库里搜不到的词。"""
+    out, notes = [], []
+    for t in terms:
+        alts = _fuzzy.pinyin_words(c, t) + _fuzzy.synonyms(t)
+        if (not alts or len(t) >= 3) and (t in absent or not _query(c, [t], [], [], 1)):
+            alts = _fuzzy.corrections(c, t) + alts        # 库里没有这个词：纠错候选排在同义改写前面
+        alts = list(dict.fromkeys(alts))
+        if alts:
+            notes.append(f'{t}→{"/".join(alts[:3])}')
+        out.append([t] + alts)
+    return out, notes
 
 
 def search_hits(query, period=None, category=None, scope='all', repo=None, limit=10):
@@ -207,20 +234,36 @@ def search_hits(query, period=None, category=None, scope='all', repo=None, limit
         filters.append('repo=?')
         args.append(repo)
     limit = max(1, min(int(limit or 10), 50))
+    shown = list(terms)
     with db() as c:
         rows = _query(c, terms, filters, args, limit)
         mode = '全部词'
+        seen = {(r[0], r[5]) for r in rows}
+
+        def add(more):
+            for r in more:
+                if (r[0], r[5]) not in seen and len(rows) < limit:
+                    seen.add((r[0], r[5]))
+                    rows.append(r)
+        if len(rows) < limit:              # 不够数：同义词 / 拼音 / 纠错改写后补在原词结果后面
+            try:
+                _fuzzy.ensure_vocab(c)
+                groups, notes = _expand(c, terms, terms if not rows and len(terms) == 1 and not filters else ())
+            except sqlite3.Error:
+                groups, notes = [], []
+            if notes:
+                n0 = len(rows)
+                add(_query(c, groups, filters, args, limit))
+                if len(rows) > n0:
+                    mode = ('全部词＋' if n0 else '') + '模糊：' + '，'.join(notes)
+                    shown = [t for g in groups for t in g]
         if not rows and len(terms) > 1:
-            seen, rows = set(), []
             for t in terms:
-                for r in _query(c, [t], filters, args, limit):
-                    if (r[0], r[5]) not in seen:
-                        seen.add((r[0], r[5]))
-                        rows.append(r)
-            rows, mode = rows[:limit], '任一词'
+                add(_query(c, [t], filters, args, limit))
+            mode = '任一词'
     hits = []
     for path, kind, per, cat, repo_, start, end, content in rows:
-        line, snip = _snippet(content, terms, start)
+        line, snip = _snippet(content, shown, start)
         hits.append({'path': path, 'kind': kind, 'period': per, 'cat': cat, 'repo': repo_,
                      'line': line, 'snippet': snip})
     return hits, mode

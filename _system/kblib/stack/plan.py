@@ -15,11 +15,12 @@ from datetime import datetime
 from pathlib import Path
 
 from kblib.core.common import PERIODS, KBError, now
-from kblib.infra import hosts
+from kblib.infra import hosts, timing
 from kblib.core.periods import design_previews, load_meta, log, period_dir, period_names, save_meta
 from kblib.core.repos import REPO_ENDS, load_repos, repo_pref, save_repo_pref
 from kblib.ai.devsession import _alive, _dev_result, _notify
 from kblib.ai.engines import engine_popen, role_engine
+from kblib.ai import team
 from kblib.ai.flows import flow_for, flows, get_flow
 from kblib.plugins.run import base_repo_paths
 from kblib import lazy
@@ -297,12 +298,12 @@ def repo_settings():
         p = repo_pref(r['路径'])
         out.append({'路径': r['路径'], '名称': r['名称'], '分支': r.get('分支', ''), '远程': bool(r.get('远程')),
                     '识别端': [] if r.get('远程') else _detect_ends_files(r['路径']),
-                    '端': p.get('端', ''), '默认流程': p.get('默认流程', '')})
+                    '端': p.get('端', ''), '默认流程': p.get('默认流程', ''), '代码更新': p.get('代码更新', '')})
     return out
 
 
-def repo_set(path, end=None, flow=None, by='用户（网页）'):
-    """改某个工程的端 / 默认流程；None = 不改，'' = 回到自动（端按文件识别，流程按识别文件 / 全局默认）。"""
+def repo_set(path, end=None, flow=None, by='用户（网页）', code=None):
+    """改某个工程的端 / 默认流程 / 代码更新；None = 不改，'' = 回到自动（端按文件识别，流程按识别文件 / 全局默认，代码更新跟随全局「时机」）。"""
     path = (path or '').strip()
     if not path:
         raise KBError('没有工程路径')
@@ -315,6 +316,11 @@ def repo_set(path, end=None, flow=None, by='用户（网页）'):
         f = get_flow(flow) if flow else None
         kv['默认流程'] = f['id'] if f else ''
         said.append(f'默认流程：{f["名称"] if f else "自动"}')
+    if code is not None:
+        if code and code not in (timing.PULL, timing.FETCH, timing.KEEP):
+            raise KBError(f'代码更新只能选 {timing.PULL} / {timing.FETCH} / {timing.KEEP}，或留空跟随全局')
+        kv['代码更新'] = code
+        said.append(f'代码更新：{code or "跟随全局"}' + ('（对所有可选的时机生效，锁定的时机不受影响）' if code else ''))
     if not kv:
         return '没有变化'
     save_repo_pref(path, **kv)
@@ -470,7 +476,7 @@ def _answered_note(d):
     return ('用户对上一版方案「待确认」的回答（照这些改方案，写进对应的需求 / 各端 / 接口；这些问题已经定了，不要再放进待确认）：\n' + '\n'.join(rows)) if rows else ''
 
 
-def stack_plan_start(name, note='', by='用户（网页）'):
+def stack_plan_start(name, note='', by='用户（网页）', auto=False):
     """网页「出方案」：起一个只读后台会话，读资料和各端代码，交回影响分析和接口契约。"""
     d = period_dir(name)
     m = load_meta(d)
@@ -500,7 +506,9 @@ def stack_plan_start(name, note='', by='用户（网页）'):
         if v.get('版本库') == '本地':
             continue
         busy = dev.get(e, {}).get('状态') in ('开发中', '审查中') or (not hosts.is_remote(v['仓库']) and _fix._repo_busy(v['仓库']))
-        log(d, '更新代码', f'{e} 出方案前：' + hosts.sync(v['仓库'], v.get('版本库', ''), branch=v.get('分支', ''), fetch_only=bool(busy)))
+        if busy is True:
+            busy = f'{e} 正在{dev[e]["状态"]}'
+        timing.code_update('plan', v['仓库'], v.get('版本库', ''), branch=v.get('分支', ''), d=d, label=e, busy=busy or '')
     design_previews(d)                    # PSD 等先转好 PNG 预览，AI 才看得到
     eng = role_engine('方案', m)
     _sdir(d).mkdir(exist_ok=True)
@@ -511,11 +519,13 @@ def stack_plan_start(name, note='', by='用户（网页）'):
         for v in ends.values():
             if not hosts.is_remote(v['仓库']):
                 extra += ['--add-dir', v['仓库']]
+    git0 = team.wc_snapshot([v['仓库'] for v in ends.values()])      # 只读会话：结束时对比
     proc = engine_popen(eng, _plan_prompt(d, ends, (note or '').strip(), new=bool(m.get('新产品'))), f'kb·全栈方案·{d.name}', logf, str(d),
-                        env_extra={'KB_SESSION': 'stack:' + d.name}, extra_args=extra)
+                        env_extra={'KB_SESSION': 'stack:' + d.name}, extra_args=extra, scene='方案', period=m, auto=auto)
     _PROCS[d.name] = proc
     m = load_meta(d)
-    m['全栈会话'] = {'状态': '运行中', 'pid': proc.pid, '开始时间': now(), '日志': str(logf), '引擎': eng['名称'], '意见': (note or '').strip()}
+    m['全栈会话'] = {'状态': '运行中', 'pid': proc.pid, '开始时间': now(), '日志': str(logf), '引擎': eng['名称'], '意见': (note or '').strip(),
+                   '场景': '方案', 'git前': git0}
     st = m.setdefault('全栈', {})
     st['状态'] = '出方案中'
     save_meta(d, m)
@@ -537,6 +547,8 @@ def _plan_finish(name, code=None):
         return
     res = _dev_result(s.get('日志', ''))
     s.update(状态='已结束', 结束时间=now(), 退出码=code, 结果=(res.get('结果') or '')[:1500], 费用=res.get('费用'))
+    team.tally(s, s.get('日志', ''), m, d, '方案')
+    team.wc_alarm(d, s, '方案会话')
     st = m.setdefault('全栈', {})
     if st.get('状态') == '出方案中':          # 没交方案就结束了
         st['状态'] = '出方案失败'
@@ -728,7 +740,7 @@ def stack_get(name):
             rows.append({'端': e, '待添加': True})
     return {'各端': rows, '常用平台': list(ENDS), '流程列表': [{'id': x['id'], '名称': x['名称']} for x in flows()],
             '统一流程': _flow_name(m.get('开发流程')), '状态': (m.get('全栈') or {}).get('状态', ''), '全栈': m.get('全栈') or {},
-            '会话': {k: s.get(k) for k in ('状态', '开始时间', '结束时间', '引擎', '结果', '意见')} if s else None,
+            '会话': {k: s.get(k) for k in ('状态', '开始时间', '结束时间', '引擎', '结果', '意见', '参与', '警告')} if s else None,
             '方案': plan, '契约': api.read_text('utf-8') if api.exists() else '', '契约路径': str(api) if api.exists() else '',
             '规格路径': str(spec) if spec.exists() else '', '开发': _stackdev.stack_dev_view(d, m),
             '变更': m.get('全栈变更') or [], '证据': _stackdev.evidence(d, m, plan),

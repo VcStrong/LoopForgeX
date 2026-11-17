@@ -98,12 +98,12 @@ async function anrPage(){
       try{const r=await post('/api/anr/batch',{ids,task:t,name});toast(r.msg);anrPage()}catch(e){toast(e.message)}}}
   const send=async(files,kind,ver)=>{for(const f of files){toast(`上传 ${f.name}…`);
     try{const r=await api('/api/anr/upload',{method:'POST',headers:{'X-Kind':kind,'X-Version':enc(ver||''),'X-Source':enc($('#arS').value.trim()),'X-Filename':enc(f.name)},body:f});
-      openDlg(kind==='mapping'?'已归档 mapping':`已归档 ${f.name}`,`<pre style="white-space:pre-wrap">${esc(r.msg)}</pre>`)}catch(e){toast(e.message)}}
+      openDlg(kind==='mapping'?'已归档 mapping':`已归档 ${f.name}`,`<pre style="white-space:pre-wrap">${esc(r.msg)}</pre>`)}catch(e){toast(e instanceof TypeError?`${f.name} 是文件夹或读取失败，可以压成 zip 再拖`:e.message)}}
     anrPage()};
   const z=$('#arDrop'),pick=$('#arPick');
   z.onclick=()=>pick.click();pick.onchange=()=>send([...pick.files],'log',$('#arV').value.trim());
   z.ondragover=e=>{e.preventDefault();z.classList.add('over')};z.ondragleave=()=>z.classList.remove('over');
-  z.ondrop=e=>{e.preventDefault();z.classList.remove('over');send([...e.dataTransfer.files],'log',$('#arV').value.trim())};
+  z.ondrop=async e=>{e.preventDefault();z.classList.remove('over');const fs=await dropFiles(e);if(fs&&fs.length)send(fs,'log',$('#arV').value.trim())};
   $('#arMap').onclick=()=>anrNewDlg(d.tasks,true);
   $('#arNew').onclick=()=>anrNewDlg(d.tasks,false);
 }

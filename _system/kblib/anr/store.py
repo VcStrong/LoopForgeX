@@ -8,7 +8,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from kblib.core.common import KBError, PERIODS, ROOT, now, read_text, safe_name
-from kblib.core.periods import create_task, is_task, load_meta, log, period_dir, period_names
+from kblib.core.periods import create_task, is_task, load_meta, log, period_dir, period_names, unarchive_if
 from kblib.core.search import index_docs
 from kblib.sources.refresh import _notice
 
@@ -427,6 +427,7 @@ def anr_link(pid, task=None, status=None, note=None, by='用户（网页）'):
             old = e.get('事项', '')
             e['事项'] = target.name if target else ''
             if target and old != target.name:
+                unarchive_if(target.name, f'关联了 ANR / 崩溃问题 {pid}')
                 ch.append(f'关联到「{target.name}」')
                 log(target, 'ANR/崩溃', f'关联问题 {pid}：{p["标题"]}（{p["次数"]} 次；kb_anr 看堆栈）（{by}）')
                 _notice(target, f'关联了 ANR / 崩溃问题 {pid}，用 kb_anr 看合并后的堆栈和样本')

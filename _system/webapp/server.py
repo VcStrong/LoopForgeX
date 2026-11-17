@@ -167,6 +167,8 @@ class H(BaseHTTPRequestHandler):
         if u.path.startswith('/ui/'):                    # 共用功能层和各套界面模板的静态文件
             r = ui_file(u.path[4:])
             return self._send(200, *r) if r else self._send(404, {'error': 'not found'})
+        if u.path.startswith('/fs/'):                    # 资料文件按路径下发：html 预览里的相对资源（img/a.png）能找到
+            return send_file(self, unquote(u.path[3:]), q)
         r = router.find('GET', u.path)
         if not r:
             return self._send(404, {'error': 'not found'})
@@ -232,6 +234,7 @@ def main(port=11555, host=''):
     kb.dev_reattach()
     threading.Thread(target=watcher, daemon=True).start()
     threading.Thread(target=dev_tick, daemon=True).start()
+    threading.Thread(target=health_auto, daemon=True).start()
     if kb.ZT_HOURS > 0:
         kb.ZT_STATE['next'] = time.strftime('%Y-%m-%d %H:%M', time.localtime(time.time() + 120))
         threading.Thread(target=zentao_auto, daemon=True).start()

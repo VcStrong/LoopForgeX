@@ -83,6 +83,7 @@ def main():
                 c = data.get(serial) or {}
                 if c.get('期') != period or not devlock.valid(c, now):
                     c = {'期': period, '方式': '自动', '开始': devlock.stamp()}
+                    devlock.touch_recent([serial], now)
                 c.update(分支=os.environ.get('KB_BRANCH', ''), 仓库=os.environ.get('KB_REPO', ''), 最后使用=now)
                 data[serial] = c
     except OSError:

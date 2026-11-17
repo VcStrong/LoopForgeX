@@ -11,6 +11,7 @@ from kblib.core.common import KBError, PERIODS, ROOT, load_settings, now, read_t
 from kblib.core.periods import create_task, is_task, load_meta, log, period_dir, period_names, save_meta, set_status
 from kblib.core.notes import add_note
 from kblib.core.baseinfo import base_load, base_secret
+from kblib.infra import timing
 from kblib import lazy
 _devprep = lazy('kblib.ai.devprep')      # 上层模块：用到时才 import（不形成循环）
 _devsession = lazy('kblib.ai.devsession')      # 上层模块：用到时才 import（不形成循环）
@@ -22,9 +23,11 @@ _bug_index = lazy('kblib.bugs.index')      # 上层模块：用到时才 import�
 # 每个插件一个 plugin.json（名称、说明、命令、默认时机、识别文件、超时、配置项、提交说明＝手动「运行一次」后提交用的说明），在网页「⚙ 设置 → 插件」挂载并选时机。
 # 运行时 cwd 是插件目录，环境变量带上期名、仓库、分支、文档目录和配置；退出码非 0 算失败（记成非阻断问题，不拦截开发）。
 PLUGIN_DIR = ROOT / '插件'
-PLUGIN_EVENTS = {'开发开始': '网页点「开始开发 / 继续开发」后、启动后台 AI 之前',
-                 '开发完成': '期状态改为「已完成」时（AI 用 kb_set_status 标完成，或在网页 / 终端修改）'}
-PLUGIN_ENV = {'KB_EVENT': '时机（开发开始 / 开发完成）', 'KB_PERIOD': '期名', 'KB_PERIOD_DIR': '这一期的资料目录',
+# 能挂插件的时机来自统一的时机清单（infra/timing.py TIMINGS，和代码更新共用）：时机 id → 说明。
+# 设置里存新 id；旧配置的中文名（开发开始 / 开发完成）照样认，旧配置里的「开发开始」顺带全栈各端首轮开工。
+PLUGIN_EVENTS = {t['id']: f'{t["名称"]}：{t["说明"]}' for t in timing.TIMINGS if t['id'] in timing.PLUGIN_TIMINGS}
+PLUGIN_ENV = {'KB_EVENT': '时机名（开发开始 / 开发完成 / 手动运行 / Bug修复前；全栈各端首轮开工也是「开发开始」）',
+              'KB_TIMING': '时机 id（dev_start / end_start / bug_fix / done / manual）', 'KB_PERIOD': '期名', 'KB_PERIOD_DIR': '这一期的资料目录',
               'KB_REPO': '代码仓库绝对路径', 'KB_BRANCH': '当前分支', 'KB_DOCS': '开发流程的文档目录（可能为空）',
               'KB_PLUGIN_CONFIG': '设置里填的配置项（JSON）', 'KB_ROOT': '知识库根目录', 'KB_PYTHON': '知识库用的 Python',
               'KB_CLI': '知识库命令行入口 kb.py（用 KB_PYTHON 运行）',
@@ -64,7 +67,9 @@ def plugins():
                                             if x.get('类型', '').startswith('select:') else ''))
                for x in man.get('配置项', [])}
         out.append(dict(man, **base, 启用=bool(c.get('启用')) or bsrc, 工具=tool, Bug平台=bsrc,
-                        时机=[] if tool or bsrc else [e for e in c.get('时机', man.get('默认时机', [])) if e in PLUGIN_EVENTS],
+                        按需=bool(man.get('按需')) and not tool and not bsrc,
+                        时机=[] if tool or bsrc else timing.timing_ids(c.get('时机', man.get('默认时机', [])),
+                                                                      legacy='时机' not in c or any(e in timing._ALIAS for e in c['时机'])),
                         配置=dict(dft, **c.get('配置', {}))))
     return out
 
@@ -79,9 +84,10 @@ def get_plugin(pid):
 def save_plugin(pid, enabled, events, config=None):
     """网页「⚙ 设置 → 插件」：挂载 / 卸下，选时机，填配置。"""
     p = get_plugin(pid)
-    bad = [e for e in events if e not in PLUGIN_EVENTS]
+    bad = [e for e in events if timing._ALIAS.get(e, e) not in PLUGIN_EVENTS]
     if bad:
-        raise KBError(f'不支持的时机：{"、".join(bad)}；可选 {" / ".join(PLUGIN_EVENTS)}')
+        raise KBError(f'这些时机不能挂插件：{"、".join(bad)}；可选 {" / ".join(PLUGIN_EVENTS)}')
+    events = timing.timing_ids(events)
     if p.get('工具') or p.get('Bug平台'):
         events = []
     elif enabled and not events:
@@ -91,7 +97,7 @@ def save_plugin(pid, enabled, events, config=None):
                                    '配置': {k: str(v) for k, v in (config or {}).items()
                                             if k in {x['键'] for x in p.get('配置项', [])}}}
     save_settings(s)
-    return f'插件「{p["名称"]}」' + ((f'已挂载：{"、".join(events)}' if events else '已挂载（按需调用）') if enabled else '已卸下')
+    return f'插件「{p["名称"]}」' + ((f'已挂载：{"、".join(timing.timing_get(e)["名称"] for e in events)}' if events else '已挂载（按需调用）') if enabled else '已卸下')
 
 
 def add_plugin_dir(path):
@@ -193,7 +199,76 @@ def notify_plugins(title, text, kind=''):
 
 
 def tool_plugins():
-    return [p for p in plugins() if p.get('工具') and not p.get('错误')]
+    """能用 kb_plugin_call 调的插件：「类型: 工具」的，加上写了「按需: true」的时机插件（如多语言拉取：挂时机照跑，开发途中也能调一次）。"""
+    return [p for p in plugins() if (p.get('工具') or p.get('按需')) and not p.get('错误')]
+
+
+I18N_CAP = '多语言'
+
+
+def i18n_plugin(root=''):
+    """已挂载、声明「能力: 多语言」、能按需调用的插件；给了仓库时还要求仓库里有它的识别文件（如 i18n_resource）。没有返回 None。"""
+    for p in tool_plugins():
+        if not p['启用'] or I18N_CAP not in (p.get('能力') or []):
+            continue
+        if root and any(not (Path(root) / x).exists() for x in p.get('识别文件', [])):
+            continue
+        return p
+    return None
+
+
+def i18n_hint(period='', root='', repo_arg=''):
+    """仓库里有 i18n_resource 且挂了多语言拉取插件时，给开发 / 跟进 / Bug 修复会话的一句话：缺 key 先调插件拉，别停下等人在 AS 里拉。
+    repo_arg：会话不在本期开发仓库里（如 Bug 修复的 worktree）时，调用要带 仓库=<路径>。没挂 / 仓库不认返回空串。"""
+    if not root:
+        return ''
+    try:
+        p = i18n_plugin(root)
+    except Exception:          # noqa: BLE001 — 提示词附加项，出错不影响会话启动
+        return ''
+    if not p:
+        return ''
+    args = [f'仓库={repo_arg}'] if repo_arg else []
+    call = f'kb_plugin_call(plugin="{p["id"]}", args={json.dumps(args, ensure_ascii=False)}' + (f', iteration="{period}")' if period else ')')
+    return (f'- 缺多语言 key（代码 / 布局里用到的 i18n_ / 文案 key 在 i18n_resource 里还没有，编译报找不到资源）时，'
+            f'不要停下来记「需要在 AS 里拉多语言」：先 {call} 用「{p["名称"]}」插件在当前分支上拉一次'
+            '（它会排队等仓库空出来，不切分支、不 push，只把插件改的文件原样单独提交「chore(i18n): 拉取多语言」）；'
+            '拉到的文件不手改，拉完再编译。翻译平台上确实还没有这个 key（拉完仍缺）才用 kb_issue 记下（写清缺哪些 key），然后继续')
+
+
+_I18N_WORDS = ('多语言', 'i18n', 'I18N', 'strings_auto', '翻译平台', '拉取翻译')
+
+
+def i18n_issue_tip(period, text):
+    """kb_issue 记的是「要拉多语言 / 缺 key」这类问题且插件能用时，回给会话的提示：直接调插件，不要停。"""
+    if not any(w in (text or '') for w in _I18N_WORDS):
+        return ''
+    try:
+        m = load_meta(period_dir(period))
+        p = i18n_plugin(m.get('开发仓库') or '')
+    except Exception:          # noqa: BLE001
+        return ''
+    if not p:
+        return ''
+    return (f'\n\n【多语言可以自己拉】这一期挂了「{p["名称"]}」插件：现在就调用 kb_plugin_call(plugin="{p["id"]}", iteration="{period}")'
+            '（Bug 修复的 worktree 里加 args=["仓库=<worktree 路径>"]）在当前分支上拉一次，它会把改动单独提交 chore(i18n)；'
+            '拉到后编译继续开发，不要停下等人在 AS 里拉。拉完 key 仍缺（翻译平台上还没有）才需要用户处理。')
+
+
+QA_CAP = 'QA用例'
+
+
+def qa_case_hint(period=''):
+    """挂了声明「能力: QA用例」的工具插件（如 case 生成平台）时，给开发会话的一句话：缺 QA 用例就用它生成并拉回。没挂返回空串。"""
+    p = next((x for x in tool_plugins() if x['启用'] and QA_CAP in (x.get('能力') or [])), None)
+    if not p:
+        return ''
+    name = period or '<期名>'
+    return (f'- SDD 流程提示缺少 QA 用例（QA Case / 黑盒用例 tests/blackbox/blackbox-test.md / QA PRD / agent-test.json）时，'
+            f'不要停下等人手工补：用 kb_plugin_call(plugin="{p["id"]}", args=["自动", "{name}"], iteration="{name}") '
+            f'在「{p["名称"]}」上给本期生成并拉回（平台上已有这期的需求会直接用，产物进「其他资料/QA用例/」并拷进 SDD 文档目录）；'
+            '还在生成就过几分钟再调一次「自动」，提示 PRD 开放问题时按本期资料用「回答」写回，'
+            '卡在要人处理的地方（如平台缺 Confluence 凭据）用 kb_issue 记下后继续开发')
 
 
 def call_plugin(pid='', args=(), period='', by='Claude'):
@@ -205,13 +280,17 @@ def call_plugin(pid='', args=(), period='', by='Claude'):
             return '没有挂载的工具插件（网页「⚙ 设置 → 插件」挂载）' + (
                 f'；未挂载的：{"、".join(p["名称"] for p in ts)}' if ts else '')
         return '可调用的工具插件：\n' + '\n'.join(
-            f'- {p["id"]}：{p.get("说明") or ""}' + (f'\n  参数：{p["参数"]}' if p.get('参数') else '') for p in on)
+            f'- {p["id"]}：{p.get("说明") or ""}' + ('（时机插件，也可按需调用：在仓库当前分支上运行一次）' if p.get('按需') else '')
+            + (f'\n  参数：{p["参数"]}' if p.get('参数') else '') for p in on)
     p = next((x for x in ts if pid in (x['id'], x.get('名称'))), None)
     if not p:
         raise KBError(f'没有这个工具插件：{pid}（{"、".join(x["id"] for x in ts) or "还没有工具插件"}）')
     if not p['启用']:
         raise KBError(f'插件「{p["名称"]}」还没挂载：在网页「⚙ 设置 → 插件」点「挂载」并填好配置')
     d = period_dir(period) if period else None
+    if p.get('按需'):            # 时机插件按需调用：走「运行一次」的流程（排队、在当前分支运行、只提交插件改的文件），不切分支、不 push
+        from kblib.plugins.run import plugin_call_now
+        return plugin_call_now(p, d, args, by=by)
     env = _plugin_env(p, by, KB_EVENT='调用', KB_PERIOD=d.name if d else '', KB_PERIOD_DIR=str(d) if d else '')
     cmd = [sys.executable if x == '{python}' else x for x in p['命令']] + [str(a) for a in args]
     try:
@@ -332,12 +411,15 @@ def task_push(period, text='', by='用户（网页）'):
 
 
 def run_plugins(event, d, root='', branch='', docs='', only=''):
-    """在某个时机运行挂载的插件（only：手动运行指定插件，不看挂载和时机）。返回给人 / AI 看的结果，没有插件运行时为空。"""
+    """在某个时机运行挂载的插件（only：手动运行指定插件，不看挂载和时机）。返回给人 / AI 看的结果，没有插件运行时为空。
+    event：时机 id（dev_start …）或旧中文名；插件拿到的 KB_EVENT 仍是旧名（开发开始 / 开发完成 / 手动运行），KB_TIMING 是 id。"""
+    t = timing.timing_get(event)
+    tid, event = t['id'], t.get('事件') or t['名称']
     res = []
     for p in plugins():
         if only and p['id'] != only:
             continue
-        if not only and not (p['启用'] and event in p['时机']) or p.get('工具') or p.get('Bug平台'):
+        if not only and not (p['启用'] and tid in p['时机']) or p.get('工具') or p.get('Bug平台'):
             continue
         name = p.get('名称') or p['id']
         if p.get('错误'):
@@ -354,7 +436,7 @@ def run_plugins(event, d, root='', branch='', docs='', only=''):
             continue
         before = _git_changed(root)
         try:
-            env = _plugin_env(p, f'插件 {event}', KB_EVENT=event, KB_PERIOD=d.name if d else '', KB_PERIOD_DIR=str(d or ''), KB_REPO=str(root),
+            env = _plugin_env(p, f'插件 {event}', KB_EVENT=event, KB_TIMING=tid, KB_PERIOD=d.name if d else '', KB_PERIOD_DIR=str(d or ''), KB_REPO=str(root),
                               KB_BRANCH=branch or '', KB_DOCS=str(docs or ''))
         except KBError as e:
             res.append(f'插件「{name}」没有运行：{e}')
@@ -371,7 +453,7 @@ def run_plugins(event, d, root='', branch='', docs='', only=''):
             ok, out = False, f'启动失败：{e}'
         after = _git_changed(root)
         changed = sorted(f for f in set(before) | set(after) if before.get(f) != after.get(f))
-        head = (f'插件「{name}」（{event}）{"完成" if ok else "失败"}，用时 {time.time() - t0:.0f} 秒，'
+        head = (f'插件「{name}」（{t["名称"]}）{"完成" if ok else "失败"}，用时 {time.time() - t0:.0f} 秒，'
                 + (f'仓库 {root.name} 有 {len(changed)} 个文件改动' if changed else '没有文件改动'))
         if d:
             log(d, '插件', f'{head}：{out[-1500:]}')
@@ -380,14 +462,3 @@ def run_plugins(event, d, root='', branch='', docs='', only=''):
                        key=f'插件:{p["id"]}:{event}')
         res.append(head + (f'\n{out[-3000:]}' if out else ''))
     return '\n\n'.join(res)
-
-
-def run_plugin_now(pid, period, event='开发开始'):
-    """手动运行一次（网页「运行一次」/ kb plugin run），用这一期的开发仓库。"""
-    d = period_dir(period)
-    m = load_meta(d)
-    root = m.get('开发仓库') or ''
-    if not root:
-        raise KBError(f'「{d.name}」还没有确定开发仓库（开始开发时会确定）')
-    cur = _devprep._git(Path(root), 'branch', '--show-current').stdout.strip() if Path(root).is_dir() else ''
-    return run_plugins(event, d, root, cur, m.get('SDD目录', ''), only=get_plugin(pid)['id']) or '没有运行'

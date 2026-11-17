@@ -23,9 +23,10 @@ async function overview(){
   try{d.adds=(await api('/api/adds')).items}catch(_){d.adds=[]}
   sideNav(d);
   const tasks=d.periods.filter(p=>p.kind==='事项');d.periods=d.periods.filter(p=>p.kind!=='事项');
-  const cnt=s=>d.periods.filter(p=>s==='全部'||p.status===s).length;
+  const cnt=s=>d.periods.filter(p=>s==='全部'?p.status!=='已完成':p.status===s).length;
   const sum=k=>d.periods.concat(tasks).reduce((a,p)=>a+(p[k]||0),0);
-  const list=d.periods.filter(p=>ovFilter==='全部'||p.status===ovFilter);
+  const list=d.periods.filter(p=>ovFilter==='全部'?p.status!=='已完成':p.status===ovFilter);   // 「全部」= 在推进的；做完的折叠在后面
+  const doneList=ovFilter==='全部'?d.periods.filter(p=>p.status==='已完成'):[];
   const tag=(cls,t,tip)=>`<span class="badge ${cls}"${tip?` title="${esc(tip)}"`:''}>${t}</span>`;
   const card=p=>`<a class="pcard2" href="#/p/${enc(p.name)}">
     <div class="cover">${p.cover?`<img loading="lazy" src="${fileUrl(p.cover)}" alt="">`:`<div class="ph">${esc((p.name.split('-').slice(1).join('-')||p.name).slice(0,8))}</div>`}
@@ -51,8 +52,9 @@ async function overview(){
   </section>
   <section class="stw" id="ovStw">${stwHtml(ovStw)}</section>
   <section class="wstat" id="ovStats">${statsHtml(ovStats)}</section>
-  <div class="fchips">${['全部',...ORDER].map(s=>`<button class="fchip ${s===ovFilter?'on':''}" data-f="${s}">${s}<b>${cnt(s)}</b></button>`).join('')}</div>
-  <section class="pgrid">${list.map(card).join('')||'<p class="mut">这个状态下还没有期。</p>'}</section>
+  <div class="fchips">${['全部',...ORDER].map(s=>`<button class="fchip ${s===ovFilter?'on':''}" data-f="${s}">${s==='全部'?'在推进':s}<b>${cnt(s)}</b></button>`).join('')}</div>
+  <section class="pgrid">${list.map(card).join('')||'<p class="mut">'+(ovFilter==='全部'?'没有在推进的期。':'这个状态下还没有期。')+'</p>'}</section>
+  ${doneList.length||d.archived?`<details style="margin-top:10px"><summary class="small mut">最近完成 ${doneList.length} 期${d.archived?`　·　<a href="#/archive">📦 已归档 ${d.archived} 个 →</a>`:''}</summary><section class="pgrid" style="margin-top:8px">${doneList.map(card).join('')}</section></details>`:''}
   <div class="row" style="justify-content:space-between;margin-top:22px"><h2 style="margin:0">事项 <span class="mut small" style="font-weight:400">不是产品需求、但要推动的工作：用户上报的 ANR、加埋点、线上问题、优化、调研、其他</span></h2><button id="ovTask">＋ 新建事项</button></div>
   ${taskTable(tasks)}
   ${d.adds&&d.adds.length?`<h2>模糊添加 <a class="small" id="ovAdd" style="font-weight:normal">查看全部</a></h2>${d.adds.slice(0,3).map(addRec).join('')}`:''}

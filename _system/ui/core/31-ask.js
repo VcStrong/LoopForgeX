@@ -6,7 +6,7 @@ async function askLoad(){
   let r;try{r=await api('/api/chat')}catch(e){return}
   const box=$('#askLog'),hint=`<div class="mut small">把东西交给我就行：需求、日志、Bug、账号、文件……我归到对应的地方，接着往下推（资料齐了出方案、日志建事项、Bug 只读分析）；要动代码的给你一个确认按钮，拍板、开工、验收在页面上点。${(r['规矩']||[]).length?`<br>记着的规矩：${r['规矩'].map(x=>esc(x['内容'])).join('；')}`:''}</div>`;
   box.innerHTML=hint+r['对话'].map(x=>`<div class="aq">${esc(x['问'])}${(x['文件']||[]).length?`<div class="small mut">📎 ${x['文件'].map(esc).join('、')}</div>`:''}</div>`+(x['状态']==='思考中'?'<div class="aa mut">思考中…（会用知识库工具查，可能要一两分钟）</div>'
-    :`<div class="aa ${x['状态']==='出错'?'err':''}">${md(x['答']||'').html.replace(/href="(#[^"]*)" target="_blank" rel="noopener"/g,'href="$1"')}${x['提议']?propHtml(x['提议'],x['编号']):''}</div>`)).join('');
+    :`<div class="aa ${x['状态']==='出错'?'err':''}">${md(x['答']||'').html.replace(/href="(#[^"]*)" target="_blank" rel="noopener"/g,'href="$1"')}${x['提议']?propHtml(x['提议'],x['编号']):''}${x['参与']?`<div class="small mut" title="这次回答请过的角色团专家">${esc(x['参与'])}</div>`:''}</div>`)).join('');
   bindProp(box,'/api/chat/confirm');
   box.scrollTop=box.scrollHeight;$('#askSt').textContent=r['思考中']?'思考中…':'';
   clearTimeout(askTimer);if(r['思考中']&&!$('#askPanel').hidden)askTimer=setTimeout(askLoad,3000);
@@ -28,15 +28,25 @@ function bindProp(root,url,extra){
       try{toast((await post(url,{id:box.dataset.prop,repo:box.querySelector('[data-prepo]').value.trim(),branch:br.value.trim(),...(extra||{})})).msg.split('\n')[0])}catch(err){toast(err.message);b.disabled=false;b.textContent='▶ 推动'}
       askLoad();if(typeof loadStw==='function')loadStw()}})}
 let askStaged=[];
-function askFilesShow(){$('#askFiles').innerHTML=askStaged.map((f,i)=>`<span>${esc(f.name)} <a data-afx="${i}">✕</a></span>`).join('');
+function askFilesShow(){$('#askFiles').innerHTML=askStaged.map((f,i)=>`<span>${f.n?`📁 ${esc(f.name)}（${f.done<f.n?`上传中 ${f.done}/${f.n}`:`${f.n} 个文件`}）`:esc(f.name)}${f.done<f.n?'':` <a data-afx="${i}">✕</a>`}</span>`).join('');
   $('#askFiles').querySelectorAll('[data-afx]').forEach(a=>a.onclick=()=>{askStaged.splice(+a.dataset.afx,1);askFilesShow()})}
-async function askStage(fs){for(const f of fs){try{const r=await fetch('/api/chat/stage',{method:'POST',headers:{'X-Filename':encodeURIComponent(f.name)},body:f});
-  const j=await r.json();if(!r.ok)throw new Error(j.error||'上传失败');askStaged.push({id:j.id,name:f.name})}catch(e){toast(f.name+'：'+e.message)}}askFilesShow()}
-async function askSend(){const v=$('#askIn').value.trim();if(!v&&!askStaged.length)return;
+const askUp=async(f,sid)=>{const r=await fetch('/api/chat/stage',{method:'POST',headers:{'X-Filename':encodeURIComponent(f.name),...(sid?{'X-Stage':sid}:{})},body:f});
+  const j=await r.json();if(!r.ok)throw new Error(j.error||'上传失败');return j.id};
+const askErr=(f,e)=>toast(e instanceof TypeError?`${f.name} 是文件夹或读取失败，可以压成 zip 再拖`:f.name+'：'+e.message);
+// 拖进来的文件夹（名字带 logs/… 的一组）整个传到同一个暂存目录，面板上只显示一个「📁 logs（87 个文件）」
+async function askStage(fs){
+  const dirs={},single=[];for(const f of fs){const k=f.name.includes('/')?f.name.split('/')[0]:'';if(k)(dirs[k]=dirs[k]||[]).push(f);else single.push(f)}
+  for(const f of single){try{askStaged.push({id:await askUp(f),name:f.name})}catch(e){askErr(f,e)}askFilesShow()}
+  for(const [name,list] of Object.entries(dirs)){const it={id:'',name,n:list.length,done:0};askStaged.push(it);askFilesShow();
+    try{it.id=await askUp(list[0]);it.done=1;askFilesShow();let k=1;
+      await Promise.all(Array.from({length:4},async()=>{while(k<list.length){const f=list[k++];await askUp(f,it.id);it.done++;if(it.done%10===0||it.done===it.n)askFilesShow()}}))}
+    catch(e){toast(`文件夹 ${name} 没传完：${e instanceof TypeError?'有文件读取失败':e.message}，可以压成 zip 再拖`);askStaged.splice(askStaged.indexOf(it),1)}
+    askFilesShow()}}
+async function askSend(){const v=$('#askIn').value.trim();if(!v&&!askStaged.length)return;if(askStaged.some(f=>f.n&&f.done<f.n))return toast('文件夹还在上传，传完再发');
   try{await post('/api/chat/ask',{text:v,files:askStaged.map(f=>f.id),page:decodeURIComponent(location.hash.slice(1)||'/')});$('#askIn').value='';askStaged=[];askFilesShow();askLoad()}catch(e){toast(e.message)}}
 $('#askFile').onchange=e=>{askStage([...e.target.files]);e.target.value=''};
 const ap=$('#askPanel');ap.addEventListener('dragover',e=>{e.preventDefault();ap.classList.add('drop')});ap.addEventListener('dragleave',()=>ap.classList.remove('drop'));
-ap.addEventListener('drop',e=>{e.preventDefault();ap.classList.remove('drop');if(e.dataTransfer.files.length)askStage([...e.dataTransfer.files])});
+ap.addEventListener('drop',async e=>{e.preventDefault();ap.classList.remove('drop');const fs=await dropFiles(e,{n:2000,bytes:2*1024**3});if(fs&&fs.length)askStage(fs)});
 $('#askIn').addEventListener('paste',e=>{const fs=[...(e.clipboardData||{}).files||[]];if(fs.length){e.preventDefault();askStage(fs)}});
 $('#askFab').onclick=()=>askOpen(true);$('#askX').onclick=()=>askOpen(false);$('#askGo').onclick=askSend;
 $('#askIn').onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();askSend()}};

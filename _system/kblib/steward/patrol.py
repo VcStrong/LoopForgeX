@@ -212,6 +212,17 @@ def _observe():
     if svn:
         cards.append({'id': 'bug-svn:' + ','.join(svn), '类型': '待你', '标题': f'{len(svn)} 个 Bug 修好了，等你提交到 svn',
                       '说明': '、'.join(svn[:8]), '为什么': 'svn 一提交就进服务器，只能你点；没提交前同一工作副本的其他修复会排队。', '按钮': '去提交', '链接': '#/bugs'})
+    try:
+        from kblib.bugs.fix import BLOCK_ALERT_MIN, fix_blocked
+        blocked = fix_blocked()
+    except Exception:
+        blocked = []
+    if blocked:
+        ids = [x['编号'] for x in blocked]
+        cards.append({'id': 'bug-fixblock:' + ','.join(ids) + ':' + min(x['阻塞起'] for x in blocked), '类型': '待你',
+                      '标题': f'{len(ids)} 个 Bug 的修复排队受阻超过 {BLOCK_ALERT_MIN} 分钟', '说明': '；'.join(f'{x["编号"]}：{x["原因"][:60]}' for x in blocked[:3]),
+                      '为什么': '修复队列卡住不会自己好：到 Bug 页「修复进度」看改动，一键收起改动并继续，或把改动提交成这个 Bug 的修复。',
+                      '按钮': '去处理', '链接': '#/bugs'})
 
     for n in period_names():
         d = PERIODS / n
@@ -377,7 +388,7 @@ def _act(go, st):
         _save_state(st)
         ids = [d['对象'] for d in bugs]
         try:
-            msg = _an.bug_analyze(ids, by='管家（自动）')
+            msg = _an.bug_analyze(ids, by='管家（自动）', auto=True)       # 自动发起：角色团派单指定 sonnet
             res = '已开始'
         except Exception as e:
             msg, res = str(e), '失败'
@@ -389,7 +400,7 @@ def _act(go, st):
         done[d['键']] = now()
         _save_state(st)
         try:
-            msg, res = stack_plan_start(d['对象'], by='管家（自动）'), '已开始'
+            msg, res = stack_plan_start(d['对象'], by='管家（自动）', auto=True), '已开始'
         except Exception as e:
             msg, res = str(e), '失败'
         out.append(_record(方式='自动', 动作='出方案', 对象=d['对象'], 数量=1, 结果=res, 说明=msg, 依据=d['依据'],

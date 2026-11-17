@@ -1,14 +1,14 @@
 // ==== 设置：界面、管家、引擎、角色、流程、插件
 // ---------------- 设置：开发流程（其他研发组可改成自己的流程）
 function plDlg(d,p,mount){
-  const ev=Object.keys(d.pluginEvents), on=new Set(p['时机']);
+  const on=new Set(p['时机']);
   const field=c=>{const v=p['配置'][c['键']]||'', id='plc_'+c['键'];
     const inp=c['类型']==='base'?`<select data-pc="${esc(c['键'])}"><option value="">（不选）</option>${(d.baseEntries||[]).map(b=>`<option value="${esc(b['编号'])}" ${b['编号']===v?'selected':''}>${esc(b['编号']+' '+b['名称'])}</option>`).join('')}</select>`
       :(c['类型']||'').startsWith('select:')?`<select data-pc="${esc(c['键'])}">${c['类型'].slice(7).split('|').map(o=>`<option ${o===v?'selected':''}>${esc(o)}</option>`).join('')}</select>`
       :`<input type="text" data-pc="${esc(c['键'])}" value="${esc(v)}" placeholder="${esc(c['示例']?'如：'+c['示例']:c['默认']?'默认 '+c['默认']:'')}">`;
     return `<label>${esc(c['标题'])}${inp}${c['说明']?`<span class="small mut">${esc(c['说明'])}</span>`:''}</label>`};
   openDlg(`${mount?'挂载':'设置'}插件 · ${p['名称']}`,`<div class="form"><div class="small mut">${esc(p['说明']||'')}</div>
-    ${p['工具']?`<div class="small"><b>按需调用</b>　<span class="mut">不挂时机：在对话里把${esc(p['参数']||'参数')}给 Claude（它用 kb_plugin_call 调用），或终端 <code>kb plugin call ${esc(p.id)} …</code></span></div>`:`<div><b class="small">在什么时候运行</b>${ev.map(e=>`<label class="small" style="display:block;margin-top:4px"><input type="checkbox" data-pe="${esc(e)}" ${on.has(e)?'checked':''}> <b>${esc(e)}</b>　<span class="mut">${esc(d.pluginEvents[e])}</span></label>`).join('')}</div>`}
+    ${p['工具']?`<div class="small"><b>按需调用</b>　<span class="mut">不挂时机：在对话里把${esc(p['参数']||'参数')}给 Claude（它用 kb_plugin_call 调用），或终端 <code>kb plugin call ${esc(p.id)} …</code></span></div>`:`<div><b class="small">在什么时候运行</b> <span class="small mut">（同一个时机里先按「⏱ 时机」更新代码，再跑插件）</span>${d.timings.map(t=>`<label class="small" style="display:block;margin-top:4px${t['插件']?'':';opacity:.6'}" title="${esc(t['插件']||t['插件总是']?t['说明']:t['插件原因'])}"><input type="checkbox" ${t['插件']?`data-pe="${esc(t.id)}" ${on.has(t.id)?'checked':''}`:t['插件总是']?'checked disabled':'disabled'}> <b>${esc(t['名称'])}</b>　<span class="mut">${esc(t['插件']?t['说明']:t['插件总是']?'总是可以：插件卡片上的「运行一次」，或终端 kb plugin run':'— '+t['插件原因'])}</span></label>`).join('')}</div>`}
     ${(p['配置项']||[]).map(field).join('')}
     <div class="row"><button class="pri" id="plOk">${mount?'挂载':'保存'}</button></div></div>`);
   $('#plOk').onclick=async()=>{const events=[...$('#dlgB').querySelectorAll('[data-pe]:checked')].map(x=>x.dataset.pe),config={};
@@ -47,6 +47,7 @@ let setPrevTpl=null,setAdv=false;try{setAdv=!!localStorage.getItem('kb.setAdv')}
 async function settingsPage(){
   await uiTemplate();
   const d=await api('/api/settings');
+  const tName=id=>(d.timings.find(t=>t.id===id)||{})['名称']||id;
   const card=f=>`<div class="bcard"><div class="row" style="justify-content:space-between"><b>${esc(f['名称'])}</b>
       <span>${f['默认']?'<span class="badge st-开发中">默认</span> ':''}<span class="chip">${f['内置']?'内置'+(f['已修改']?' · 已修改':''):'自定义'}</span></span></div>
     <div class="small mut" style="margin:4px 0">${esc(f['说明']||'')}</div>
@@ -58,7 +59,7 @@ async function settingsPage(){
   const pcard=p=>`<div class="bcard"><div class="row" style="justify-content:space-between"><b>${esc(p['名称'])}</b>
       <span>${p['错误']?'<span class="badge st-已暂停">有错误</span>':p['启用']?'<span class="badge st-开发中">已挂载</span>':'<span class="chip">未挂载</span>'}${p['外部']?' <span class="chip">外部目录</span>':''}</span></div>
     <div class="small mut" style="margin:4px 0">${esc(p['错误']||p['说明']||'')}</div>
-    ${p['错误']?'':`<div class="small">${p['工具']?'按需调用'+(p['参数']?'：'+esc(p['参数']):''):'时机：'+(p['启用']?p['时机'].map(esc).join('、'):'（挂载后生效）'+(p['时机'].length?' 默认 '+p['时机'].map(esc).join('、'):''))}
+    ${p['错误']?'':`<div class="small">${p['工具']?'按需调用'+(p['参数']?'：'+esc(p['参数']):''):'时机：'+(p['启用']?p['时机'].map(tName).map(esc).join('、'):'（挂载后生效）'+(p['时机'].length?' 默认 '+p['时机'].map(tName).map(esc).join('、'):''))}
       ${(p['识别文件']||[]).length?' · 仓库里有 '+p['识别文件'].map(x=>'<code>'+esc(x)+'</code>').join(' ')+' 才运行':''}</div>
       ${(p['配置项']||[]).map(c=>{const v=p['配置'][c['键']]||'',b=c['类型']==='base'&&(d.baseEntries||[]).find(x=>x['编号']===v);
         return `<div class="small">${esc(c['标题'])}：<b>${esc(b?v+' '+b['名称']:v||'（空）')}</b></div>`}).join('')}
@@ -71,9 +72,11 @@ async function settingsPage(){
     <div class="small mut" style="margin:4px 0">${esc(e['说明']||'')}</div>
     <div class="small">${st(e)['已安装']?'✅ 已安装 '+esc(st(e)['版本']):'⚪ 未安装（找不到命令 <code>'+esc(e['命令'])+'</code>）'}
       · ${st(e)['已接入']===true?'✅ 已接入知识库':st(e)['已接入']===false?'⚠ 未接入知识库':'知识库接入情况未知'}</div>
+    ${(h=>`<div class="small" style="margin-top:2px">能不能用：<b style="color:${ENG_C[h['状态']]||ENG_C['未检测']}">● ${esc(h['状态']||'未检测')}</b>${h['原因']?` <span style="color:var(--s4)">${esc(h['原因'])}</span>`:''}${h['时间']?` <span class="mut">（${esc(h['时间'])} · ${esc(h['来源']||'')}）</span>`:''}</div>`)(e['健康']||{})}
     <div class="row" style="margin-top:8px"><button data-eed="${esc(e.id)}">编辑</button><button data-ecp="${esc(e.id)}">复制为新引擎</button>
       ${e['默认']?'':`<button data-edf="${esc(e.id)}">设为默认</button>`}
       ${st(e)['已安装']&&st(e)['已接入']!==true?(e['接入命令']?`<button class="pri" data-eln="${esc(e.id)}">接入知识库</button>`:e['接入说明']?`<button data-ehp="${esc(e.id)}">怎么接入</button>`:''):''}
+      ${st(e)['已安装']?`<button data-eprobe2="${esc(e.id)}" title="极短的自检：只回复 OK，看能不能用（登录、额度、网络）">检测</button>`:''}
       ${st(e)['已安装']?`<button data-ets="${esc(e.id)}" title="让它调用一次 kb_overview，验证能运行、能用知识库工具（约半分钟）">测试</button>`:''}
       ${e['内置']?(e['已修改']?`<button data-erm="${esc(e.id)}">恢复默认</button>`:''):`<button class="danger" data-erm="${esc(e.id)}">删除</button>`}</div></div>`;
   let sw=null;try{sw=await api('/api/steward')}catch(_){}
@@ -95,15 +98,30 @@ async function settingsPage(){
         <div class="small mut" style="margin:0 0 8px 106px">后台干活用的编程 AI：出方案、开发、审查、Bug 分析都默认用它。想让不同的活用不同的 AI，打开下面的高级设置。</div>
         <div class="row" style="gap:10px;flex-wrap:wrap;margin:2px 0"><b style="width:96px">开发流程</b><select id="smFlow">${d.flows.map(f=>`<option value="${esc(f.id)}" ${f['默认']?'selected':''}>${esc(f['名称'])}</option>`).join('')}</select></div>
         <div class="small mut" style="margin:0 0 4px 106px">AI 开发时按什么步骤走。不知道选哪个就用「通用」；团队有自己的流程命令或技能，到高级设置里「从命令 / 技能添加」。</div>
+        <div class="row" style="gap:10px;flex-wrap:wrap;margin:8px 0 2px"><b style="width:96px">自动归档</b><select id="smArc" style="width:auto">${[[7,'已完成满 7 天'],[14,'已完成满 14 天'],[30,'已完成满 30 天'],[0,'不自动（只手动归档）']].map(([n,t])=>`<option value="${n}" ${n===d.archiveDays?'selected':''}>${t}</option>`).join('')}</select></div>
+        <div class="small mut" style="margin:0 0 4px 106px">做完的期和事项过一段时间不再出现在侧栏、总览和各种列表里，在「📦 归档」页能搜到、能恢复；又来了 Bug / ANR 会自动回来。</div>
         <div class="row" style="gap:10px;flex-wrap:wrap;margin:8px 0 2px"><b style="width:96px">网页终端</b><label class="row small" style="gap:4px"><input type="checkbox" id="smTerm" ${d.term?'checked':''} style="width:auto;margin:0"> 打开</label></div>
         <div class="small mut" style="margin:0 0 4px 106px">期页面「终端 → ⌨ 我的终端」：在各端仓库里直接敲命令（AI 被拦、要登录、要推送时用）。等于在网页上开放 shell，只能你本人在网页上用；部署到不放心的环境可以关掉。</div></div>`})()}
     ${rp&&rp.items.length?`<h3 style="margin-top:14px">按工程</h3>
     <p class="small mut">每个工程是哪一端、默认用哪套开发流程，随时可改。「自动」：端按仓库里的文件识别；流程按识别文件匹配，匹配不上用上面的默认流程。
       某一期在开发面板单独选了流程以那一期为准；事项默认用轻量流程。在全栈「各端」里给某端选了认不出的工程，也会记到这里。</p>
-    <div class="tw"><table><tr><th>工程</th><th style="width:180px">端</th><th style="width:230px">默认流程</th></tr>
+    <div class="tw"><table><tr><th>工程</th><th style="width:180px">端</th><th style="width:230px">默认流程</th><th style="width:150px" title="对这个工程所有可选的时机生效（锁定的不受影响）；跟随全局 = 按下面「⏱ 时机」表">代码更新</th></tr>
       ${rp.items.map(r=>`<tr><td><b>${esc(r['名称'])}</b>${r['分支']?` <span class="small mut">${esc(r['分支'])}</span>`:''}<div class="small mut mono">${esc(r['路径'].replace(/^\/Users\/[^/]+/,'~'))}</div></td>
         <td><select data-rpend="${esc(r['路径'])}"><option value="">自动${r['远程']?'':r['识别端'].length?'（'+esc(r['识别端'].join(' / '))+'）':'（认不出）'}</option>${(r['端']&&!rp.ends.includes(r['端'])?rp.ends.concat([r['端']]):rp.ends).map(e=>`<option ${e===r['端']?'selected':''}>${esc(e)}</option>`).join('')}</select></td>
-        <td><select data-rpflow="${esc(r['路径'])}"><option value="">自动</option>${d.flows.map(f=>`<option value="${esc(f.id)}" ${f.id===r['默认流程']?'selected':''}>${esc(f['名称'])}</option>`).join('')}</select></td></tr>`).join('')}</table></div>`:''}
+        <td><select data-rpflow="${esc(r['路径'])}"><option value="">自动</option>${d.flows.map(f=>`<option value="${esc(f.id)}" ${f.id===r['默认流程']?'selected':''}>${esc(f['名称'])}</option>`).join('')}</select></td>
+        <td><select data-rpcode="${esc(r['路径'])}"><option value="">跟随全局</option>${['拉最新','只fetch','不动'].map(o=>`<option ${o===r['代码更新']?'selected':''}>${o}</option>`).join('')}</select></td></tr>`).join('')}</table></div>`:''}
+    ${(()=>{const mp=d.plugins.filter(p=>p['启用']&&!p['工具']&&!p['Bug平台']&&!p['错误']);
+      return `<h2 style="margin-top:18px">⏱ 时机</h2>
+    <p class="small mut">知识库在这些时候自动更新代码、跑插件：同一个时机里<b>先更新代码，再跑插件</b>。「代码更新」改的是全局，某个工程要不一样就在上面「按工程」里单独选（工程 &gt; 全局 &gt; 默认）。每次更新都会在那一期的记录里写一条「更新代码」：时机 · 仓库@分支 · 设置 · 实际结果 · 落后远端几个提交。</p>
+    <div class="tw"><table><tr><th>时机</th><th style="width:150px">代码更新</th>${mp.map(p=>`<th style="width:90px;text-align:center" title="勾上 = 这个时机运行插件「${esc(p['名称'])}」">🔌 ${esc(p['名称'])}</th>`).join('')}</tr>
+      ${d.timings.map(t=>`<tr><td><b>${esc(t['名称'])}</b><div class="small mut">${esc(t['说明'])}</div></td>
+        <td>${t['锁定']?`<span title="${esc(t['原因'])}">🔒 ${esc(t['当前'])}</span>`
+          :`<select data-tmc="${esc(t.id)}" title="${esc(t['原因']||'')}">${t['选项'].map(o=>`<option value="${esc(o)}" ${o===t['当前']?'selected':''}>${esc(o)}${o===t['默认']?'（默认）':''}</option>`).join('')}</select>`}</td>
+        ${mp.map(p=>`<td style="text-align:center">${t['插件']?`<input type="checkbox" data-tmp="${esc(p.id)}" data-tmt="${esc(t.id)}" ${p['时机'].includes(t.id)?'checked':''}>`
+          :t['插件总是']?`<span class="mut" title="手动运行总是可以：插件卡片「运行一次」或终端 kb plugin run">总是</span>`:`<span class="mut" title="${esc(t['插件原因'])}">—</span>`}</td>`).join('')}</tr>`).join('')}</table></div>
+    <div class="small mut" style="margin:6px 0">任何设置都绕不过的安全保护：工作区有未提交的改动时只 fetch；仓库被别的会话（开发、修复、插件任务）占着时只 fetch；pull --rebase 冲突就撤销、保持原样；Bug 修复在独立 worktree 里做，不动主工作区。${mp.length?'':'　还没有挂载会自动运行的插件（下面「插件」里挂载）。'}</div>
+    <div class="row"><button id="tmReset">恢复默认</button></div>`})()}
+    ${teamCard(d.team)}
     ${sw?`<h2>🤖 管家</h2>
     <p class="mut">管家每 5 分钟巡检一次：<b>明确又能重做的事自己做</b>（下面勾选的）；<b>你点了就等于批准的</b>（拍板、开工、验收、推动、修复、svn 提交）只提醒你，从不代点；<b>拿不准的</b>只问你一个问题。每天早上 8 点后出一份日报。</p>
     <div class="bcard"><div class="row" style="gap:16px;flex-wrap:wrap">
@@ -137,10 +155,15 @@ async function settingsPage(){
     每一期可以在开发面板单独选流程；不选就按工程的默认流程（上面「按工程」里指定），再按仓库里的识别文件自动匹配，都没有用默认流程。详见 <a href="#/d/使用说明">使用说明</a>。</p>
     <div class="bgrid">${d.flows.map(card).join('')}</div></div>
     <div class="row" style="justify-content:space-between;margin-top:18px"><h2>插件</h2><button id="plAdd">＋ 添加插件目录</button></div>
-    <p class="mut">插件不属于知识库本身（如公司定制的多语言拉取），挂载后在选定的时机自动运行：${Object.entries(d.pluginEvents).map(([k,v])=>`<b>${esc(k)}</b>（${esc(v)}）`).join('；')}。
+    <p class="mut">插件不属于知识库本身（如公司定制的多语言拉取），挂载后在选定的时机自动运行：能挂的时机有 ${d.timings.filter(t=>t['插件']).map(t=>`<b>${esc(t['名称'])}</b>`).join('、')}，在上面「⏱ 时机」表里勾选，或点插件的「时机与配置」。
     把插件文件夹（含 <code>plugin.json</code>）放进 <code>${esc(d.pluginDir.replace(/^\/Users\/[^/]+/,'~'))}</code>，或添加其他目录；运行失败会记成「需要你处理的问题」，不会拦住开发。详见 <a href="#/d/使用说明">使用说明</a>。</p>
     <div class="bgrid">${d.plugins.map(pcard).join('')||'<div class="mut">还没有插件</div>'}</div>`;
   const byId=id=>d.flows.find(f=>f.id===id),eById=id=>d.engines.find(e=>e.id===id),pById=id=>d.plugins.find(p=>p.id===id);
+  if($('#rtSave'))$('#rtSave').onclick=async()=>{
+    const lim=$('#rtLim').value.trim();
+    if(!/^\d+$/.test(lim)||+lim>200)return toast('每期上限要是 0 到 200 之间的整数');
+    try{toast((await post('/api/team',{on:$('#rtOn').checked,tier:(app.querySelector('[name=rtTier]:checked')||{}).value,limit:+lim})).msg)}catch(e){return toast(e.message)}
+    settingsPage()};
   const rl=async b=>{try{toast((await post('/api/chat/rule',b)).msg.split('\n')[0])}catch(e){toast(e.message)}settingsPage()};
   if($('#rlAdd'))$('#rlAdd').onclick=()=>{const v=$('#rlIn').value.trim();if(v)rl({text:v})};
   app.querySelectorAll('[data-rdel]').forEach(a=>a.onclick=async()=>{if(await kbConfirm('删掉这条规矩？'))rl({delete:a.dataset.rdel})});
@@ -151,6 +174,14 @@ async function settingsPage(){
   const rpSet=async b=>{try{toast((await post('/api/repos/settings',b)).msg)}catch(e){toast(e.message)}settingsPage()};
   app.querySelectorAll('[data-rpend]').forEach(s=>s.onchange=()=>rpSet({path:s.dataset.rpend,end:s.value}));
   app.querySelectorAll('[data-rpflow]').forEach(s=>s.onchange=()=>rpSet({path:s.dataset.rpflow,flow:s.value}));
+  app.querySelectorAll('[data-rpcode]').forEach(s=>s.onchange=()=>rpSet({path:s.dataset.rpcode,code:s.value}));
+  const tmSet=async b=>{try{toast((await post('/api/timing',b)).msg)}catch(e){toast(e.message)}settingsPage()};
+  app.querySelectorAll('[data-tmc]').forEach(s=>s.onchange=()=>tmSet({id:s.dataset.tmc,policy:s.value}));
+  if($('#tmReset'))$('#tmReset').onclick=async()=>{if(await kbConfirm('时机的代码更新都恢复默认？（按工程单独选的不变，插件勾选不变）'))tmSet({reset:true})};
+  app.querySelectorAll('[data-tmp]').forEach(c=>c.onchange=async()=>{const p=d.plugins.find(x=>x.id===c.dataset.tmp),ev=new Set(p['时机']);
+    c.checked?ev.add(c.dataset.tmt):ev.delete(c.dataset.tmt);
+    try{toast((await post('/api/plugin',{id:p.id,enabled:true,events:[...ev],config:p['配置']})).msg)}catch(e){toast(e.message)}settingsPage()});
+  $('#smArc').onchange=async e=>{try{toast((await post('/api/archive/days',{days:+e.target.value})).msg)}catch(err){toast(err.message)}settingsPage()};
   $('#smTerm').onchange=async e=>{try{toast((await post('/api/term/enable',{on:e.target.checked})).msg)}catch(err){toast(err.message)}settingsPage()};
   $('#smFlow').onchange=async e=>{try{toast((await post('/api/settings/default',{id:e.target.value})).msg)}catch(err){toast(err.message)}settingsPage()};
   if($('#swSave'))$('#swSave').onclick=async()=>{const acts={};app.querySelectorAll('[data-swa]').forEach(x=>acts[x.dataset.swa]=x.checked);
@@ -173,6 +204,8 @@ async function settingsPage(){
   app.querySelectorAll('[data-edf]').forEach(b=>b.onclick=async()=>{try{toast((await post('/api/engine/default',{id:b.dataset.edf})).msg);render()}catch(e){toast(e.message)}});
   app.querySelectorAll('[data-eln]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{toast((await post('/api/engine/link',{id:b.dataset.eln})).msg);render()}catch(e){toast(e.message);b.disabled=false}});
   app.querySelectorAll('[data-ehp]').forEach(b=>b.onclick=()=>{const e=eById(b.dataset.ehp);openDlg(`把知识库接入 ${e['名称']}`,`<pre style="white-space:pre-wrap">${esc(e['接入说明'])}</pre><button id="ehC">复制</button>`);$('#ehC').onclick=()=>{navigator.clipboard.writeText(e['接入说明']);toast('已复制')}});
+  app.querySelectorAll('[data-eprobe2]').forEach(b=>b.onclick=async()=>{b.disabled=true;b.textContent='检测中…';
+    try{const r=await post('/api/engine/probe',{id:b.dataset.eprobe2});toast(`${r['名称']}：${r['状态']}${r['原因']?' — '+r['原因']:''}（${r['耗时']} 秒）`);engLoad();render()}catch(e){toast(e.message);b.disabled=false;b.textContent='检测'}});
   app.querySelectorAll('[data-ets]').forEach(b=>b.onclick=async()=>{const e=eById(b.dataset.ets);b.disabled=true;b.textContent='测试中…';
     try{const r=await post('/api/engine/test',{id:e.id});openDlg(`测试 ${e['名称']}：${r['成功']?'✅ 成功':'❌ 没通过'}`,`<p class="small mut">退出码 ${r['退出码']} · 用时 ${r['耗时']} 秒</p><pre style="white-space:pre-wrap">${esc(r['结果']||'（没有输出）')}</pre>${r['成功']?'':'<p class="small">没通过时：确认已安装、已登录，「接入知识库」后再试；仍不行就检查启动参数（权限模式是否允许调用知识库工具）。</p>'}`)}
     catch(e){toast(e.message)}b.disabled=false;b.textContent='测试'});
@@ -193,6 +226,23 @@ async function settingsPage(){
     $('#fiF').onchange=async e=>{const x=e.target.files[0];if(x)$('#fiT').value=await x.text()};
     $('#fiGo').onclick=async()=>{let f;try{f=JSON.parse($('#fiT').value)}catch(_){return toast('不是有效的 JSON')}
       delete f.id;try{const r=await post('/api/settings/flow',{flow:f});dlg.close();toast(r.msg);render()}catch(e){toast(e.message)}}};
+}
+function teamCard(t){   // 「⚙ 设置」角色团卡片（REQ-002）：安装状态、开关、档位、每期上限
+  if(!t)return'';
+  const S=t['状态']||{},ok=S['套件已装'],miss=S['缺']||[],df=S['场景表差异']||[];
+  const inst=!ok?`<span style="color:var(--s4)">⚪ 未安装套件</span> <span class="small mut">安装：<code>${esc(S['安装命令']||'')}</code></span>`
+    :miss.length?`<span style="color:var(--warn)">⚠ 已安装 ${S['已安装']}/${S['应有']}，缺：${esc(miss.join('、'))}</span> <span class="small mut">（缺的角色不会被派）</span>`
+    :`✅ 已安装 ${S['已安装']}/${S['应有']} · 套件 ${esc(S['套件版本']||'')}`;
+  return `<h2>🧑‍🤝‍🧑 角色团</h2><div class="bcard" id="rtCard">
+    <div class="small mut" style="margin-bottom:6px">后台会话（问管家、完善需求、出方案、Bug 分析 / 修复、开发确认点、审查、跟进、发布清单）按场景用 Agent 请角色套件里的专家子 agent 出意见：流程命令照旧，专家只出意见，产物照样交回知识库，拍板还是你在网页上点。只对 Claude 引擎生效；每一期可以在开发面板单独关。</div>
+    <div class="small">${inst} · ${S['kb接入']?'✅ kb MCP 已接入':'⚠ kb MCP 未接入（子 agent 查不了知识库）'} · 场景表：${esc(S['场景表']||'')}${df.length?` · <span style="color:var(--warn)" title="${esc(df.join('、'))}">⚠ 套件场景表与内置兜底不同（以套件为准）：${esc(df.slice(0,6).join('、'))}${df.length>6?'…':''}</span>`:''}</div>
+    ${S['默认引擎支持']?'':'<div class="small" style="color:var(--warn);margin-top:4px">当前默认引擎不支持角色团，只在 Claude 引擎的会话生效</div>'}
+    <div class="row" style="gap:16px;flex-wrap:wrap;margin-top:8px">
+      <label title="${ok?'':'先安装角色套件'}"><input type="checkbox" id="rtOn" ${t['开启']?'checked':''} ${ok?'':'disabled'}> 开启</label>
+      <span>档位 ${['精简','标准'].map(x=>`<label style="margin-right:8px" title="${x==='精简'?'每个场景只派少数核心角色（设计由产品经理兼、发布由架构师兼），省钱':'按场景表派全部相关专家'}"><input type="radio" name="rtTier" value="${x}" ${t['档位']===x?'checked':''}> ${x}</label>`).join('')}</span>
+      <label>每期最多调用 <input type="number" id="rtLim" min="0" max="200" step="1" value="${t['每期上限']}" style="width:70px"> 次</label>
+      <button class="pri" id="rtSave">保存</button></div>
+    <div class="small mut" style="margin-top:4px">用完不卡住：不再派角色、原流程照常推进，并记一条记录；调大上限后已用完的期恢复可派。管家自动发起的会话派单用 sonnet。</div></div>`;
 }
 function engineDlg(d,e){
   const fld=([k,lab,typ,help])=>{const v=e[k]??'';let inp;

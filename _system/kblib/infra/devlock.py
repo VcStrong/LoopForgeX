@@ -17,6 +17,7 @@ SYS = Path(__file__).resolve().parents[2]      # kblib/infra/devlock.py → _sys
 ROOT = Path(os.environ.get('KB_ROOT') or SYS.parent)
 FILE = ROOT / '设备占用.json'
 LOCK = ROOT / '.设备占用.lock'
+RECENT = ROOT / '.设备最近使用.json'     # 序列号 → 最近一次被申请的时间；释放后也保留，用来轮流挑手机
 BIN = SYS / 'bin'
 IDLE = {'自动': 30 * 60, '申请': 12 * 3600, '本人': 4 * 3600}   # 多久没用自动释放
 LOOSE = 2 * 3600       # 不是知识库后台会话（终端里手动开发）申请的，没人释放时最多保留这么久
@@ -47,6 +48,24 @@ def locked():
         data = load()
         yield data
         _save(data)
+
+
+def recent():
+    try:
+        return json.loads(RECENT.read_text('utf-8'))
+    except (OSError, ValueError):
+        return {}
+
+
+def touch_recent(sns, t=None):
+    """记下这些手机刚被申请（调用方已持有 locked()）。"""
+    if not sns:
+        return
+    r = recent()
+    r.update({sn: t or time.time() for sn in sns})
+    tmp = RECENT.with_suffix('.tmp')
+    tmp.write_text(json.dumps(r, ensure_ascii=False, indent=1), 'utf-8')
+    tmp.replace(RECENT)
 
 
 def session_alive(period):

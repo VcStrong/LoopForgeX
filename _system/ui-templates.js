@@ -24,7 +24,7 @@
 @keyframes kbtping{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--g) 60%,transparent)}100%{box-shadow:0 0 0 8px transparent}}
 .kbt .caret::after{content:"▍";color:var(--g);animation:kbtblink 1s steps(2) infinite;margin-left:1px}@keyframes kbtblink{50%{opacity:0}}
 @media (prefers-reduced-motion:reduce){.kbt *{animation:none!important;transition:none!important}}
-.kbt .jd{display:grid;gap:7px;min-width:0}.kbt .jd .h{display:flex;justify-content:space-between;gap:4px 8px;align-items:center;flex-wrap:wrap}.kbt .jd .why{font-size:12px;color:var(--mut)}
+.kbt .jd{display:grid;gap:7px;min-width:0}.kbt .jd[data-href]{cursor:pointer}.kbt .jd .h{display:flex;justify-content:space-between;gap:4px 8px;align-items:center;flex-wrap:wrap}.kbt .jd .why{font-size:12px;color:var(--mut)}
 .kbt .jd .acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.kbt .jd select,.kbt .jd input{font:inherit;font-size:12px;padding:4px 8px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--fg);min-width:0;max-width:100%}
 .kbt .jd .fields{display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;font-size:12px}
 .kbt .other{display:grid;gap:6px;margin-top:10px}.kbt .other a{display:block;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--fg);text-decoration:none}
@@ -113,7 +113,7 @@
     } else {
       main = `<div class="acts"><a class="yes" href="${esc(j['链接'] || '#/')}">${esc(j['建议'] || '去看看')}</a>${alts(j)}</div>`;
     }
-    return `<div class="jd" data-j="${esc(j.id)}"><div class="h"><b>${esc(j['问题'])}</b>${conf(j['把握'])}</div>
+    return `<div class="jd" data-j="${esc(j.id)}"${j['链接'] ? ` data-href="${esc(j['链接'])}"` : ''}><div class="h"><b>${esc(j['问题'])}</b>${conf(j['把握'])}</div>
       ${j['主动作'] === 'confirm' || j['主动作'] === 'choose' ? `<div>建议：<b>${esc(j['建议'])}</b></div>` : j['说明'] ? `<div>${esc(j['说明'])}</div>` : ''}
       ${j['理由'] && !opt.short ? `<div class="why">${esc(j['理由'])}</div>` : ''}${main}</div>`;
   }
@@ -193,6 +193,12 @@
     root.querySelectorAll('[data-j]').forEach(box => {
       const sel = box.querySelector('select[data-f="repo"]'), br = box.querySelector('[data-f="branch"]');
       if (sel && br) sel.onchange = () => { br.value = sel.selectedOptions[0].dataset.br || '' };
+      if (box.dataset.href) box.onclick = e => {      // 点卡片文字 / 空白处：有链接就跳过去（按钮、链接、输入框照旧）
+        if (e.defaultPrevented || e.target.closest('a,button,select,input,textarea,label,option')) return;
+        if (String(getSelection && getSelection() || '').trim()) return;
+        if (o.demo) return;
+        e.preventDefault(); location.href = box.dataset.href;
+      };
       box.querySelectorAll('[data-jact]').forEach(btn => btn.onclick = async e => {
         e.preventDefault(); if (o.demo || !o.act) return;
         const v = k => (box.querySelector(`[data-f="${k}"]`) || {}).value || '';

@@ -6,11 +6,11 @@ from webapp.shared import *  # noqa: F401,F403
 @get('/api/settings')
 def _get_api_settings(self, u, q):
     return self._guard(lambda: {'flows': kb.flows(), 'fields': kb.FLOW_FIELDS, 'vars': kb.FLOW_VARS,
-                                'engines': [dict(e, 状态=kb.engine_status(e), 接入说明=kb.engine_link_help(e))
+                                'engines': [dict(e, 状态=kb.engine_status(e), 健康=kb.engine_health_one(e), 接入说明=kb.engine_link_help(e))
                                             for e in kb.engines()],
-                                'roles': kb.role_engines(), 'term': kb.term_enabled(),
+                                'roles': kb.role_engines(), 'team': kb.team_status(), 'term': kb.term_enabled(), 'archiveDays': kb.archive_days(),
                                 'engineFields': kb.ENGINE_FIELDS, 'engineVars': kb.ENGINE_VARS,
-                                'plugins': kb.plugins(), 'pluginEvents': kb.PLUGIN_EVENTS,
+                                'plugins': kb.plugins(), 'pluginEvents': kb.PLUGIN_EVENTS, 'timings': kb.timings(), 'policies': kb.POLICY_TEXT,
                                 'pluginEnv': kb.PLUGIN_ENV, 'pluginDir': str(kb.PLUGIN_DIR),
                                 'baseEntries': [{'编号': e['编号'], '名称': e['名称'], '类型': e.get('类型', '')}
                                                 for e in kb.base_load()['条目']]})
@@ -24,6 +24,16 @@ def _get_api_settings_commands(self, u, q):
 @post('/api/settings/flow', page_only=True)
 def _post_api_settings_flow(self, u, n, body):
     return self._guard(lambda: dict(zip(('msg', 'id'), kb.save_flow(body.get('flow') or {}))))
+
+
+@get('/api/engines/health')
+def _get_api_engines_health(self, u, q):
+    return self._guard(lambda: kb.engine_health())
+
+
+@post('/api/engine/probe', page_only=True)
+def _post_api_engine_probe(self, u, n, body):
+    return self._guard(lambda: kb.engine_probe(body.get('id', '') or '', src='手动检测'))
 
 
 @post('/api/engine/role', page_only=True)
@@ -54,6 +64,18 @@ def _post_api_engine_link(self, u, n, body):
 @post('/api/engine/test', page_only=True)
 def _post_api_engine_test(self, u, n, body):
     return self._guard(lambda: kb.engine_test(body.get('id', '')))
+
+
+@post('/api/team', page_only=True)
+def _post_api_team(self, u, n, body):
+    """角色团全局设置（REQ-002）：只传要改的字段 on / tier / limit。"""
+    return self._guard(lambda: {'msg': kb.set_team(body.get('on'), body.get('tier'), body.get('limit'))})
+
+
+@post('/api/period/team', page_only=True)
+def _post_api_period_team(self, u, n, body):
+    """期级角色团覆盖（REQ-003）：mode=跟随 / 关。"""
+    return self._guard(lambda: {'msg': kb.set_period_team(body.get('period', ''), body.get('mode') or '跟随')})
 
 
 @post('/api/period/engine', page_only=True)
@@ -88,4 +110,14 @@ def _get_api_repos_settings(self, u, q):
 
 @post('/api/repos/settings', page_only=True)
 def _post_api_repos_settings(self, u, n, body):
-    return self._guard(lambda: {'msg': kb.repo_set(body.get('path', ''), body.get('end'), body.get('flow'))})
+    return self._guard(lambda: {'msg': kb.repo_set(body.get('path', ''), body.get('end'), body.get('flow'), code=body.get('code'))})
+
+
+@get('/api/timings')
+def _get_api_timings(self, u, q):
+    return self._guard(lambda: {'items': kb.timings(), 'policies': kb.POLICY_TEXT})
+
+
+@post('/api/timing', page_only=True)
+def _post_api_timing(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.reset_timings() if body.get('reset') else kb.save_timing(body.get('id', ''), body.get('policy', ''))})

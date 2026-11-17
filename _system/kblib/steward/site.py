@@ -55,6 +55,7 @@ def site_nav(ov, docs=(), full=False):
            {'名称': 'Bug', '图标': '🐞', '链接': '#/bugs', '数': zt.get('pending', 0), '提示': '待归纳（未关闭）'},
            {'名称': 'ANR / 崩溃', '图标': '💥', '链接': '#/anr', '数': anr.get('todo', 0), '提示': '待处理'},
            *[{'名称': t['名称'], '图标': t['图标'], '链接': t['链接'], '数': t['待确认'] or t['待解决'], '提示': t['说明']} for t in tools],
+           *([{'名称': '归档', '图标': '📦', '链接': '#/archive', '数': ov.get('archived', 0), '提示': '做完一段时间的期和事项'}] if ov.get('archived') else []),
            {'名称': '基础信息', '图标': '◈', '链接': '#/base', '数': base_n},
            {'名称': '设置', '图标': '⚙', '链接': '#/settings'},
            {'名称': '帮助', '图标': '?', '链接': '#/d/'}]
@@ -65,6 +66,7 @@ def site_nav(ov, docs=(), full=False):
            'ANR': {'待处理': anr.get('todo', 0), '总数': anr.get('total', 0), '链接': '#/anr'},
            '手机': {'空闲': ph['free'], '总数': ph['total'], '链接': '#/phones'} if ph else None,
            '基础信息': {'条数': base_n, '链接': '#/base'},
+           '已归档': {'个数': ov.get('archived', 0), '链接': '#/archive'},
            '工具': tools,
            '文档': [{'名称': d['name'], '链接': '#/d/' + d['name']} for d in docs],
            '导航': nav,
