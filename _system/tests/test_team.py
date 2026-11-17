@@ -582,7 +582,7 @@ class TestPushRule(Base):
         from kblib.ai import devsession
         p = devsession._dev_prompt(P, '/tmp/x', 'main', devsession.get_flow(), '/tmp/docs')
         self.assertIn(self.RULE, p)
-        self.assertIn('git reset --hard、git checkout -- . 会被拒，需要时用 kb_ask 请用户执行', p)
+        self.assertIn('git reset --hard、git checkout -- .、删文件等常用命令直接用，不用 kb_ask', p)
         self.assertLess(p.index(self.RULE), p.index('【完成】'), '放在【完成】一节前')
 
     def test_followup_prompt(self):

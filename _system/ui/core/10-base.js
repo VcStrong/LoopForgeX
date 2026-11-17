@@ -20,7 +20,9 @@ let app=$('#app');      // 页面渲染的目标容器：经典版是 #app，模
 // 库没加载到就退回 innerHTML。事件都用 el.onclick= 赋值绑定，morph 后照常重新绑定，不会重复。
 function morphHTML(el,html,o={}){
   if(!window.Idiomorph){el.innerHTML=html;return}
-  try{Idiomorph.morph(el,html,{morphStyle:'innerHTML',ignoreActiveValue:true,restoreFocus:true,callbacks:{
+  // ignoreActiveValue 只护着正在输入的框：idiomorph 对有焦点的元素只改属性、不改里面的内容，焦点在按钮上（如刚点的「📦 归档」）时文字就不变了
+  const typing=!!(document.activeElement&&document.activeElement.matches('input,textarea,select,[contenteditable]'));
+  try{Idiomorph.morph(el,html,{morphStyle:'innerHTML',ignoreActiveValue:typing,restoreFocus:true,callbacks:{
     beforeAttributeUpdated:(a,n,t)=>!(a==='open'&&n.tagName==='DETAILS')&&!(t==='remove'&&a.startsWith('data-')),   // 展开状态、脚本记的 data-init / data-loaded 等标记不动
     beforeNodeMorphed:(a,b)=>!(o.keepFilled&&b.nodeType===1&&b.hasAttribute('data-keep')&&a.id===b.id&&a.hasChildNodes())}})}
   catch(e){console.error(e);el.innerHTML=html}

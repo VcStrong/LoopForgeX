@@ -427,7 +427,8 @@ def dev_session(name):
 
 
 PUSH_RULE = ('推送：只可以 git push <远端> HEAD:refs/for/<分支> 推 Gerrit 送审（不要带 submit、打分、强推）；'
-             '推其他分支、改 remote、git reset --hard、git checkout -- . 会被拒，需要时用 kb_ask 请用户执行')   # REQ-024 / CR-002：约定说明，不依赖套件 hook
+             'git reset --hard、git checkout -- .、删文件等常用命令直接用，不用 kb_ask；'
+             '强推、删远端分支、部署发布、删库会被拒，确实需要时才用 kb_ask 请用户执行')   # REQ-024 / CR-002：约定说明，不依赖套件 hook
 
 
 def _dev_prompt(name, root, branch, f, docs):
