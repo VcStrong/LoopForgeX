@@ -28,6 +28,7 @@ from kblib.sources.urlimport import fetch_url, import_design, import_url
 from kblib.sources.refresh import refresh_sources, take_notices
 from kblib.sources.fixlink import _conflict_hint, fix_link
 from kblib.bugs.index import ZT_OWNER, bug_assign, bug_get, bug_list, bug_sync
+from kblib.steward.update import update_mcp_notice
 from kblib.bugs.analysis import bug_analysis
 from kblib.bugs.fix import bug_fixed
 from kblib.ai.talk import take_session_msgs
@@ -513,6 +514,7 @@ def handle(msg):
             text, err = str(e), True
         except Exception as e:
             text, err = f'内部错误：{e!r}', True
+        text += update_mcp_notice()          # 程序在这个 MCP 进程启动后更新过：提示 /mcp 重连（只提示一次）
         res = {'content': [{'type': 'text', 'text': text}], 'isError': err}
     elif method == 'ping':
         res = {}

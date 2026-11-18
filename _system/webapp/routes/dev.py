@@ -67,3 +67,14 @@ def _post_api_dnd(self, u, n, body):
 @post('/api/answer', page_only=True)
 def _post_api_answer(self, u, n, body):
     return self._guard(lambda: {'msg': kb.answer(body.get('period', ''), body.get('id', ''), body.get('answer', ''))})
+
+
+@get('/api/period/branch-swap')
+def _get_api_period_branch_swap(self, u, q):
+    return self._guard(lambda: kb.swap_info(q.get('name', '')))
+
+
+@post('/api/period/branch-swap', page_only=True)
+def _post_api_period_branch_swap(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.branch_swap(body.get('period', ''), body.get('branch', ''), body.get('base', ''),
+                                                      body.get('reason', ''), body.get('end', ''), carry=bool(body.get('carry')))})

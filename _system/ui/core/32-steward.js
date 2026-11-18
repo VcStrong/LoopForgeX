@@ -1,7 +1,16 @@
 // ==== 管家卡片、首次引导、工作统计
 // 管家：明确的事自己做（只读 / 能重做的），要你批准的出卡片，不明确的只问一个问题
 const STW_TAG={问你:'❓ AI 想问你',待你:'需要你判断',建议:'💡 AI 的建议'};
-const STW_ACT={'Bug分析':'Bug 只读分析','来源整理':'需求资料重新整理'};
+const STW_ACT={'Bug分析':'Bug 只读分析','来源整理':'需求资料重新整理','中断续跑':'中断后接着做','学习放权':'按你的习惯放权'};
+// 被用量限制、网络等外部原因打断的会话（监工台账）：「因用量限制暂停，预计 15:05 自动接着做」+ 现在就续 / 不用了
+function intrText(i){return i['状态']==='已停下'?`因${i['原因']}中断，${i['说明']||'已停下'}`:`因${i['原因']}暂停，预计 ${(i['恢复时间']||'').slice(11,16)} 自动接着做`}
+function intrHtml(i){if(!i||!['待续','已停下'].includes(i['状态']))return '';
+  return `<div class="small" style="color:var(--warn)" title="${esc(i['详情']||'')}">⏸ ${esc(intrText(i))}${i['次数']>1?`（连续第 ${i['次数']} 次）`:''}
+    <button class="small pri" data-intr="${esc(i['编号'])}">现在就续</button> <button class="small" data-intrno="${esc(i['编号'])}">不用了</button></div>`}
+function bindIntr(el,after){
+  el.querySelectorAll('[data-intr]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{toast((await post('/api/steward/answer',{id:'intr:'+b.dataset.intr})).msg)}catch(e){toast(e.message)}after&&after()});
+  el.querySelectorAll('[data-intrno]').forEach(b=>b.onclick=async()=>{if(!await kbConfirm('不再接着做这个会话？'))return;try{toast((await post('/api/steward/dismiss',{id:'intr:'+b.dataset.intrno})).msg)}catch(e){toast(e.message)}after&&after()});
+}
 function stwHtml(v){
   if(!v)return '';
   const s=v['设置'],cs=v['卡片']||[],did=v['已做']||[];
@@ -10,7 +19,7 @@ function stwHtml(v){
   const card=c=>`<div class="stc t-${esc(c['类型'])}"><span class="small mut">${STW_TAG[c['类型']]||esc(c['类型'])}</span><div class="tt">${esc(c['标题'])}</div>
     ${c['说明']?`<div class="ds">${esc(c['说明'])}</div>`:''}${c['为什么']?`<div class="wy">${esc(c['为什么'])}</div>`:''}${c['提议']?propHtml(c['提议'],c.id):''}
     <div class="ac">${c['提议']?`<a class="small" href="${esc(c['链接']||'#/')}">看事项</a>`:c['选项']?`<select data-sopt="${esc(c.id)}">${c['选项'].map(o=>`<option value="${esc(o['值'])}">${esc(o['标签'])}</option>`).join('')}</select><button class="pri" data-sans="${esc(c.id)}">就用这个</button>`
-      :(c['动作']==='run'||c['动作']==='ignore'||c['动作']==='upgrade')?`<button class="pri" data-sans="${esc(c.id)}">${esc(c['按钮']||'现在就做')}</button>${c['链接']?`<a class="small" href="${esc(c['链接'])}">看看</a>`:''}`
+      :(c['动作']==='run'||c['动作']==='ignore'||c['动作']==='upgrade'||c['动作']==='resume'||c['动作']==='learn'||c['动作']==='push-item'||c['动作']==='update')?`<button class="pri" data-sans="${esc(c.id)}">${esc(c['按钮']||'现在就做')}</button>${c['链接']?`<a class="small" href="${esc(c['链接'])}">看看</a>`:''}`
       :c['链接']?`<a class="btn" href="${esc(c['链接'])}"><button class="pri">${esc(c['按钮']||'去看看')}</button></a>`:''}
       <span class="no" data-sno="${esc(c.id)}" title="这件事先不提；情况有变化会再出现">不用了</span></div></div>`;
   return head+(v['日报']?`<div class="brief">📰 今日日报：${esc(v['日报']['内容'])}</div>`:'')
@@ -50,7 +59,7 @@ async function loadStw(){
   const el=$('#ovStw');if(!el)return;el.innerHTML=stwHtml(ovStw);
   const go=async(u,b)=>{try{toast((await post(u,b)).msg)}catch(e){toast(e.message)}loadStw()};
   const t=$('#stwTick');if(t)t.onclick=()=>{t.disabled=true;t.textContent='巡检中…';go('/api/steward/tick',{})};
-  el.querySelectorAll('[data-sans]').forEach(b=>b.onclick=async()=>{if(/忽略/.test(b.textContent)&&!await kbConfirm('忽略这些陈旧 Bug？只在知识库标记，不改 Bug 平台，随时能在 Bug 页取消。'))return;const s=el.querySelector(`[data-sopt="${CSS.escape(b.dataset.sans)}"]`);b.disabled=true;go('/api/steward/answer',{id:b.dataset.sans,value:s?s.value:''})});
+  el.querySelectorAll('[data-sans]').forEach(b=>b.onclick=async()=>{if(b.dataset.sans.startsWith('update:'))return updRun(b);if(/忽略/.test(b.textContent)&&!await kbConfirm('忽略这些陈旧 Bug？只在知识库标记，不改 Bug 平台，随时能在 Bug 页取消。'))return;const s=el.querySelector(`[data-sopt="${CSS.escape(b.dataset.sans)}"]`);b.disabled=true;go('/api/steward/answer',{id:b.dataset.sans,value:s?s.value:''})});
   el.querySelectorAll('[data-sno]').forEach(b=>b.onclick=()=>go('/api/steward/dismiss',{id:b.dataset.sno}));
   bindProp(el,'/api/steward/answer');
 }

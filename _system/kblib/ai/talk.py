@@ -19,7 +19,8 @@ from kblib.core.notes import add_note, note_title, notes_of
 from kblib.ai.devices import dev_activity
 from kblib.ai.engines import engine_popen, period_engine
 from kblib.ai import team
-from kblib.ai.devsession import DEV_DIR, PUSH_RULE, _NO_BG, _alive, _dev_env, _dev_spawn, _notify, _session_id, dev_chat, dev_session
+from kblib.ai import supervise as _sup
+from kblib.ai.devsession import DEV_DIR, PUSH_RULE, _NO_BG, _alive, _deliver_now, _dev_env, _dev_spawn, _notify, _session_id, dev_chat, dev_session
 from kblib.bugs.index import zt_load
 from kblib.infra import timing
 from kblib.bugs.analysis import _an_load, _an_save, an_sessions
@@ -165,6 +166,8 @@ def _task_prompt(d, m, root, branch, text, resumed):
 
 def _push(d, m, text, by):
     """没有会话在跑：按内容推动解决（事项：接着上次的上下文继续，不走开发流程）。"""
+    from kblib.steward import behavior
+    behavior.emit('push', d.name, by=by)
     if m.get('类型') == '事项':
         s = dev_session(d.name) or {}
         root, ebranch, _ = _period_root(m, s, task=True)
@@ -173,13 +176,15 @@ def _push(d, m, text, by):
         branch = next((note_title(n) for n in notes_of(d, m=m) if n.get('类型') == '分支'), '') or ebranch or s.get('分支', '')
         m['代码基线'] = timing.code_update('push_task', root, branch=branch, d=d)     # 推动前（默认不动，只记基线）
         sid = _session_id(s['日志']) if s.get('日志') and s.get('仓库') == root else ''
-        m.setdefault('对话', []).append({'时间': now(), '内容': text, '方式': '接着做' if sid else '推动解决', '状态': '已送达',
-                                        '送达时间': now(), '会话': 'dev', '目标': '接着上次的会话' if sid else '新会话'})
+        msg = {'时间': now(), '内容': text, '方式': '接着做' if sid else '推动解决', '状态': '已送达',
+               '送达时间': now(), '会话': 'dev', '目标': '接着上次的会话' if sid else '新会话'}
+        m.setdefault('对话', []).append(msg)
         save_meta(d, m)
         if m.get('状态') != '开发中':
             set_status(d.name, '开发中', '网页「跟这个事项说」（本人批准）', by_human=True)
         proc = _dev_spawn(d, Path(root), branch, _task_prompt(d, load_meta(d), root, branch, text, bool(sid)), sid,
                           续跑次数=0, 类型='跟进', 仅对话=True)
+        _deliver_now(d, [msg], proc)
         log(d, '推动解决', f'{"接着上次的会话" if sid else "新开会话"}（pid {proc.pid}）：{text[:100]}（{by}）')
         return '已' + ('接着上次的会话（保留上下文）' if sid else '新开会话') + '交给 AI，进展看下面的动作'
     if m.get('状态') == '收集中':
@@ -191,11 +196,12 @@ def _push(d, m, text, by):
         raise KBError('这一期还没有开发仓库，没法推动：先在「全栈 → 各端」里给端选仓库，或在「开发」里开始开发')
     m['代码基线'] = timing.code_update('push_task', root, branch=branch, d=d)         # 推动前（默认不动，只记基线）
     sid = _session_id(s['日志']) if s.get('日志') and s.get('仓库') == root else ''
-    m.setdefault('对话', []).append({'时间': now(), '内容': text, '方式': '推动解决', '状态': '已送达', '送达时间': now(),
-                                    '会话': 'dev', '目标': '新的跟进会话'})
+    msg = {'时间': now(), '内容': text, '方式': '推动解决', '状态': '已送达', '送达时间': now(), '会话': 'dev', '目标': '新的跟进会话'}
+    m.setdefault('对话', []).append(msg)
     save_meta(d, m)
     proc = _dev_spawn(d, Path(root), branch, _push_prompt(d.name, root, branch, text, bool(sid), stack=bool(note)) + note, sid, 续跑次数=0, 类型='跟进',
                       仅对话=True)
+    _deliver_now(d, [msg], proc)
     log(d, '推动解决', f'{"接着上次的会话" if sid else "新开会话"}处理（pid {proc.pid}）：{text[:100]}（{by}）')
     return ('没有会话在跑：已' + ('接着这一期上次的会话（保留上下文）' if sid else '新开后台会话')
             + '按你的内容推动解决，进展看「最近动作」，需要确认时会在「开发」里问你')
@@ -228,6 +234,8 @@ def period_say(name, text, target='', interrupt=True, by='用户（网页）', m
     unarchive_if(d.name, '你在这一期的页面里说了话')
     m = load_meta(d)
     sess = period_sessions(d.name)
+    if not sess and (m.get('开发会话') or {}).get('状态') == '中断待续':
+        return dev_chat(d.name, text)        # 被用量限制等打断、等着到点续的：现在就接着那个会话做，消息一起送到
     if not sess:
         return _push(d, m, text, by)
     if mode == 'new':
@@ -333,8 +341,8 @@ def talk_queue_tick(only=''):
             continue
         m = load_meta(d)
         q = [x for x in m.get('对话') or [] if x['状态'] == '排队中']
-        if not q or period_sessions(d.name):
-            continue
+        if not q or period_sessions(d.name) or _sup.entries(d.name, states=_sup.OPEN):
+            continue                    # 有会话在跑、或被打断等着接着做的：等它做完再处理排队的
         for x in q:
             x.update(状态='已送达', 送达时间=now(), 方式='排队处理（已开始）')
         save_meta(d, m)
@@ -386,8 +394,11 @@ def _take_px(key):
     xs = [i for i in m.get('对话') or [] if i.get('会话') == key and i['状态'] == '待送达']
     if not xs:
         return ''
-    for i in xs:
-        i.update(状态='已送达', 送达时间=now())
+    if key.startswith('end:'):          # 记下交给了哪一轮：那一轮被用量限制等打断，续跑时补发
+        _sup.deliver(xs, ((m.get('各端开发') or {}).get(key[4:]) or {}).get('日志', ''))
+    else:
+        for i in xs:
+            i.update(状态='已送达', 送达时间=now())
     save_meta(d, m)
     return ('\n\n【用户在网页发来消息】\n' + '\n'.join(f'- （{i["时间"]}）{i["内容"]}' for i in xs)
             + '\n请先按消息调整，然后接着原来的工作。')

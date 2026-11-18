@@ -37,8 +37,9 @@ def _git_root(p):
 
 
 def want_branches(d, m):
-    """本期登记的开发分支：「分支」类文字资料，或标题 / 内容写了「分支」的文字资料里的分支名；网页确认过的排最前。"""
-    out = [m['开发分支']] if m.get('开发分支') else []
+    """本期登记的开发分支：「分支」类文字资料，或标题 / 内容写了「分支」的文字资料里的分支名；网页确认过的（当前分支）排最前，
+    换下来的历史分支紧随其后（Bug 归期、构建匹配照样认老分支）。"""
+    out = ([m['开发分支']] if m.get('开发分支') else []) + [x['分支'] for x in (m.get('分支历史') or []) if x.get('分支') and not x.get('端')]
     for n in notes_of(d, m=m):
         title, body = n.get('标题') or '', URL_RE.sub(' ', n.get('内容') or '')
         if n['类型'] != '分支' and '分支' not in title + body and 'branch' not in (title + body).lower():
@@ -210,7 +211,8 @@ def _dev_target(d, m, repo='', store=''):
         raise KBNeed(_no_flow_msg(m, root), {'需要': '仓库', '候选': repo_candidates(d, m), '分支': want_branches(d, m),
                                               '说明': _no_flow_msg(m, root)})
     branch = _git(root, 'branch', '--show-current').stdout.strip()
-    want = want_branches(d, m)
+    old = {x['分支'] for x in (m.get('分支历史') or []) if x.get('分支') and not x.get('端')} - {m.get('开发分支')}
+    want = [b for b in want_branches(d, m) if b not in old] or want_branches(d, m)[:1]     # 换过分支：只认当前分支，别在老分支上开发
     if want and branch not in want:
         dirty = [x for x in _git(root, 'status', '--porcelain', '--untracked-files=no').stdout.splitlines() if x.strip()]
         raise KBNeed(f'{root.name} 当前分支是「{branch}」，本期登记的开发分支是「{"、".join(want)}」。'

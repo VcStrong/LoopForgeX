@@ -19,13 +19,13 @@ async function buildBox(name,fresh){
         ${qr?`<a data-qr="${esc(qr['地址'])}">二维码</a>`:''}
         ${mp?` · <a href="${esc(mp['地址'])}">mapping</a> <a data-bmap="${esc(mp['地址'])}" data-ver="${esc(b['版本'])}" title="归档到 ANR / 崩溃，这个版本的崩溃日志自动还原">归档</a>`:''}</td>
       <td class="small">${(b['Bug']||[]).length?`<a href="#/bugs" title="Bug 平台上记的提测包是这一次构建">🐞 ${b['Bug'].map(esc).join('、')}</a>`:''}</td></tr>`};
-  box.innerHTML=`<div class="row small" style="gap:10px;flex-wrap:wrap;margin-bottom:8px"><span class="mut">分支 ${v['分支'].map(x=>`<b class="mono">${esc(x)}</b>`).join('、')||'（没写，在资料里加一条「分支」文字资料）'}</span>
+  box.innerHTML=`<div class="row small" style="gap:10px;flex-wrap:wrap;margin-bottom:8px"><span class="mut">分支 ${v['分支'].map(x=>(v['历史分支']||[]).includes(x)?`<span class="mono" title="换下来的老分支">${esc(x)}（历史）</span>`:`<b class="mono">${esc(x)}</b>`).join('、')||'（没写，在资料里加一条「分支」文字资料）'}</span>
       <span class="sp" style="flex:1"></span><button class="small" id="bdEdit">改对应任务</button><button class="small" id="bdFresh">↻ 刷新</button></div>
-    ${v['任务'].length?v['任务'].map(j=>`<div style="margin-bottom:12px"><div class="small"><b>${esc(v['插件'])}</b> <a href="${esc(j['地址'])}" target="_blank" rel="noopener" class="mono">${esc(j['名称'])}</a> <span class="mut">（${j['依据']==='手动'?'手动指定':'按分支自动匹配'}）</span></div>
+    ${v['任务'].length?v['任务'].map(j=>`<div style="margin-bottom:12px"><div class="small"><b>${esc(v['插件'])}</b> <a href="${esc(j['地址'])}" target="_blank" rel="noopener" class="mono">${esc(j['名称'])}</a> <span class="mut">（${j['依据']==='手动'?'手动指定':'按分支自动匹配'}）</span>${typeof j['分支']==='string'&&j['分支']?` <span class="mono mut">🌿 ${esc(j['分支'])}</span>`:''}${j['历史']?' <span class="badge" title="这一期已经换到新分支，老分支的构建照旧能查、能取 mapping">历史</span>':''}</div>
       ${j['错误']?`<div class="small" style="color:var(--warn)">${esc(j['错误'])}</div>`:j['构建'].length?`<div class="tw"><table><tr><th style="width:60px">构建</th><th style="width:80px">结果</th><th style="width:110px">版本</th><th style="width:130px">时间</th><th style="width:110px">提交</th><th>产物</th><th style="width:140px">这个包上的 Bug</th></tr>${j['构建'].map(row).join('')}</table></div>`:'<div class="mut small">还没有构建</div>'}</div>`).join('')
       :`<div class="mut small">没匹配到构建任务（任务名里要含分支名）。点「改对应任务」填任务名或地址。</div>`}`;
   $('#bdFresh').onclick=()=>buildBox(name,true);
-  $('#bdEdit').onclick=()=>{openDlg('这一期对应的构建任务',`<div class="form"><label>任务名或地址（可多个，换行隔开；留空 = 按分支重新自动匹配）<textarea id="bdJ" rows="3" class="mono" placeholder="如：app_android_feature-x&#10;或 http://jenkins…/job/app_android_feature-x/">${esc(v['任务'].map(j=>j['地址']||j['名称']).join('\n'))}</textarea></label>
+  $('#bdEdit').onclick=()=>{openDlg('这一期对应的构建任务',`<div class="form"><label>任务名或地址（可多个，换行隔开；只换当前分支的任务，老分支的保留；留空 = 新老分支一起重新自动匹配）<textarea id="bdJ" rows="3" class="mono" placeholder="如：app_android_feature-x&#10;或 http://jenkins…/job/app_android_feature-x/">${esc(v['任务'].map(j=>j['地址']||j['名称']).join('\n'))}</textarea></label>
       <div class="row"><button class="pri" id="bdGo">保存</button></div></div>`);
     $('#bdGo').onclick=async()=>{try{const r=await post('/api/period/builds',{period:name,jobs:$('#bdJ').value});toast(r.msg);dlg.close();buildBox(name,true)}catch(e){toast(e.message)}}};
   box.querySelectorAll('[data-inst]').forEach(a=>a.onclick=()=>installDlg(name,a.dataset.inst));

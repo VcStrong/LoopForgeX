@@ -7,7 +7,7 @@
   汇报后起一个只读审查会话（不看开发过程，只拿需求规格、接口契约、设计稿和这次的改动挑错），用 kb_stack_review 给结论；
   打回 → 接着原会话改（最多 MAX_ROUNDS 轮），还不过就停下等你看；全部通过 → 等你看证据包（拍板 2，P4）。
 期信息「各端开发」：{端: {状态, 轮次, 起点, 会话, 日志, 审查日志, 开始, 结束, 汇报, 审查, 引擎, 待办}}
-状态：排队中 / 开发中 / 待审查 / 审查中 / 打回修改 / 审查通过 / 要你看 / 失败 / 已停止
+状态：排队中 / 开发中 / 待审查 / 审查中 / 打回修改 / 审查通过 / 要你看 / 失败 / 已停止 / 中断待续（用量限制等外部原因，监工到点接着做）
 svn 的端：svn 一提交就进服务器，所以 AI 只改工作副本、不提交；审查看 svn diff；你验收时知识库只提交这次改的文件
   （开工前工作副本里原有的改动不碰），各端开发记「已提交」= 版本号。git 的端：AI 在本地提交、不推送，你验收时知识库推送开发分支（记「已推送」）。
 """
@@ -29,6 +29,7 @@ from kblib.plugins import registry as _plugins
 from kblib.ai.devsession import DEV_DIR, _NO_BG, _alive, _dev_env, _dev_result, _notify, _session_id
 from kblib.ai.engines import engine_cmd, engine_popen, role_engine
 from kblib.ai import team
+from kblib.ai import supervise as _sup
 from kblib.ai.flows import flow_for, flow_text
 from kblib.stack.plan import EMPTY_TREE, _sdir, period_ends, refresh_vcs, sort_ends
 from kblib import lazy
@@ -121,6 +122,8 @@ def stack_dev_stop(name, end, by='用户（网页）'):
         raise KBError(f'{end} 没有开工')
     if x.get('pid') and x.get('状态') in RUNNING:
         _kill(x['pid'])
+    if x.get('状态') == '中断待续':              # 你点停止：不再到点接着做
+        _sup.settle(d.name, 'end', end, '不用了')
     x.update(状态='已停止', 结束时间=now())
     save_meta(d, m)
     log(d, '各端开发', f'{end} 停止（{by}）')
@@ -246,6 +249,7 @@ def _spawn(d, end, kind, prompt, root, resume='', readonly=False):
                             extra_args=_readonly(eng) if readonly else None,
                             scene=f'{"开发" if kind == "开发" else "审查"}·端', end=end, period=m)
     _PROCS[(d.name, end, '开发中' if kind == '开发' else '审查中')] = proc
+    _sup.settle(d.name, 'end', end)          # 这个端又起了一轮：台账里等着的就算接上了
 
     def wait():
         code = proc.wait()
@@ -405,7 +409,18 @@ def _finish(name, end, phase, code=None):
     x = (m.get('各端开发') or {}).get(end)
     if not x or x.get('状态') != phase:
         return
-    res = _dev_result(x.get('日志' if phase == '开发中' else '审查日志', ''))
+    logf = x.get('日志' if phase == '开发中' else '审查日志', '')
+    res = _dev_result(logf)
+    done = x.get('汇报结果') if phase == '开发中' else (x.get('审查') or {}).get('时间', '') >= x.get('审查开始', '~')
+    if not done:                 # 没汇报 / 没交结论：先看是不是用量限制、网络、崩溃、重启这类外部原因
+        cls = _sup.classify(logf, code, res)
+        if cls['类别'] == '外部中断':
+            _end_interrupted(d, m, end, x, phase, code, res, cls)
+            return
+    elif _sup.processed(m, f'end:{end}', logf):
+        pass
+    x.pop('中断次数', None)
+    x.pop('中断', None)
     team.tally(x, x.get('日志' if phase == '开发中' else '审查日志', ''), m, d, f'{"开发" if phase == "开发中" else "审查"}·{end}',
                cumulative=False)
     if phase == '开发中':
@@ -443,6 +458,73 @@ def _finish(name, end, phase, code=None):
             _notify('知识库 · 全栈', f'「{d.name}」各端都结束了，通过 {len(ok)}/{len(dev)}')
     elif x['状态'] in ('要你看', '失败'):
         _notify('知识库 · 全栈', f'「{d.name}」{end}：{x["状态"]}')
+
+
+def _end_interrupted(d, m, end, x, phase, code, res, cls):
+    """外部原因中断：这个端标「中断待续」（不标失败），记台账，到点由监工接着做。"""
+    if phase == '开发中':
+        sid = _session_id(x.get('日志', ''))
+        if sid:
+            x['会话'] = sid
+    n = int(x.get('中断次数') or 0) + 1
+    e = _sup.record(d.name, 'end', cls, n, end=end, name=f'{end} {"开发" if phase == "开发中" else "审查"}',
+                    log=x.get('日志' if phase == '开发中' else '审查日志', ''), phase=phase)
+    team.tally(x, x.get('日志' if phase == '开发中' else '审查日志', ''), m, d, f'{"开发" if phase == "开发中" else "审查"}·{end}',
+               cumulative=False)
+    x.update(状态='中断待续', 中断阶段=phase, 中断次数=n, 中断=_sup.summary(e), 结束时间=now(),
+             结果=f'因{cls["原因"]}中断：{cls["详情"][:300]}' if cls.get('详情') else f'因{cls["原因"]}中断（退出码 {code}）')
+    save_meta(d, m)
+    log(d, '各端开发', f'{end} {"开发" if phase == "开发中" else "审查"}会话因{cls["原因"]}中断 → 中断待续：{_sup.label(e)}')
+    _notify('知识库 · 全栈', f'「{d.name}」{end}：{_sup.label(e)}')
+
+
+def stack_resume_interrupted(name, end, e=None, by='自动'):
+    """监工到点（或你点「现在就续」）：开发接着原会话做（先核对实际进度，补发没处理的消息）；审查重新排队（只读，从头看）。"""
+    d = period_dir(name)
+    with _LOCK:
+        m = load_meta(d)
+        dev = m.get('各端开发') or {}
+        x = dev.get(end)
+        if not x or x.get('状态') != '中断待续':
+            raise KBError(f'{end} 现在是「{(x or {}).get("状态", "没开工")}」，不是中断待续')
+        e = e or _sup.get((x.get('中断') or {}).get('编号', '')) or {}
+        if x.get('中断阶段') == '审查中':
+            x.update(状态='待审查')
+            save_meta(d, m)
+            stack_tick(d.name)
+            return f'{end} 的审查重新开始'
+        if sum(1 for v in dev.values() if v.get('状态') == '开发中') >= MAX_PAR:
+            raise _sup.KBLater(f'同时开发的端已经有 {MAX_PAR} 个')
+        why = _repo_free(d, end, x['仓库'], dev)
+        if why:
+            raise _sup.KBLater(why)
+        msgs = _sup.unprocessed(m, f'end:{end}', x.get('日志', ''))
+        _sup.deliver(msgs, '')
+        sid = x.get('会话', '')
+        note = _sup.resume_note(e or {'原因': (x.get('中断') or {}).get('原因', '外部原因')})
+        prompt = note + (f'继续做 {end}：按原来的要求做完、自测、提交，最后用 kb_stack_report 汇报一次（iteration=「{d.name}」，end={end}）。'
+                         + _NO_BG if sid else _dev_prompt(d, m, end, x, _plan(d)) + '\n\n（上一轮没有会话号，这是新开的会话）') + _sup.resend_text(msgs)
+        x.update(状态='开发中', 开始时间=now(), 结束时间='')
+        x.pop('等待', None)
+        save_meta(d, m)
+        proc, logf, eng = _spawn(d, end, '开发', prompt, x['仓库'], sid)
+        m = load_meta(d)
+        y = m['各端开发'][end]
+        y.update(pid=proc.pid, 日志=str(logf), 引擎=eng['名称'])
+        ids = {mm.get('编号') for mm in msgs}
+        _sup.deliver([i for i in m.get('对话') or [] if i.get('会话') == f'end:{end}' and i.get('编号') in ids], logf)
+        save_meta(d, m)
+    log(d, '各端开发', f'{end} 中断后接着做（{"到点自动" if by == "自动" else by}，{eng["名称"]}）' + (f'，补发 {len(msgs)} 条消息' if msgs else ''))
+    return f'{end} 已接着上次的会话做' + (f'，补发 {len(msgs)} 条没处理的消息' if msgs else '')
+
+
+def stack_drop_interrupted(name, end):
+    d = period_dir(name)
+    m = load_meta(d)
+    x = (m.get('各端开发') or {}).get(end)
+    if x and x.get('状态') == '中断待续':
+        x.update(状态='要你看', 结果=(x.get('结果') or '') + '；你选了不再自动接着做')
+        save_meta(d, m)
 
 
 def _queue_integration(d, m):
@@ -697,7 +779,7 @@ def stack_dev_view(d, m):
         x = dev.get(e)
         if not x:
             continue
-        out.append({'端': e, **{k: x.get(k) for k in ('状态', '轮次', '开始时间', '结束时间', '引擎', '等待', '结果', '汇报', '审查', '仓库', '分支', '版本库', '已提交', '已推送', '参与')},
+        out.append({'端': e, **{k: x.get(k) for k in ('状态', '轮次', '开始时间', '结束时间', '引擎', '等待', '结果', '汇报', '审查', '仓库', '分支', '版本库', '已提交', '已推送', '参与', '中断')},
                     '在跑': x.get('状态') in RUNNING and _alive(x.get('pid', 0)), '代码基线': timing.baseline_text(x.get('代码基线'))})
     return out
 

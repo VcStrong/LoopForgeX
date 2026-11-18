@@ -243,6 +243,9 @@ def bug_analyze(ids, by='用户（网页）', force=False, auto=False):
     ids = [str(i).strip() for i in (ids if isinstance(ids, (list, tuple)) else [ids]) if str(i).strip()]
     if not ids:
         raise KBError('没有要分析的 Bug')
+    if not auto:
+        from kblib.steward import behavior
+        behavior.emit('bug_analyze', ','.join(ids), by=by)
     ids, gone = _zt_recheck(ids, '分析前核对')        # 已经转给别人的直接移除，不分析
     if not ids:
         raise KBError('没有要分析的 Bug：' + '；'.join(gone))
@@ -557,6 +560,8 @@ def bug_review(bid, action, note='', by='用户（网页）'):
         raise KBError('只能「通过」或「打回」')
     zt_save(data)
     _an_md(e)
+    from kblib.steward import behavior
+    behavior.emit('bug_review', str(bid), by=by, 结论=action)
     o = e.get('归属') or {}
     if o.get('类型') in ('期', '事项') and o.get('名称'):
         try:

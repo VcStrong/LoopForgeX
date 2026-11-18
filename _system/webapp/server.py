@@ -7,7 +7,7 @@ import socket
 from webapp.shared import *  # noqa: F401,F403
 from webapp import router
 
-ROUTE_MODULES = ['static', 'periods', 'dev', 'stack', 'term', 'bugs', 'anr', 'plugins', 'settings', 'base', 'steward']
+ROUTE_MODULES = ['static', 'periods', 'dev', 'stack', 'term', 'bugs', 'anr', 'plugins', 'settings', 'base', 'steward', 'update']
 for _m in ROUTE_MODULES:
     importlib.import_module(f'webapp.routes.{_m}')
 
@@ -232,6 +232,9 @@ def main(port=11555, host=''):
     srv = ThreadingHTTPServer((host, port), H)
     print(f'知识库网页：http://{host}:{port}' + ('（已开启访问密码）' if kb.auth_required() else ''), flush=True)
     kb.dev_reattach()
+    from kblib.steward import update as _upd     # 程序更新：记下网页进程能重启自己；刚更新完的做一次自检，守护进程据此决定要不要退回
+    threading.Thread(target=_upd.update_startup, args=(port, [sys.executable, *sys.argv], lambda: (api_overview(), kb.steward_view())),
+                     daemon=True).start()
     threading.Thread(target=watcher, daemon=True).start()
     threading.Thread(target=dev_tick, daemon=True).start()
     threading.Thread(target=health_auto, daemon=True).start()

@@ -10,7 +10,9 @@
        不明确                → 只问一个问题，选项按可能性排好（如 Bug 不知道在哪个仓库分析）
   4. 做：执行前再查一次状态（已经有人处理就不做），先记下决定再执行（不会重复做）；有总开关和每日上限。
   5. 记：每个决定写进 _system/管家/记录.jsonl（日报、统计用，将来也是训练决策模型的数据）。
-设置在 设置.json「管家」：开启、自主度（保守 / 标准 / 放手）、每日上限、关闭的动作。
+  6. 中断续跑：被用量限制、网络等外部原因打断的后台会话，到点用原会话接着做（kblib.ai.supervise，不受总开关和每日上限限制：
+     批准针对的是那件事，不是某个进程）；连续中断太多次停下来出卡片问你。
+设置在 设置.json「管家」：开启、自主度（保守 / 标准 / 放手）、每日上限、关闭的动作、中断续跑、续跑上限。
 """
 import json
 import threading
@@ -18,8 +20,12 @@ import time
 from datetime import datetime, timedelta
 
 from kblib.core.common import KBError, PERIODS, SYS, load_settings, now, save_settings
-from kblib.core.periods import is_task, load_meta, period_names
+from kblib.core.periods import is_archived, is_task, load_meta, period_names
+from kblib.ai import branchswap as _bs
 from kblib.ai.devsession import _alive, _notify
+from kblib.ai import supervise as _sup
+from kblib.steward import behavior as _beh
+from kblib.steward import update as _upd
 from kblib.bugs.index import zt_load
 from kblib.bugs import analysis as _an
 from kblib.sources import refresh as _refresh
@@ -45,11 +51,13 @@ _LOCK = threading.Lock()
 
 def steward_settings():
     s = load_settings().get('管家') or {}
+    sup = _sup.settings()
     return {'开启': s.get('开启', True), '自主度': s.get('自主度') if s.get('自主度') in LEVELS else '标准',
-            '每日上限': int(s.get('每日上限') or 20), '新Bug天数': int(s.get('新Bug天数') or 3), '关闭动作': [a for a in s.get('关闭动作') or [] if a in ACTIONS]}
+            '每日上限': int(s.get('每日上限') or 20), '新Bug天数': int(s.get('新Bug天数') or 3), '关闭动作': [a for a in s.get('关闭动作') or [] if a in ACTIONS],
+            '中断续跑': sup['开启'], '续跑上限': sup['上限'], '学习': s.get('学习', True) is not False}
 
 
-def steward_set(on=None, level=None, limit=None, actions=None, new_days=None):
+def steward_set(on=None, level=None, limit=None, actions=None, new_days=None, resume=None, resume_max=None, learn=None):
     s = load_settings()
     cur = steward_settings()
     if on is not None:
@@ -68,6 +76,15 @@ def steward_set(on=None, level=None, limit=None, actions=None, new_days=None):
         if not 1 <= n <= 60:
             raise KBError('新 Bug 天数在 1 到 60 之间')
         cur['新Bug天数'] = n
+    if learn is not None:
+        cur['学习'] = bool(learn)
+    if resume is not None:
+        cur['中断续跑'] = bool(resume)
+    if resume_max not in (None, ''):
+        n = int(resume_max)
+        if not 1 <= n <= 50:
+            raise KBError('最多连续续跑次数在 1 到 50 之间')
+        cur['续跑上限'] = n
     if isinstance(actions, dict):
         off = set(cur['关闭动作'])
         for k, v in actions.items():
@@ -76,7 +93,8 @@ def steward_set(on=None, level=None, limit=None, actions=None, new_days=None):
         cur['关闭动作'] = sorted(off)
     s['管家'] = cur
     save_settings(s)
-    return '管家' + ('已关闭' if not cur['开启'] else f'已开启（{cur["自主度"]}，每天最多自动做 {cur["每日上限"]} 件）')
+    return ('管家' + ('已关闭' if not cur['开启'] else f'已开启（{cur["自主度"]}，每天最多自动做 {cur["每日上限"]} 件）')
+            + ('；中断后自动接着做（连续最多 ' + str(cur['续跑上限']) + ' 次）' if cur['中断续跑'] else '；中断后不自动接着做'))
 
 
 def _state():
@@ -123,7 +141,7 @@ def steward_log(n=50, day=''):
 
 
 def _used_today():
-    return sum(int(r.get('数量') or 1) for r in steward_log(500, now()[:10]) if r.get('方式') == '自动' and r.get('结果') != '失败')
+    return sum(int(r.get('数量') or 1) for r in steward_log(500, now()[:10]) if r.get('方式') == '自动' and r.get('结果') != '失败' and r.get('动作') != '中断续跑')
 
 
 # ---------------------------------------------------------------- 1. 看：每件事现在在哪一步
@@ -244,6 +262,15 @@ def _observe():
             cards.append({'id': f'ask:{n}:{len(q)}:{q[-1].get("时间", "")}', '类型': '待你', '标题': f'「{n}」有 {len(q)} 个问题等你回答',
                           '说明': (q[0].get('问题') or '')[:80], '为什么': 'AI 在等你决定，不回答它会停在这里；不想被打扰可以开「🌙 免打扰」。',
                           '按钮': '去回答', '链接': link})
+        try:
+            hs, t0 = _bs.swap_hint(m) if not is_archived(m) else ([], '')
+        except Exception:
+            hs, t0 = [], ''
+        if hs:
+            cards.append({'id': f'branch-swap:{n}:{t0}', '类型': '建议', '标题': f'「{n}」上线分支已合，是否换到新分支？',
+                          '说明': '；'.join(f'{e + "：" if e else ""}{b} 在{"验收" if e else "完成"}后又有新提交（{c}）' for e, b, c in hs),
+                          '为什么': '这一期已经合进上线分支。之后的开发、跟进、复测、Bug 修复建议放到新分支；老分支不删，Jenkins 构建、Bug、记录都保留。',
+                          '按钮': '去换分支（⇄）', '链接': link})
         fs = (m.get('全栈') or {}).get('状态')
         if not is_task(m) and st in ('收集中', '已批准开发', '开发中') and (m.get('更新时间') or '') >= _since(14):
             try:
@@ -288,6 +315,7 @@ def _observe():
         ids = sorted(p['编号'] for p in fresh)
         autos.append(('ANR建事项', 'ANR建事项:' + ','.join(ids), ids, f'{len(ids)} 个新出现的 ANR / 崩溃问题还没归属', {}))
     cards += _push_cards(cut)
+    cards += _sup.cards()
     if new:
         cards.append({'id': 'anr-new:' + ','.join(sorted(p['编号'] for p in new))[:300], '类型': '建议', '标题': f'{len(new)} 个 ANR / 崩溃问题还没放进批次',
                       '说明': '、'.join(f'{p["编号"]}（{p.get("次数", 0)} 次）' for p in sorted(new, key=lambda p: -(p.get('次数') or 0))[:5]),
@@ -438,12 +466,15 @@ def _brief(st, cards):
     if st.get('日报日期') == today or datetime.now().hour < 8:
         return
     y = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-    did = [r for r in steward_log(500, y) if r.get('方式') == '自动' and r.get('结果') != '失败']
+    did = [r for r in steward_log(500, y) if r.get('方式') == '自动' and r.get('结果') != '失败' and r.get('动作') != '中断续跑']
     cnt = {}
     for r in did:
         cnt[r['动作']] = cnt.get(r['动作'], 0) + int(r.get('数量') or 1)
     mine = [c for c in cards if c['类型'] in ('待你', '问你')]
+    ni, nr = _sup.day_stats(y)
     text = ('昨天自动做了：' + '，'.join(f'{ACTIONS.get(k, (k,))[0]} {v} 件' for k, v in cnt.items()) if cnt else '昨天没有需要自动做的事') + \
+        (f'。昨天后台会话中断 {ni} 次（用量限制、网络等），自动续上 {nr} 次' if ni else '') + \
+        (f'。最近两周你回答 AI 的问题：{_beh.stats_text()}' if _beh.enabled() and _beh.stats_text() else '') + \
         (f'。今天有 {len(mine)} 件等你：' + '；'.join(c['标题'] for c in mine[:5]) if mine else '。今天没有要你点的事')
     st['日报日期'] = today
     st['日报'] = {'日期': today, '内容': text}
@@ -461,6 +492,10 @@ def steward_tick(by='定时'):
         autos, cards = _observe()
         go, _ = _decide(autos, cfg, st)
         did = _act(go, st) if cfg['开启'] else []
+        try:
+            resumed = _sup.tick()                 # 被外部原因打断的会话：到点接着做（有自己的开关）
+        except Exception as e:                    # noqa: BLE001
+            resumed = [('', f'出错：{e}')]
         cards = [c for c in cards if c['id'] not in (st.get('忽略') or {})]
         if cfg['开启']:
             _brief(st, cards)
@@ -474,7 +509,16 @@ def steward_tick(by='定时'):
         done = st.get('已做') or {}
         if len(done) > 3000:                  # 只留最近的
             st['已做'] = dict(sorted(done.items(), key=lambda kv: kv[1])[-2000:])
-        st.update(上次=now(), 结果=('；'.join(f'{ACTIONS[r["动作"]][0]}：{r["结果"]}' for r in did) or '没有要自动做的事'), 发起=by)
+        try:
+            upd = _upd.update_tick()              # 程序更新：满 1 小时检查一次；排队的 / 设成自动的空闲时更新（有自己的开关）
+        except Exception as e:                    # noqa: BLE001
+            upd = f'出错：{e}'
+        res = [f'{ACTIONS[r["动作"]][0]}：{r["结果"]}' for r in did] + [f'中断续跑：{r[:60]}' for _, r in resumed]
+        if upd:
+            res.append(f'程序更新：{upd[:80]}')
+        for _, r in resumed:
+            _record(方式='自动', 动作='中断续跑', 结果='失败' if '失败' in r or '出错' in r else '已续', 说明=r)
+        st.update(上次=now(), 结果=('；'.join(res) or '没有要自动做的事'), 发起=by)
         _save_state(st)
         return st['结果']
     finally:
@@ -504,6 +548,11 @@ def steward_view():
             cards.append({'id': 'src-left:' + key, '类型': '待你', '标题': f'「{obj}」的需求资料自动整理过一次，还没整理完',
                           '说明': why, '为什么': '可能原文改动太大或链接失效，去「来源核对」看看。', '按钮': '去看看', '链接': '#/p/' + obj})
     cards += _upgrade_cards(cfg)
+    try:
+        cards += _upd.update_cards()          # 知识库有新版本：「⬆ 更新并重启」
+    except Exception:                         # noqa: BLE001
+        pass
+    cards += _beh.learned_cards()             # 从你的操作里学到的提议（归档天数、接着推动）：都要你点一下
     cards = [c for c in cards if c['id'] not in ign]
     order = {'问你': 0, '待你': 1, '建议': 2}
     cards.sort(key=lambda c: order.get(c['类型'], 3))
@@ -516,7 +565,8 @@ def steward_view():
 
 
 def _upgrade_cards(cfg):
-    """信任逐步建立：某类建议你最近 14 天里都点了「现在就做」（≥3 次、没点过「不用了」），问你以后要不要直接做。"""
+    """信任逐步建立：某类事你最近 14 天里亲手做了 ≥3 次（在管家卡片上点「现在就做」，或在 Bug 页 / 期页面自己点，看行为账本）、
+    没点过「不用了」，问你以后要不要直接做。"""
     if not cfg['开启']:
         return []
     since = _since(14)
@@ -527,17 +577,27 @@ def _upgrade_cards(cfg):
         if auto_now:
             continue
         ran = sum(1 for r in logs if r.get('方式') == '手动' and r.get('动作') == act)
+        ev = _UPGRADE_EVENTS.get(act)
+        if ev and _beh.enabled():             # 你在别的页面亲手做的同类操作也算（之前只数管家卡片，学不到）
+            ran += sum(1 for x in _beh.events(14, ev) if not str(x.get('主体', '')).startswith('用户（管家'))
         no = sum(1 for r in logs if r.get('方式') == '忽略' and str(r.get('对象', '')).startswith(f'suggest:{act}:'))
         if ran >= 3 and not no:
             out.append({'id': f'upgrade:{act}', '类型': '建议', '标题': f'「{name}」以后让我直接做？',
-                        '说明': f'最近 14 天这类建议你都点了「现在就做」（{ran} 次）', '为什么': '直接做的事每天早上的日报里都看得到，随时能在设置里关掉。',
+                        '说明': f'最近 14 天这类事你亲手做了 {ran} 次（含管家卡片上的「现在就做」）', '为什么': '直接做的事每天早上的日报里都看得到，随时能在设置里关掉。',
                         '按钮': '以后直接做', '动作': 'upgrade', '对象': act, '链接': '#/settings'})
     return out
+
+
+_UPGRADE_EVENTS = {'Bug分析': 'bug_analyze', '出方案': 'plan'}      # 管家动作 ↔ 你亲手做时记的行为事件
 
 
 def steward_dismiss(cid):
     if not cid:
         raise KBError('缺卡片编号')
+    if cid.startswith('intr:'):              # 中断续跑卡片的「不用了」：不再接着做
+        msg = _sup.dismiss(cid[5:])
+        _record(方式='忽略', 动作='中断续跑', 对象=cid, 说明=msg)
+        return msg
     st = _state()
     ign = st.setdefault('忽略', {})
     ign[cid] = now()
@@ -569,6 +629,10 @@ def _mark_done(act, objs):
 
 def steward_answer(cid, value, by='用户（网页）', repo='', branch=''):
     """回答管家的问题 / 点建议卡片上的「现在就做」。"""
+    if cid.startswith('intr:'):              # 中断续跑卡片（总览、期 / 事项页面都用它）：现在就续
+        msg = _sup.resume(cid[5:], by=by)
+        _record(方式='手动', 动作='中断续跑', 对象=cid, 结果='已续', 说明=msg, 回答人=by)
+        return msg
     v = steward_view()
     c = next((x for x in v['卡片'] if x['id'] == cid), None)
     if not c:
@@ -585,6 +649,20 @@ def steward_answer(cid, value, by='用户（网页）', repo='', branch=''):
         msg = _an.bug_analyze_in(c['对象'], value, by=by)
         _mark_done('Bug分析', c['对象'])
         _record(方式='回答', 动作='Bug分析', 对象=c['对象'], 数量=len(c['对象']), 结果='已开始', 说明=msg, 回答=value, 回答人=by)
+        return msg
+    if c.get('动作') == 'update':
+        msg = _upd.update_apply(by=by)
+        _record(方式='手动', 动作='程序更新', 对象=cid, 结果='已开始', 说明=msg, 回答人=by)
+        return msg
+    if c.get('动作') == 'learn':              # 学到的提议：只改能撤销的设置
+        msg = _beh.apply_learn(c['对象'], by=by)
+        _record(方式='手动', 动作='学习放权', 对象=cid, 结果='已开启', 说明=msg, 回答人=by)
+        return msg
+    if c.get('动作') == 'push-item':          # 接着推动 = 你本人在这里点了推动
+        from kblib.tasks.memo import task_item_push
+        o = c['对象']
+        msg = task_item_push(o['事项'], o['条目'], by='用户（管家卡片）')
+        _record(方式='手动', 动作='推动', 对象=o['事项'], 数量=1, 结果='已推动', 说明=msg, 回答人=by)
         return msg
     if c.get('动作') == 'upgrade':
         act = c['对象']

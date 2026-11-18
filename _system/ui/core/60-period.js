@@ -53,14 +53,14 @@ async function period(name){
   const whole=pview==='whole';
   const secHd=k=>{if(!whole)return'';const t=tabs.find(x=>x[0]===k);return`<h2 class="psec">${t[1]}${k===focus?'<span class="cur">进行中</span>':''}</h2>`};
   let tab=(ptabs[d.name]==='src'?'mat':ptabs[d.name])||(m['开发会话']||['已批准开发','开发中','已完成'].includes(m['状态'])?'dev':'mat');
-  const branches=Object.values(d.notes).flat().filter(n=>n['类型']==='分支');
+  const branches=Object.values(d.notes).flat().filter(n=>n['类型']==='分支'),bhist=(m['分支历史']||[]).filter(x=>!x['端']);
   const pend=(m['来源']||[]).filter(x=>x['核对']!=='已核对').length;
   const pageHtml=`<div class="pagehead"><div style="min-width:0"><div class="crumb"><a href="#/">总览</a> / ${isTask?(((ovPeriods.find(p=>p.name===name)||{}).batch||{})['来源']==='anr'?'<a href="#/anr">💥 ANR / 崩溃</a> / 批次':'事项'):'期'}${isTask?` · <a id="toPush">← ${(m['外部来源']||[]).length?'回到原始内容':'回到简洁版'}</a>`:''}</div>
       <h1>${esc(d.name)} ${badge(m['状态'])}${isTask?` <span class="badge st-收集中">${esc(m['事项类型']||'其他')}</span> <span class="badge ${PRI_C[m['优先级']]||''}">优先级 ${esc(m['优先级']||'中')}</span>`:''}</h1><div class="mut">${esc(m['说明']||'')}${isTask&&m['来自']?`　<span class="small">来自：${esc(m['来自'])}</span>`:''}${isTask?` <a class="small" id="tkEdit">✎ 编辑</a>`:''}</div>
-      <div class="pmeta">${stackP?`<span>各端 ${Object.entries(m['各端']||{}).map(([e,x])=>`<b>${esc(e)}</b> <span class="mono">${esc(String(x['仓库']||'').replace(/^\/Users\/[^/]+/,'~'))}${x['分支']?' · '+esc(x['分支']):''}</span>`).join('，')||'<span class="mut">还没有加端</span>'}</span>`:`${branches.length?`<span>🌿 开发分支 ${branches.map(n=>`<b class="mono">${esc(noteTitle(n))}</b>`).join('；')}</span>`:''}
+      <div class="pmeta">${stackP?`<span>各端 ${Object.entries(m['各端']||{}).map(([e,x])=>`<b>${esc(e)}</b> <span class="mono">${esc(String(x['仓库']||'').replace(/^\/Users\/[^/]+/,'~'))}${x['分支']?' · '+esc(x['分支']):''}</span>`).join('，')||'<span class="mut">还没有加端</span>'}</span>`:`${m['开发分支']?`<span>🌿 开发分支 <b class="mono">${esc(m['开发分支'])}</b>${bhist.length?` <span class="mut small" title="${esc(bhist.map(x=>`${x['分支']}（${x['起']||'?'} ~ ${x['止']}${x['原因']?'，'+x['原因']:''}）`).join('\n'))}">· 历史 ${bhist.map(x=>esc(x['分支'])).join('、')}</span>`:''}</span>`:branches.length?`<span>🌿 开发分支 ${branches.map(n=>`<b class="mono">${esc(noteTitle(n))}</b>`).join('；')}</span>`:''}
         ${m['开发仓库']?`<span>仓库 <span class="mono">${esc(m['开发仓库'].replace(/^\/Users\/[^/]+/,'~'))}</span></span>`:''}
         <span>关联仓库 ${esc((m['关联仓库']||[]).join('、')||'无')}</span>`}<span class="mono" title="这一期的资料目录">${esc(d.dir.replace(/^\/Users\/[^/]+/,'~'))}</span></div></div>
-    <div class="row"><span class="pview" title="分栏：按分类切换；整页：所有内容一页看完，按流程先后排，正在进行的放最上面"><button data-pv="tab" class="${whole?'':'on'}">▤ 分栏</button><button data-pv="whole" class="${whole?'on':''}">☰ 整页</button></span><label class="small mut" for="stSel">状态</label><select id="stSel">${[...new Set([m['状态'],'收集中','开发中','已完成','已暂停'])].map(s=>`<option ${s===m['状态']?'selected':''}>${s}</option>`).join('')}</select><button id="fixLink" title="设计稿、文档地址给错了：所有地方一起换成正确链接">✎ 更正链接</button>${d.archived?'<button id="arcBtn" data-on="" title="已归档：不在列表里。恢复后重新出现">↩ 恢复到列表</button>':m['状态']==='已完成'?'<button id="arcBtn" data-on="1" title="做完了：从侧栏、总览、各种列表里收起来（资料和记录都在，能搜到）；有新 Bug / ANR 会自动回来">📦 归档</button>':''}<button class="danger" id="delP" title="没用的${isTask?'事项':'期'}：从知识库里整个删掉">🗑 删除</button></div></div>
+    <div class="row"><span class="pview" title="分栏：按分类切换；整页：所有内容一页看完，按流程先后排，正在进行的放最上面"><button data-pv="tab" class="${whole?'':'on'}">▤ 分栏</button><button data-pv="whole" class="${whole?'on':''}">☰ 整页</button></span><label class="small mut" for="stSel">状态</label><select id="stSel">${[...new Set([m['状态'],'收集中','开发中','已完成','已暂停'])].map(s=>`<option ${s===m['状态']?'selected':''}>${s}</option>`).join('')}</select>${(stackP?Object.values(m['各端']||{}).some(x=>x['仓库']&&(x['版本库']||'git')==='git'):m['开发仓库'])?'<button id="bsBtn" title="这一期已合进上线分支：之后的开发、跟进、复测、Bug 修复改到新分支；老分支不删，构建、Bug、记录照旧能查">⇄ 换分支</button>':''}<button id="fixLink" title="设计稿、文档地址给错了：所有地方一起换成正确链接">✎ 更正链接</button>${d.archived?'<button id="arcBtn" data-on="" title="已归档：不在列表里。恢复后重新出现">↩ 恢复到列表</button>':m['状态']==='已完成'?'<button id="arcBtn" data-on="1" title="做完了：从侧栏、总览、各种列表里收起来（资料和记录都在，能搜到）；有新 Bug / ANR 会自动回来">📦 归档</button>':''}<button class="danger" id="delP" title="没用的${isTask?'事项':'期'}：从知识库里整个删掉">🗑 删除</button></div></div>
     ${d.guide?guideHtml(d.guide):`<div class="steps">${steps}</div>${notice}`}
     <div class="card2 talk"><div class="bd">
       <div id="sessBar">${devCache.name===d.name?devCache.bar||'':''}</div>
@@ -117,6 +117,7 @@ async function period(name){
   if($('#srcClaude'))$('#srcClaude').onclick=async()=>{try{const r=await post('/api/refresh/claude',{period:d.name});toast(r.msg);render()}catch(e){toast(e.message)}};
   $('#logGo').onclick=async()=>{const v=$('#logIn').value.trim();if(!v)return;try{await post('/api/log',{period:d.name,note:v});render()}catch(e){toast(e.message)}};
   $('#fixLink').onclick=()=>fixLinkDlg(d);
+  if($('#bsBtn'))$('#bsBtn').onclick=()=>branchSwapDlg(d.name);
   if($('#toPush'))$('#toPush').onclick=()=>{delete fullView[d.name];render()};
   $('#delP').onclick=()=>delPeriod(d.name,isTask);
   if($('#tkEdit'))$('#tkEdit').onclick=()=>{openDlg('编辑事项',`<div class="form">${taskForm({edit:1,name:d.name,kind:m['事项类型'],priority:m['优先级'],from:m['来自'],summary:m['说明'],kinds:d.taskKinds,pris:d.taskPri})}
@@ -238,4 +239,27 @@ function noteForm(d,n){
     try{const r=await post('/api/note',b);dlg.close();toast(r.msg.split('\n')[0]);render();askReplace(d.name,r)}catch(e){toast(e.message)}};
   $('#nfGo').onclick=go;$('#dlgB').onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey))go()};
   $('#nfT').focus();
+}
+// ---------------- 换分支：一期合进上线分支后，新改动进新分支；老分支不删，记进「分支历史」
+async function branchSwapDlg(name,end){
+  let v;try{v=await api('/api/period/branch-swap?name='+enc(name))}catch(e){return toast(e.message)}
+  const rows=v['端'];if(!rows.length)return toast('这一期还没有可以换分支的 git 仓库');
+  const pick=rows.find(r=>r['端']===(end||''))||rows[0];
+  openDlg('换分支',`<div class="form"><p class="small mut" style="margin-top:0">换之前会检查：没有会话在跑、工作区没有未提交的改动、老分支已推到远端。之后的开发、跟进、复测、Bug 修复（包括还没修的）都用新分支；已经修完提交的不动。老分支不删，它的 Jenkins 构建、Bug、记录照旧能查。</p>
+    ${rows.length>1||rows[0]['端']?`<label>端<select id="bsE">${rows.map(r=>`<option value="${esc(r['端'])}" ${r===pick?'selected':''}>${esc(r['端'])} · ${esc(r['分支']||'?')}</option>`).join('')}</select></label>`:''}
+    <div class="small">仓库 <span class="mono" id="bsR"></span>　现在的分支 <b class="mono" id="bsO"></b></div>
+    <label>新分支名<input type="text" id="bsN" class="mono" placeholder="如 feature-xxx-v2"></label>
+    <label>从哪个分支拉出 <span class="mut small">（新分支已存在就直接切过去，这项不用填）</span><input type="text" id="bsB" class="mono" placeholder=""></label>
+    <label>原因<input type="text" id="bsW" value="已合入上线分支"></label>
+    <label class="row small"><input type="checkbox" id="bsC" checked> 老分支上送审中、还没合进去的提交（Gerrit）cherry-pick 到新分支（不推送）</label>
+    ${(v['历史']||[]).length?`<details class="small"><summary>分支历史（${v['历史'].length}）</summary>${v['历史'].map(x=>`<div class="mono">${x['端']?esc(x['端'])+' · ':''}${esc(x['分支'])} <span class="mut">${esc(x['起']||'?')} ~ ${esc(x['止']||'')}${x['原因']?'　'+esc(x['原因']):''}</span></div>`).join('')}</details>`:''}
+    <div class="row"><button class="pri" id="bsGo">⇄ 换分支</button></div></div>`);
+  const sync=()=>{const r=rows.find(x=>x['端']===($('#bsE')?$('#bsE').value:pick['端']))||pick;
+    $('#bsR').textContent=String(r['仓库']).replace(/^\/Users\/[^/]+/,'~');$('#bsO').textContent=r['分支']||'?';$('#bsB').placeholder=(r['分支']||'老分支')+'（默认；也可填上线分支，如 origin/release-x）'};
+  sync();if($('#bsE'))$('#bsE').onchange=sync;
+  $('#bsGo').onclick=async()=>{const b=$('#bsGo'),nb=$('#bsN').value.trim();if(!nb)return toast('填新分支名');
+    b.disabled=true;b.textContent='换分支中…';
+    try{const r=await post('/api/period/branch-swap',{period:name,end:$('#bsE')?$('#bsE').value:pick['端'],branch:nb,base:$('#bsB').value.trim(),reason:$('#bsW').value.trim(),carry:$('#bsC').checked});
+      dlg.close();openDlg('已换分支',`<pre style="white-space:pre-wrap">${esc(r.msg)}</pre>`);render()}
+    catch(e){toast(e.message);b.disabled=false;b.textContent='⇄ 换分支'}};
 }

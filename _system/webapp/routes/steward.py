@@ -101,7 +101,7 @@ def _post_api_chat_rule(self, u, n, body):
 
 @post('/api/steward/settings', page_only=True)
 def _post_api_steward_settings(self, u, n, body):
-    return self._guard(lambda: {'msg': kb.steward_set(body.get('on'), body.get('level'), body.get('limit'), body.get('actions'), body.get('new_days'))})
+    return self._guard(lambda: {'msg': kb.steward_set(body.get('on'), body.get('level'), body.get('limit'), body.get('actions'), body.get('new_days'), body.get('resume'), body.get('resume_max'), body.get('learn'))})
 
 
 @post('/api/steward/dismiss', page_only=True)

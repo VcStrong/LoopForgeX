@@ -15,6 +15,8 @@ from kblib.core.periods import load_meta, log, period_dir, period_names, save_me
 from kblib.ai.flows import flow_done, flow_for, flow_text, get_flow, period_flow
 from kblib.ai.engines import engine_bin, engine_popen, period_engine
 from kblib.ai import team
+from kblib.ai import supervise as _sup
+from kblib.steward import behavior as _beh
 from kblib.plugins.registry import _sources_prompt, i18n_hint, i18n_issue_tip, run_plugins
 from kblib.ai.devprep import _dev_target, _git, _git_root, _no_flow_msg, _sdd_repo
 from kblib.infra import hosts, timing
@@ -57,6 +59,7 @@ def set_dnd(period, on, by='用户'):
                 q.update(状态='AI决策', 回答=q.get('AI建议') or '（AI 自行决策）', 回答人='AI（免打扰）', 回答时间=now())
     save_meta(d, m)
     log(d, '免打扰', f'{"开启" if on else "关闭"}（{by}）')
+    _beh.emit('dnd', d.name, by=by, 开=bool(on))
     return f'{d.name} 免打扰已{"开启：后续需要确认的地方由 AI 自行决策" if on else "关闭：需要确认时会在网页等你回答"}'
 
 
@@ -71,6 +74,14 @@ def ask(period, question, context='', options=None, recommend='', files=None, st
          '背景': (context or '').strip(), '选项': [str(x).strip() for x in options or [] if str(x).strip()],
          'AI建议': (recommend or '').strip(), '文件': [str(x) for x in files or []],
          '状态': '待回答', '回答': '', '回答人': '', '回答时间': ''}
+    try:                                  # 这类问题你过去照建议的比例（网页问题卡片上显示；只显示，不替你回答）
+        q['类别'] = _beh.ask_kind(q)
+        if _beh.enabled() and q['AI建议']:
+            r = _beh.ask_rate(q['类别'])
+            if r['次数']:
+                q['照建议率'] = r
+    except Exception:                     # noqa: BLE001
+        pass
     dnd = bool(m.get('免打扰'))
     tip = i18n_issue_tip(d.name, f'{question} {context} {recommend}')      # 问的是「要人在 AS 拉多语言」：插件能用就提示直接调
     if dnd:
@@ -123,6 +134,7 @@ def answer(period, qid, text, by='用户'):
         raise KBError('回答不能为空')
     q.update(状态='已回答', 回答=text.strip(), 回答人=by, 回答时间=now())
     save_meta(d, m)
+    _beh.ask_event(d.name, q)
     log(d, '确认', f'{qid} {q["问题"][:40]} → {text.strip()[:80]}')
     return f'已回答 {qid}'
 
@@ -252,7 +264,11 @@ def _kill_tracked(known):
 def _want_resume(d, m, s, code, res):
     """会话退出了但活没干完：自动续跑。用户停止、出错退出、已完成、流程已走完、次数用完都不续。"""
     retest = s.get('类型') == '复测'
-    if code != 0 or s.get('停止中') or s.get('仅对话') or (not retest and m.get('状态') not in DEV_OK):
+    if s.get('停止中') or (not retest and m.get('状态') not in DEV_OK):
+        return ''
+    if code != 0:           # 外部原因中断的在前面就交给监工了，走到这里的是真失败
+        return f'会话出错退出（退出码 {code}），不是用量限制 / 网络等外部原因，不自动续跑' + ('' if not res.get('结果') else f'：{res["结果"][:80]}')
+    if s.get('仅对话'):
         return ''
     if s.get('已汇报') if retest else flow_done(session_flow(m), m.get('SDD目录')):
         return ''
@@ -275,26 +291,34 @@ def _dev_finish(name, code=None):
     if s.get('插话'):       # 用户在网页选了「打断并立即处理」：带着消息接着这次对话续跑
         try:
             # 打断 = 你在指挥正在做的事：处理完接着被打断的工作做，之后照常自动续跑到做完（不再是「答完就结束」）
-            _dev_spawn(d, Path(s['仓库']), s.get('分支', ''), _chat_prompt(s['插话'], True),
-                       _session_id(s.get('日志', '')), 续跑次数=s.get('续跑次数', 0))
+            proc = _dev_spawn(d, Path(s['仓库']), s.get('分支', ''), _chat_prompt(s['插话'], True),
+                              _session_id(s.get('日志', '')), 续跑次数=s.get('续跑次数', 0))
+            _deliver_now(d, [x for x in m.get('对话') or [] if x.get('内容') == s['插话'] and x.get('状态') == '已送达'
+                             and not x.get('送达日志')][-1:], proc)
             return
         except (KBError, OSError, KeyError) as e:
             log(d, '对话', f'打断后续跑失败：{e}')
+    if code is None and res.get('结果') is not None and not res.get('出错'):
+        code = 0       # 不是本进程启动的（服务重启后接管），拿不到退出码：日志里有正常结果就当正常退出
+    cls = _sup.classify(s.get('日志', ''), code, res, stopped=bool(s.get('停止中')))
+    if cls['类别'] == '外部中断':             # 用量限制 / 网络 / 引擎崩溃 / 机器重启：记进台账，到点接着做（不标失败，也不马上续——马上续会再被限流）
+        _dev_interrupted(d, m, s, code, res, cls)
+        return
+    if cls['类别'] == '做完' and _sup.processed(m, 'dev', s.get('日志', '')):
+        save_meta(d, m)
     left = _pending_chat(m)
     if left and not s.get('停止中'):      # 这一轮结束时还有没送到的补充：带着它接着这次对话做，不让补充落空
-        for x in left:
-            x.update(状态='已送达', 送达时间=now())
+        _sup.deliver(left, '')          # 先占住，别让新的一轮从工具结果里再收一遍
         save_meta(d, m)
         try:
-            _dev_spawn(d, Path(s['仓库']), s.get('分支', ''), _chat_prompt('\n'.join(x['内容'] for x in left), True),
-                       _session_id(s.get('日志', '')), 续跑次数=s.get('续跑次数', 0), 仅对话=s.get('仅对话', False))
+            proc = _dev_spawn(d, Path(s['仓库']), s.get('分支', ''), _chat_prompt('\n'.join(x['内容'] for x in left), True),
+                              _session_id(s.get('日志', '')), 续跑次数=s.get('续跑次数', 0), 仅对话=s.get('仅对话', False))
+            _deliver_now(d, left, proc)
             log(d, '对话', f'会话这一轮结束时还有 {len(left)} 条补充没送到，已带着它接着做')
             return
         except (KBError, OSError, KeyError) as e:
             log(d, '对话', f'带着补充续跑失败：{e}')
         m = load_meta(d)
-    if code is None and res.get('结果') is not None and not res.get('出错'):
-        code = 0       # 不是本进程启动的（服务重启后接管），拿不到退出码：日志里有正常结果就当正常退出
     why = _want_resume(d, m, s, code, res)
     if why == 'resume':
         sid = _session_id(s.get('日志', ''))
@@ -333,6 +357,87 @@ def _dev_finish(name, code=None):
         log(d, '排队处理', f'出错：{e}')
 
 
+def _deliver_now(d, xs, proc=None):
+    """消息交给刚起的那一轮（按编号记下交给了哪一轮；这一轮正常结束才算已处理）。"""
+    m = load_meta(d)
+    s = m.get('开发会话') or {}
+    ids = {id(x) for x in xs}
+    keys = {(x.get('时间'), x.get('内容')) for x in xs}
+    mine = [x for x in m.get('对话') or [] if id(x) in ids or ((x.get('时间'), x.get('内容')) in keys and x.get('会话', 'dev') == 'dev')]
+    _sup.deliver(mine, s.get('日志', ''))
+    save_meta(d, m)
+
+
+def _dev_interrupted(d, m, s, code, res, cls):
+    """外部原因中断：会话标「中断待续」，记台账（几点接着做），释放手机；不标失败、不马上续。"""
+    n = int(s.get('中断次数') or 0) + 1
+    kind = '复测' if s.get('类型') == '复测' else '跟进' if s.get('仅对话') or s.get('类型') == '跟进' else '开发'
+    x = _sup.record(d.name, 'dev', cls, n, name=('事项条目' if kind == '跟进' and m.get('类型') == '事项' else kind) + '会话',
+                    log=s.get('日志', ''))
+    m = load_meta(d)
+    s = m.get('开发会话') or {}
+    s.update(状态='中断待续', 结束时间=now(), 退出码=code, 中断=_sup.summary(x), 中断次数=n,
+             会话号=_session_id(s.get('日志', '')) or s.get('会话号', ''), **res)
+    s.pop('未续跑原因', None)
+    for lf in (s.get('历史日志') or []) + [s.get('日志')]:
+        team.tally(s, lf, m, d, s.get('场景', ''))
+    m['开发会话'] = s
+    save_meta(d, m)
+    log(d, '会话中断', f'{x["会话"]}因{cls["原因"]}中断（{cls["详情"][:100]}）：' + _sup.label(x))
+    _after_session(d, s)
+    _notify(f'知识库 · {d.name}', f'{x["会话"]}{_sup.label(x)}')
+
+
+def dev_resume_interrupted(period, x=None, by='自动'):
+    """监工到点（或你点「现在就续」）：用原会话号接着做；被打断那一轮没处理的消息补发一次。不作为 MCP 工具提供。"""
+    d = period_dir(period)
+    m = load_meta(d)
+    s = m.get('开发会话') or {}
+    if s.get('状态') == '运行中' and _alive(s.get('pid', 0)):
+        raise _sup.KBLater('会话已经在跑了')
+    if s.get('状态') != '中断待续':
+        raise KBError(f'「{d.name}」的会话现在是「{s.get("状态") or "没有"}」，不是中断待续')
+    x = x or _sup.get((s.get('中断') or {}).get('编号', '')) or {}
+    sid = s.get('会话号') or _session_id(s.get('日志', ''))
+    msgs = _sup.unprocessed(m, 'dev', s.get('日志', ''))
+    _sup.deliver(msgs, '')              # 先占住（补了编号），别让新的一轮从工具结果里再收一遍；起好后记到新的那一轮
+    save_meta(d, m)
+    note = _sup.resume_note(x or {'原因': (s.get('中断') or {}).get('原因', '外部原因')})
+    if s.get('类型') == '复测':
+        prompt = note + _devices._retest_resume_prompt(d.name)
+    elif s.get('仅对话'):
+        prompt = (note + '接着把被打断前用户交代的事做完（要回答的直接在回复里回答；规则同前：需要确认用 kb_ask，不改不该改的状态），'
+                  '做完简短说明结果后结束，不要自行开始用户没提到的开发。' + _NO_BG)
+    else:
+        prompt = note + _resume_prompt(d.name, session_flow(m), m.get('SDD目录', ''))
+    prompt += _sup.resend_text(msgs)
+    if not sid:
+        prompt = ('（上一轮没有会话号，这是新开的会话。）' + prompt) if s.get('仅对话') else (
+            _dev_prompt(d.name, s['仓库'], s.get('分支', ''), session_flow(m), m.get('SDD目录', '')) + '\n\n' + prompt)
+    extra = dict(续跑次数=s.get('续跑次数', 0), 中断次数=s.get('中断次数', 0), 仅对话=bool(s.get('仅对话')))
+    if s.get('类型'):
+        extra['类型'] = s['类型']
+    proc = _dev_spawn(d, Path(s['仓库']), s.get('分支', ''), prompt, sid, **extra)
+    if msgs:
+        _deliver_now(d, msgs, proc)
+    log(d, '自动续跑' if by == '自动' else '对话', f'中断后接着做（pid {proc.pid}）' + (f'，补发 {len(msgs)} 条没处理的消息' if msgs else ''))
+    return f'已接着「{d.name}」上次的会话做（pid {proc.pid}）' + (f'，补发 {len(msgs)} 条没处理的消息' if msgs else '')
+
+
+def dev_drop_interrupted(period, by='用户（网页）'):
+    """中断待续的会话不再接着做：标成已结束（不改期状态）。"""
+    d = period_dir(period)
+    m = load_meta(d)
+    s = m.get('开发会话') or {}
+    if s.get('状态') != '中断待续':
+        return ''
+    s.update(状态='已结束', 未续跑原因=f'因{(s.get("中断") or {}).get("原因", "外部原因")}中断后，你选了不再接着做（{by}）')
+    (s.get('中断') or {}).update(状态='不用了')
+    m['开发会话'] = s
+    save_meta(d, m)
+    return '已不再接着做'
+
+
 # ---- 网页对话：开发面板「最近动作」下的输入框，遇到问题直接跟后台 AI 说
 def _pending_chat(m):
     return [x for x in m.get('对话') or [] if x['状态'] == '待送达' and x.get('会话', 'dev') == 'dev']   # an:… 是发给 Bug 会话的
@@ -345,8 +450,7 @@ def _take_chat(d, m):
     xs = _pending_chat(m)
     if not xs:
         return ''
-    for x in xs:
-        x.update(状态='已送达', 送达时间=now())
+    _sup.deliver(xs, (m.get('开发会话') or {}).get('日志', ''))
     return ('\n\n【用户在网页发来消息】\n' + '\n'.join(f'- （{x["时间"]}）{x["内容"]}' for x in xs)
             + '\n请先处理：要回答的直接在回复里回答（网页会显示），要做的就去做；处理完接着原来的工作推进。')
 
@@ -374,21 +478,29 @@ def dev_chat(period, text, interrupt=False):
     run = s.get('状态') == '运行中'
     msg = {'时间': now(), '内容': text, '方式': '打断' if run and interrupt else '排队' if run else '继续会话', '状态': '待送达'}
     if not run:
+        if s.get('状态') == '中断待续':       # 被用量限制等打断、正等着到点续：你发消息就是让它现在接着做（消息随续跑一起送到）
+            m.setdefault('对话', []).append(msg)
+            save_meta(d, m)
+            x = (s.get('中断') or {}).get('编号', '')
+            if x and _sup.get(x) and _sup.get(x)['状态'] in _sup.OPEN:
+                return _sup.resume(x, by='你发了消息') + '；你的消息一起送到了'
+            return dev_resume_interrupted(d.name, by='你发了消息') + '；你的消息一起送到了'
         if m.get('状态') == '收集中':
             raise KBError('这一期还在收集中，没有开发会话可以对话')
         sid = _session_id(s['日志'])
         if not sid:
             raise KBError('上一次会话没有会话号，接不上；请点「开始开发」/「继续开发」')
-        msg.update(状态='已送达', 送达时间=now())
         m.setdefault('对话', []).append(msg)
+        _sup.deliver([msg], '')
         m['开发会话'] = dict(s, 仅对话=True)
         save_meta(d, m)
         proc = _dev_spawn(d, Path(s['仓库']), s.get('分支', ''), _chat_prompt(text, False), sid, 续跑次数=0, 仅对话=True)
+        _deliver_now(d, [msg], proc)
         log(d, '对话', f'接着上次的会话回答（pid {proc.pid}）：{text[:100]}')
         return '已接着上一次的会话发给 AI，回复会显示在「最近动作」里'
     m.setdefault('对话', []).append(msg)
     if interrupt:
-        msg.update(状态='已送达', 送达时间=now())
+        _sup.deliver([msg], '')             # 打断后带着它续跑，送达时记到新的那一轮
         m['开发会话']['插话'] = text
         save_meta(d, m)
         log(d, '对话', f'打断当前步骤：{text[:100]}')
@@ -451,6 +563,8 @@ kb_set_status 改为「开发中」（已是开发中则跳过）。工具结果
 不要写进代码、文档、提交、日志或回复。缺少需要的账号或配置时用 kb_ask 向用户要。
 【手机】要在手机上装包、测试前先 kb_devices 看、kb_device_claim 申请（要几台申请几台，只填 count，不要照历史记录点名序列号），只在申请到的手机上操作
 （adb -s <序列号> / agent-device --serial），别动别的期占着的手机；测完 kb_device_release。
+case 要多台手机 / 多个账号协同（agent-test.json 里 capabilities_required 含 multi_device、步骤带 device_role A/B）时，按角色数申请（知识库也会自动按用例补够），
+调 sdd-agentdevice-agent 时在 prompt 里写明每个角色对应的序列号和登录账号（kb_base 查第二、第三个账号），几台一起跑；手机和账号都齐时不要标 ENV_BLOCKED。
 【不阻断的问题】手机不够或没连（如 case 要多台手机而只连了一台）、缺测试账号、环境不满足等，让某些验证做不了、但不影响继续开发的：
 不要停下等，也不要悄悄跳过——马上用 kb_issue 记下（写清要什么，如「需要 3 台手机：主持 + 2 个麦上用户」），能做的先做，
 测不了的 case 如实记 BLOCKED，然后继续。用户会在网页看到并收到通知，条件具备后点「复测」补测。
@@ -465,7 +579,7 @@ def _resume_prompt(name, f=None, docs=''):
     tip = flow_text(f, '续跑提示', 期名=name, 文档目录=str(docs)) or '先看文档目录和 git 改动确认实际进度：没完成的步骤重新执行（用前台方式）'
     return f"""继续期「{name}」的开发（开发流程「{f['名称']}」）。上一轮你结束了回复，进程随之退出，当时在后台运行的子 agent 和命令都已经被终止，不会再有结果。
 {tip}，然后按原来的要求继续推进，需要人确认时照旧用 kb_ask + kb_wait_answer。
-用手机前照旧 kb_device_claim；手机不够等不影响继续开发的问题用 kb_issue 记下后接着做。""" + _NO_BG
+用手机前照旧 kb_device_claim（多台 case 按角色数申请，把各角色的序列号和账号交给测试 agent）；手机不够等不影响继续开发的问题用 kb_issue 记下后接着做。""" + _NO_BG
 
 
 def session_flow(m):
@@ -512,6 +626,7 @@ def _dev_spawn(d, root, branch, prompt, resume_id='', **extra):
     proc = engine_popen(eng, prompt, f'kb·{d.name}', logf, root, resume_id, dict(_dev_env(d.name, branch, root), KB_SESSION='dev'),
                         scene=scene, period=m0)
     _PROCS[d.name] = proc
+    _sup.settle(d.name, 'dev')          # 又起了一轮（续跑、你发了消息、重新开始）：台账里等着的就算接上了
     m = load_meta(d)
     old = m.get('开发会话') or {}
     s = {'pid': proc.pid, '状态': '运行中', '开始时间': old.get('开始时间') if resume_id else now(), '本轮开始': now(),
@@ -661,6 +776,9 @@ def dev_start(period, note='', repo='', branch='', keep_branch=False):
         steps = switch_branch(root, branch) if branch else ['拉取：' + _switch_pull(root)]
         cur = _git(root, 'branch', '--show-current').stdout.strip()
         repo = str(root)
+        if branch and m.get('开发分支') and m['开发分支'] != cur:      # 网页切了分支：老分支记进分支历史，不直接覆盖
+            from kblib.ai.branchswap import record_switch
+            record_switch(m, m['开发分支'], cur, '', str(root), '开始开发时在网页切换')
         m['开发分支'] = cur
         save_meta(d, m)
         log(d, '确认开发分支', f'{root.name} · {cur}' + (f'（网页确认切换：{"；".join(steps)}）' if branch else f'（沿用当前分支；{steps[0]}）'))
@@ -697,6 +815,17 @@ def dev_stop(period, by='用户'):
     """网页「停止开发」：结束后台会话，状态改为已暂停，撤回未回答的问题。不作为 MCP 工具提供。"""
     d = period_dir(period)
     s = dev_session(d.name)
+    if s and s.get('状态') == '中断待续':          # 正等着到点接着做：你点停止 = 不续了
+        x = (s.get('中断') or {}).get('编号', '')
+        if x:
+            _sup.dismiss(x, by=by)
+        dev_drop_interrupted(d.name, by)
+        m = load_meta(d)
+        m['开发会话'].update(状态='已停止', 停止人=by)
+        save_meta(d, m)
+        if s.get('类型') != '复测' and m.get('状态') in DEV_OK and not s.get('仅对话'):
+            set_status(d.name, '已暂停', '网页「停止开发」', by_human=True)
+        return f'「{d.name}」的会话之前被中断、在等着接着做，现在不再接着做了'
     if not s or s.get('状态') != '运行中':
         raise KBError('没有正在运行的后台开发会话')
     pid = s['pid']

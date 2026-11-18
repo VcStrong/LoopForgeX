@@ -433,6 +433,8 @@ def period_archive(name, on=True, by='用户（网页）'):
         m['恢复时间'] = now()
     save_meta(d, m)
     log(d, '归档', ('归档：不再出现在列表里，在「📦 归档」页能找到' if on else '恢复：重新出现在列表里') + f'（{by}）')
+    from kblib.steward import behavior          # 上层模块：用到时才 import
+    behavior.emit('archive' if on else 'unarchive', d.name, by=by)
     return f'「{d.name}」已' + ('归档' if on else '恢复')
 
 

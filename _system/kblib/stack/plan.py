@@ -483,6 +483,9 @@ def stack_plan_start(name, note='', by='用户（网页）', auto=False):
     s = m.get('全栈会话') or {}
     if s.get('状态') == '运行中' and _alive(s.get('pid', 0)):
         raise KBError('方案正在出，等它结束')
+    if not auto:
+        from kblib.steward import behavior
+        behavior.emit('plan', d.name, by=by)
     ends = period_ends(d, m)
     if not ends and not m.get('新产品'):          # 还没有任何端：当成新产品，让 AI 建议要哪些端和技术栈
         m['新产品'] = True

@@ -166,6 +166,8 @@ def task_item_push(name, key, note='', by='用户（网页）'):
     st.update(状态='推动中', 推动时间=now())
     save_meta(d, m)
     log(d, '推动', f'{key}「{x["标题"][:60]}」' + (f'：{note}' if note else '') + f'（{by}）')
+    from kblib.steward import behavior
+    behavior.emit('push', d.name, key, by=by)
     if s.get('状态') == '运行中':
         dev_chat(d.name, _item_prompt(d, m, x, note, False) + '\n（先把手头的事做完再处理这一条）')
         m = load_meta(d)

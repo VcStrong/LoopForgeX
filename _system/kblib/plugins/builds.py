@@ -12,6 +12,7 @@ from kblib.core.periods import load_meta, log, period_dir, save_meta
 from kblib.core.notes import note_title, notes_of
 from kblib.plugins.registry import _plugin_json, plugins
 from kblib.ai.devsession import dev_session
+from kblib.ai.branchswap import history_branches
 from kblib.bugs.index import zt_load
 
 AUTO_SCORE = 90           # 自动绑定要的匹配分（分支整段出现在任务名里约 95+）
@@ -34,10 +35,15 @@ def period_branches(d, m=None):
             t = note_title(n) + ' ' + (n.get('内容') or '')
             out += [x for x in re.findall(r'[A-Za-z0-9][\w./-]*[-/][\w./-]*[A-Za-z0-9]', t) if not x.startswith(('http', '/'))][:2] or [t.strip()]
     s = dev_session(d.name) or {}
-    if s.get('分支'):
-        out.append(s['分支'])
-    out += [v['分支'] for v in (m.get('各端') or {}).values() if v.get('分支')]      # 全栈：各端的分支都去对构建任务
+    cur = ([m['开发分支']] if m.get('开发分支') else []) + [v['分支'] for v in (m.get('各端') or {}).values() if v.get('分支')]   # 全栈：各端的分支都去对构建任务
+    if s.get('分支') and s['分支'] not in history_branches(m):
+        cur.append(s['分支'])
+    out = cur + out + history_branches(m)          # 当前分支在前；换下来的老分支也算（老构建、Bug 归属、mapping 照旧能查）
     return list(dict.fromkeys(b for b in out if b and b not in ('master', 'main', 'develop')))
+
+
+def _old(m):
+    return set(history_branches(m)) - {m.get('开发分支')} - {v.get('分支') for v in (m.get('各端') or {}).values()}
 
 
 def _match(p, branches):
@@ -50,25 +56,62 @@ def _match(p, branches):
     return [j for j in js if j['分'] >= AUTO_SCORE and j['分'] >= top - 1][:3]
 
 
+def _tried(cur):
+    """已经对过构建任务的分支（老数据 分支 是列表）。"""
+    out = set()
+    for j in cur or []:
+        b = j.get('分支')
+        out |= set(b if isinstance(b, list) else [b] if b else [])
+    return out
+
+
+def _mark(m, js):
+    """按分支标「历史」：任务对应的分支都换下来了的，是老分支的任务（照旧显示，排在后面）。"""
+    old = _old(m)
+    for j in js:
+        b = j.get('分支')
+        bs = b if isinstance(b, list) else [b] if b else []
+        j['历史'] = bool(bs) and all(x in old for x in bs)
+    return sorted(js, key=lambda j: j['历史'])
+
+
 def period_jobs(name, rematch=False):
-    """这一期对应的构建任务；没绑过（或要求重新匹配）就按分支自动匹配。"""
+    """这一期对应的构建任务：按分支逐个匹配、追加。已有任务不丢，老分支的任务标「历史」；
+    换了新分支（还没对过构建任务的分支）自动补匹配；rematch = 所有分支重新匹配，和手动指定的合在一起。"""
     d = period_dir(name)
     m = load_meta(d)
     cur = m.get('构建任务')
-    if cur is not None and not rematch:
-        return cur
+    br = period_branches(d, m)
+    done = _tried(cur) | set(m.get('构建已匹配分支') or [])
+    todo = br if rematch or cur is None else [b for b in br if b not in done]
+    if not todo:
+        return _mark(m, cur or [])
     p = build_plugin(False)
     if not p:
-        return []
-    br = period_branches(d, m)
-    js = [{'名称': j['名称'], '地址': j['地址'], '依据': '自动', '分支': br} for j in _match(p, br)]
-    if js or rematch:
+        return _mark(m, cur or [])
+    keep = [{k: v for k, v in j.items() if k != '历史'} for j in _mark(m, list(cur or []))
+            if not rematch or j.get('依据') == '手动' or j.get('历史')]
+    have = {j['名称'] for j in keep}
+    found, tried = [], []
+    for b in todo:
+        try:
+            hit = _match(p, [b])
+        except KBError:
+            continue                      # 构建平台连不上：下次再对这个分支
+        tried.append(b)
+        for j in hit:
+            if j['名称'] not in have:
+                have.add(j['名称'])
+                found.append({'名称': j['名称'], '地址': j['地址'], '依据': '自动', '分支': b})
+    js = keep + found
+    if found or tried or rematch:
         m = load_meta(d)
         m['构建任务'] = js
+        m['构建已匹配分支'] = sorted((set(m.get('构建已匹配分支') or []) | set(tried)) if not rematch else set(tried))
         save_meta(d, m)
-        if js:
-            log(d, '构建', f'按分支 {"、".join(br)} 匹配到构建任务 {"、".join(j["名称"] for j in js)}')
-    return js
+        if found:
+            log(d, '构建', f'按分支 {"、".join(tried)} 匹配到构建任务 {"、".join(j["名称"] for j in found)}（追加，原有任务保留）')
+    return _mark(m, js)
 
 
 def set_period_jobs(name, jobs, by='用户（网页）'):
@@ -91,10 +134,14 @@ def set_period_jobs(name, jobs, by='用户（网页）'):
                 raise KBError(f'构建平台上没找到任务「{x}」')
             out.append({'名称': hit['名称'], '地址': hit['地址'], '依据': '手动'})
     m = load_meta(d)
-    m['构建任务'] = out
+    br = [b for b in period_branches(d, m) if b not in _old(m)]
+    for j in out:
+        j['分支'] = br[0] if br else ''
+    old = [j for j in _mark(m, m.get('构建任务') or []) if j.get('历史') and j['名称'] not in {x['名称'] for x in out}]
+    m['构建任务'] = out + [{k: v for k, v in j.items() if k != '历史'} for j in old]      # 只换当前分支的任务，老分支的保留
     save_meta(d, m)
-    log(d, '构建', f'构建任务改为 {"、".join(j["名称"] for j in out)}（{by}）')
-    return f'这一期的构建任务：{"、".join(j["名称"] for j in out)}'
+    log(d, '构建', f'构建任务改为 {"、".join(j["名称"] for j in out)}（{by}）' + (f'；老分支的任务保留：{"、".join(j["名称"] for j in old)}' if old else ''))
+    return f'这一期的构建任务：{"、".join(j["名称"] for j in out)}' + (f'（老分支的 {"、".join(j["名称"] for j in old)} 保留）' if old else '')
 
 
 def _builds(p, job, n):
@@ -124,7 +171,8 @@ def period_builds(name, n=10, fresh=False):
     """期页面「构建」板块：{插件, 分支, 任务: [{名称, 地址, 依据, 构建: […], 错误}]}；每次构建附上这个包上的 Bug。"""
     d = period_dir(name)
     p = build_plugin(False)
-    res = {'插件': p['名称'] if p else '', '分支': period_branches(d), '任务': [], '时间': now()}
+    m = load_meta(d)
+    res = {'插件': p['名称'] if p else '', '分支': period_branches(d, m), '历史分支': sorted(_old(m)), '任务': [], '时间': now()}
     if not p:
         return res
     if fresh:
@@ -152,7 +200,8 @@ def builds_text(name, n=5):
         return f'这一期没匹配到构建任务（分支：{"、".join(r["分支"]) or "未写"}）；在网页期页面「构建」里手动指定'
     out = []
     for j in r['任务']:
-        out.append(f'## {j["名称"]}（{j["依据"]}）{j["地址"]}' + (f'\n{j["错误"]}' if j.get('错误') else ''))
+        out.append(f'## {j["名称"]}（{j["依据"]}' + (f' · 分支 {j["分支"]}' if isinstance(j.get('分支'), str) and j['分支'] else '')
+                   + ('，老分支：已换到新分支，只供查历史构建 / mapping' if j.get('历史') else '') + f'）{j["地址"]}' + (f'\n{j["错误"]}' if j.get('错误') else ''))
         for b in j['构建']:
             apk = [a for a in b['产物'] if a['类型'] == '安装包']
             mp = next((a['地址'] for a in b['产物'] if a['类型'] == 'mapping'), '')

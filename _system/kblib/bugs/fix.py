@@ -18,6 +18,7 @@ from kblib.infra import hosts, timing
 from kblib.ai.devsession import _alive, _dev_env, _notify
 from kblib.ai.devices import dev_activity
 from kblib.bugs.index import ZT_DIR, _zt_recheck, an_skip, zt_load, zt_save
+from kblib.ai import branchswap as _bs
 from kblib.bugs.analysis import _AN, _an_finish, _an_load, _an_md, _an_save, _bug_repo, _fx_heal, an_sessions
 from kblib.bugs import fixwt
 from kblib.bugs import analysis as _bug_an
@@ -184,7 +185,7 @@ def bug_fix(ids, by='用户（网页）', note=None):
                 if note is not None and len(ids) == 1 and set_fix_note(e, note, by):
                     _fx_log(e, f'审核意见改为：{a["意见"]}（{by}）')
                     _an_md(e)
-                e['修复'] = {'状态': '排队中', '排队时间': now(), '排队序号': time.time() + len(added) * 1e-3, '仓库': root, '分支': a.get('分支') or _bug_repo(e)[1], '发起': by,
+                e['修复'] = {'状态': '排队中', '排队时间': now(), '排队序号': time.time() + len(added) * 1e-3, '仓库': root, '分支': _bs.bug_branch(e, a.get('分支') or _bug_repo(e)[1]), '发起': by,
                              **({'上次': last} if last else {})}
                 _fx_log(e, f'加入修复队列（{by}）')
                 added.append(bid)
@@ -199,6 +200,8 @@ def bug_fix(ids, by='用户（网页）', note=None):
         out.append('还在排队：' + '；'.join(wait))
     if skipped:
         out.append('没加入：' + '；'.join(skipped))
+    from kblib.steward import behavior
+    behavior.emit('bug_fix', ','.join(added), by=by)
     return '\n'.join(out)
 
 
@@ -250,6 +253,10 @@ def fix_queue_tick():
                 _fx_log(e, f'移出修复队列：{why}')
                 changed = True
                 continue
+            nb = _bs.bug_branch(e, f.get('分支') or '')
+            if nb != (f.get('分支') or ''):          # 这一期换过分支：还没开始修的改到当前分支
+                _fx_log(e, f'这一期换了分支：修复从 {f.get("分支")} 改到 {nb}')
+                f['分支'], changed = nb, True
             groups.setdefault((f['仓库'], f.get('分支') or ''), []).append(e)
         starts = []
         busy_now = set()

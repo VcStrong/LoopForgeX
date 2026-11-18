@@ -64,7 +64,7 @@ async function devBox(name){
   const pend=v['待确认'].filter(q=>q['状态']==='待回答'),done=v['待确认'].filter(q=>q['状态']!=='待回答').reverse();
   const spRun=SP?((v['在跑']||[]).length?`<a id="dvToStack" title="到「全栈」看各端进度">${v['在跑'].map(x=>`<span class="badge st-开发中">● ${esc(x)}</span>`).join(' ')}</a>`:'<span class="mut">现在没有 AI 在跑</span>'):'';
   const sess=SP&&!run&&!legacy?spRun:!s?'<span class="mut">还没有启动过后台开发</span>':run?`<span class="badge st-开发中">● 后台${s['类型']==='复测'?'复测':'开发'}中</span> <span class="small mut">已运行 <span data-since="${esc(s['开始时间'])}">${since(s['开始时间'])}</span> · ${esc((s['仓库']||'').split('/').pop())} · ${esc(s['分支']||'')} · ${esc(s['权限']||'')}${s['续跑次数']?' · 已自动续跑 '+s['续跑次数']+' 次':''}</span>`
-    :`<span class="badge st-${s['状态']==='已结束'&&!s['出错']&&!s['退出码']?'已完成':'已暂停'}">${esc(s['状态'])}</span> <span class="small mut">${esc(s['结束时间']||'')}${s['退出码']?' · 退出码 '+s['退出码']:''}${s['费用']?' · $'+(+s['费用']).toFixed(2):''}${s['续跑次数']?' · 自动续跑 '+s['续跑次数']+' 次':''}</span>${s['参与']?` <span class="small" title="这次会话派过的角色团专家">${esc(s['参与'])}</span>`:''}${s['未续跑原因']?`<div class="small" style="color:var(--warn)">${esc(s['未续跑原因'])}</div>`:''}`;
+    :`<span class="badge st-${s['状态']==='已结束'&&!s['出错']&&!s['退出码']?'已完成':'已暂停'}">${esc(s['状态'])}</span> <span class="small mut">${esc(s['结束时间']||'')}${s['退出码']?' · 退出码 '+s['退出码']:''}${s['费用']?' · $'+(+s['费用']).toFixed(2):''}${s['续跑次数']?' · 自动续跑 '+s['续跑次数']+' 次':''}</span>${s['参与']?` <span class="small" title="这次会话派过的角色团专家">${esc(s['参与'])}</span>`:''}${s['未续跑原因']?`<div class="small" style="color:var(--warn)">${esc(s['未续跑原因'])}</div>`:''}${s['状态']==='中断待续'?intrHtml(s['中断']):''}`;
   const can=!['已完成'].includes(v['状态']);
   const rt=v['复测']||{},ts2=rt['测试'],plan=rt['待复测'],phones=v['设备'];
   const freeN=phones?phones.filter(x=>x['空闲']||x['本期']).length:0;
@@ -92,7 +92,7 @@ async function devBox(name){
     <div style="font-weight:600;margin-top:2px">${esc(q['问题'])}</div>
     ${q['背景']?`<div class="ctx md">${md(q['背景']).html}</div>`:''}
     ${q['文件'].length?`<div class="small">相关文件：${q['文件'].map(f=>fileLink(f)).join('　')}</div>`:''}
-    ${q['AI建议']?`<div class="small" style="margin-top:4px">AI 建议：<b>${esc(q['AI建议'])}</b></div>`:''}
+    ${q['AI建议']?`<div class="small" style="margin-top:4px">AI 建议：<b>${esc(q['AI建议'])}</b>${q['照建议率']&&q['照建议率']['次数']?` <span class="mut" title="行为账本统计：只算你本人的回答；只是参考，仍由你决定">· 「${esc(q['照建议率']['类别'])}」类问题你过去 ${q['照建议率']['次数']} 次里 ${q['照建议率']['照建议']} 次照建议</span>`:''}</div>`:''}
     <div class="opts">${q['选项'].map((o,i)=>`<button data-opt="${i}">${esc(o)}</button>`).join('')}${q['AI建议']?'<button data-ai="1">采用 AI 建议</button>':''}</div>
     <textarea rows="2" placeholder="写下你的回答 / 修改意见（Cmd+Enter 提交）">${esc(drafts[q['编号']]||'')}</textarea>
     <div class="row" style="margin-top:6px"><button class="pri" data-ans="1">提交回答</button><span class="mut small">回答后后台会话自动继续</span></div></div>`;
@@ -135,6 +135,7 @@ async function devBox(name){
     ${v['代码基线']&&!SP?`<div class="small mut mono" title="${esc(v['代码基线详情']||'')}">📍 代码：${esc(v['代码基线'])}</div>`:''}
     ${v['免打扰']?`<div class="small mut" style="margin-top:4px">免打扰已开启（整期）：需要确认的地方由 AI 按自己的建议决策，结果记在「${SP?'确认与问题':'开发'}」里的「已处理的确认」和记录里。</div>`:''}`;
   const bar=$('#sessBar');if(bar&&bar.innerHTML!==barHtml)bar.innerHTML=barHtml;
+  if(bar)bindIntr(bar,()=>devBox(name));
   box.innerHTML=`    <div class="two"><div class="stack">
     ${pend.map(qCard).join('')}
     ${prog}

@@ -81,6 +81,7 @@ async function settingsPage(){
       ${e['内置']?(e['已修改']?`<button data-erm="${esc(e.id)}">恢复默认</button>`:''):`<button class="danger" data-erm="${esc(e.id)}">删除</button>`}</div></div>`;
   let sw=null;try{sw=await api('/api/steward')}catch(_){}
   let rp=null;try{rp=await api('/api/repos/settings')}catch(_){}
+  let up=null;try{up=await api('/api/update')}catch(_){}
   const sws=sw?sw['设置']:null;
   app.innerHTML=`<h1>⚙ 设置</h1>
     ${(()=>{const L=uiList.length?uiList:[{名称:'经典',说明:'',目录:'classic'}],cur=uiSaved||'经典',sel=setPrevTpl||cur,dir=(uiList.find(x=>x['名称']===sel)||{})['目录'];
@@ -131,10 +132,25 @@ async function settingsPage(){
       <label title="更早的老 Bug 不自动分析（省 token）；你打回的照样重新分析">只自动分析最近 <input type="number" id="swNd" min="1" max="60" value="${sws['新Bug天数']}" style="width:60px"> 天新建的 Bug</label></div>
       <div class="small mut" style="margin:6px 0">保守 = 只建议、都等你点「现在就做」；标准 = 勾选的动作自动做；放手 = 同标准（以后会把更多动作放进来）。</div>
       ${sw['动作'].map(a=>`<div style="margin:4px 0"><label><input type="checkbox" data-swa="${esc(a.id)}" ${a['开启']?'checked':''}> <b>${esc(a['名称'])}</b></label> <span class="small mut">${esc(a['说明'])}</span></div>`).join('')}
+      <div style="margin:8px 0 4px"><label><input type="checkbox" id="swRes" ${sws['中断续跑']!==false?'checked':''}> <b>中断后自动接着做</b></label>
+        <span class="small mut">后台会话被用量限制、网络断开、引擎崩溃、机器重启打断时，到点（能读出恢复时间就按它，读不出按 5 → 15 → 60 分钟）用原会话接着做，先核对文档和 git 的实际进度；不受上面的开关和每日上限限制。</span>
+        <label style="margin-left:8px">连续最多 <input type="number" id="swResMax" min="1" max="50" value="${sws['续跑上限']||5}" style="width:56px"> 次，超过就停下问你</label></div>
+      <div style="margin:4px 0"><label><input type="checkbox" id="swLearn" ${sws['学习']!==false?'checked':''}> <b>从我的操作里学习</b></label>
+        <span class="small mut">在本机记下你亲手做的操作（回答 AI、归档、推动、Bug 审核 / 修复…），按类别统计后只出提议卡片（如「以后完成 7 天自动归档」「接着推动」「这类问题你几次里几次照建议」），你点了才生效；开始开发、拍板、Bug 审核、修复、推动永远只由你点。</span></div>
       <div class="row" style="margin-top:8px"><button class="pri" id="swSave">保存</button></div></div>
     <div class="bcard" style="margin-top:10px"><b>管家规矩</b> <span class="small mut">你定的长期要求，附在每个后台 AI 会话（方案、开发、审查、Bug 分析、问管家）的提示词后面。在「🤖 问管家」里说「以后……」也会记到这里。</span>
       ${(sw['规矩']||[]).map(r=>`<div class="row" style="margin:4px 0;gap:8px"><span style="flex:1">${esc(r['内容'])}</span><span class="small mut">${esc((r['时间']||'').slice(5))}</span><a class="small" data-rdel="${esc(r['编号'])}">删除</a></div>`).join('')||'<div class="small mut" style="margin:6px 0">还没有规矩。</div>'}
       <div class="row" style="margin-top:6px;gap:8px"><input type="text" id="rlIn" style="flex:1" placeholder="如：Bug 分析结论先写复现步骤／审查不要因为代码风格打回／接口字段一律用小驼峰"><button id="rlAdd">记下</button></div></div>`:''}
+    ${up?`<h2>⬆ 更新</h2><div class="bcard">
+      <div class="small">当前版本 <b class="mono">${esc(up['当前']||'未知')}</b>${up['分支']?' · 分支 '+esc(up['分支']):''}${up['检查时间']?' · 上次检查 '+esc(up['检查时间']):' · 还没检查过'}
+        ${up['落后']?` · <b style="color:var(--s2)">有 ${up['落后']} 项更新（到 ${esc(up['远端'])}）</b>`:up['检查时间']&&!up['错误']?' · ✓ 已是最新':''}${up['错误']?` · <span style="color:var(--warn)">${esc(up['错误'])}</span>`:''}</div>
+      ${(up['不能更新']||[]).length?`<div class="small" style="color:var(--warn);margin-top:4px">只提示不更新：${esc(up['不能更新'].join('；'))}</div>`:''}
+      ${up['上次更新']&&up['上次更新']['时间']?`<div class="small mut" style="margin-top:4px">上次更新：${esc(up['上次更新']['时间'])} ${esc(up['上次更新']['结果']||'')}${up['上次更新']['说明']?' · '+esc(up['上次更新']['说明']):''}</div>`:''}
+      <div class="row" style="gap:14px;flex-wrap:wrap;margin-top:8px">${up['模式选项'].map(m=>`<label><input type="radio" name="upMode" value="${esc(m)}" ${m===up['设置']['模式']?'checked':''}> ${esc({关:'关',只提示:'只提示（默认）',自动:'空闲时自动更新'}[m]||m)}</label>`).join('')}
+        <label><input type="checkbox" id="upPush" ${up['设置']['推送']?'checked':''}> 发现新版本时推送通知（系统通知 + 群机器人）</label></div>
+      <div class="small mut" style="margin:6px 0">管家每小时在程序目录 git fetch 一次，跟 origin/main 比较，版本号就是提交号。「⬆ 更新并重启」：git pull --ff-only → 依赖变了就 pip install → 重启网页 → 自检，失败自动退回原来的提交。
+        程序文件有本地改动、分支不是 main、和远端分叉时只提示不更新；有后台 AI 会话在跑时等空闲再更新。期、基础信息、设置都不进仓库，更新不会动。${esc(up['mcp提示'])}</div>
+      <div class="row" style="gap:8px"><button class="pri" id="upSave">保存</button><button id="upChk">现在检查</button>${up['落后']&&!(up['不能更新']||[]).length?`<button id="upGo">⬆ 更新并重启</button>`:''}</div></div>`:''}
     <p style="margin:18px 0 6px"><a id="advTog">${setAdv?'▾ 收起高级设置':'▸ 高级设置：引擎详情、按角色分配 AI、自定义开发流程'}</a></p>
     <div id="advBox" ${setAdv?'':'hidden'}>
     <div class="row" style="justify-content:space-between"><h2>AI 引擎</h2><button id="enNew">＋ 新建引擎</button></div>
@@ -169,6 +185,9 @@ async function settingsPage(){
   app.querySelectorAll('[data-rdel]').forEach(a=>a.onclick=async()=>{if(await kbConfirm('删掉这条规矩？'))rl({delete:a.dataset.rdel})});
   app.querySelectorAll('[data-uit]').forEach(b=>b.onclick=()=>{setPrevTpl=b.dataset.uit;settingsPage()});
   if($('#uiUse'))$('#uiUse').onclick=async()=>{try{await setTemplate(setPrevTpl)}catch(e){toast(e.message)}};
+  if($('#upSave'))$('#upSave').onclick=async()=>{try{toast((await post('/api/update/settings',{mode:(app.querySelector('[name=upMode]:checked')||{}).value,push:$('#upPush').checked})).msg)}catch(e){toast(e.message)}settingsPage()};
+  if($('#upChk'))$('#upChk').onclick=async()=>{$('#upChk').disabled=true;$('#upChk').textContent='检查中…';try{const v=await post('/api/update/check',{});toast(v['落后']?`有 ${v['落后']} 项更新`:v['错误']||'已是最新版本')}catch(e){toast(e.message)}settingsPage()};
+  if($('#upGo'))$('#upGo').onclick=()=>updRun($('#upGo'));
   $('#advTog').onclick=()=>{setAdv=!setAdv;try{localStorage.setItem('kb.setAdv',setAdv?'1':'')}catch(_){}settingsPage()};
   $('#smEng').onchange=async e=>{try{toast((await post('/api/engine/default',{id:e.target.value})).msg)}catch(err){toast(err.message)}settingsPage()};
   const rpSet=async b=>{try{toast((await post('/api/repos/settings',b)).msg)}catch(e){toast(e.message)}settingsPage()};
@@ -185,7 +204,7 @@ async function settingsPage(){
   $('#smTerm').onchange=async e=>{try{toast((await post('/api/term/enable',{on:e.target.checked})).msg)}catch(err){toast(err.message)}settingsPage()};
   $('#smFlow').onchange=async e=>{try{toast((await post('/api/settings/default',{id:e.target.value})).msg)}catch(err){toast(err.message)}settingsPage()};
   if($('#swSave'))$('#swSave').onclick=async()=>{const acts={};app.querySelectorAll('[data-swa]').forEach(x=>acts[x.dataset.swa]=x.checked);
-    try{toast((await post('/api/steward/settings',{on:$('#swOn').checked,level:(app.querySelector('[name=swLv]:checked')||{}).value,limit:$('#swLim').value,new_days:$('#swNd').value,actions:acts})).msg)}catch(e){toast(e.message)}};
+    try{toast((await post('/api/steward/settings',{on:$('#swOn').checked,level:(app.querySelector('[name=swLv]:checked')||{}).value,limit:$('#swLim').value,new_days:$('#swNd').value,resume:$('#swRes').checked,learn:$('#swLearn').checked,resume_max:$('#swResMax').value,actions:acts})).msg)}catch(e){toast(e.message)}};
   const plSave=async(p,enabled,events,config)=>{try{toast((await post('/api/plugin',{id:p.id,enabled,events,config})).msg);render()}catch(e){toast(e.message)}};
   app.querySelectorAll('[data-pmount]').forEach(b=>b.onclick=()=>{const p=pById(b.dataset.pmount);
     if(p['启用'])return plSave(p,false,p['时机'],p['配置']);plDlg(d,p,true)});

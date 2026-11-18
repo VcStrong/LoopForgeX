@@ -109,6 +109,44 @@ def devices_text(period):
             + '\n要用时 kb_device_claim 申请，只在申请到的手机上装包、操作（adb -s <序列号> / agent-device --serial）。')
 
 
+def case_devices(m):
+    """SDD：agent-test.json 里一条 case 最多要几台手机（步骤的 device_role 个数，一个角色 = 一台手机 + 一个账号，
+    服务端操作方不算；没写角色但标了 multi_device 按 2 台）。
+    返回 (台数, 多台 case 数, 角色列表)；没有 agent-test.json 时是 (1, 0, [])。"""
+    f = Path(m.get('SDD目录') or '') / 'agent-test.json'
+    if not m.get('SDD目录') or not f.is_file():
+        return 1, 0, []
+    try:
+        data = json.loads(read_text(f))
+    except (OSError, ValueError):
+        return 1, 0, []
+    cases = data if isinstance(data, list) else next(
+        (v for v in data.values() if isinstance(v, list) and v and isinstance(v[0], dict) and 'id' in v[0]), [])
+    need, multi, allroles = 1, 0, set()
+
+    def roles(x, out):
+        if isinstance(x, dict):
+            if isinstance(x.get('device_role'), str) and x['device_role'].strip():
+                out.add(x['device_role'].strip())
+            for v in x.values():
+                roles(v, out)
+        elif isinstance(x, list):
+            for v in x:
+                roles(v, out)
+        return out
+    for c in cases:
+        if not isinstance(c, dict):
+            continue
+        rs = {r for r in roles(c, set()) if not re.fullmatch(r'(?i)ops|server|backend|服务端|运营|环境方?', r)}   # 服务端操作方不占手机
+        flag = {'multi_device', 'dual_device_coordination'} & set(c.get('capabilities_required') or [])
+        n = len(rs) if rs else 2 if flag else 1
+        if n > 1:
+            multi += 1
+            allroles |= rs
+        need = max(need, n)
+    return min(need, 10), multi, sorted(allroles)
+
+
 def device_claim(period, count=1, serials=None, reason='', strict=False):
     """申请手机：本期已占着的优先，其余空闲的按「最近最少用」挑，几期并行时分散到不同手机。
     点名 serials 时点名的能用就用；不能用的自动换成空闲手机凑够台数（strict=True 才严格按点名）。"""
@@ -118,6 +156,10 @@ def device_claim(period, count=1, serials=None, reason='', strict=False):
     count = max(1, min(int(count or 1), 10))
     if serials and not strict:
         count = max(count, len(serials))
+    cneed, cmulti, croles = case_devices(m)
+    asked = count
+    if not serials and cneed > count:       # 用例要多台（双端 / 多账号协同）时按用例要的台数分配，别只拿一台
+        count = cneed
     ds = {x['序列号']: x for x in devices(d.name)}
     branch = (m.get('开发会话') or {}).get('分支') or m.get('开发分支', '')
     got, why, swap = [], [], []
@@ -165,6 +207,14 @@ def device_claim(period, count=1, serials=None, reason='', strict=False):
         log(d, '申请手机', '、'.join(got) + (f'（{reason}）' if reason else ''))
     msg = (f'已为「{d.name}」占用 {len(got)} 台：' + '、'.join(f'{sn}（{ds[sn]["型号"]}）' for sn in got)
            + '。只在这些手机上装包、操作（adb -s <序列号> / agent-device --serial），测完 kb_device_release。') if got else '没有能用的手机。'
+    if got and cmulti and (count > 1 or cneed > 1):
+        msg += (f'\n本期 agent-test.json 有 {cmulti} 条 case 要多台手机协同（一条最多 {cneed} 台；device_role 就是账号角色'
+                + (f'，出现过 {"/".join(croles)}' if croles else '') + '，一个角色 = 一台手机登录对应账号）'
+                + (f'。你只申请了 {asked} 台，已按 {count} 台分配' if count > asked else '') + '。'
+                '跑每条 case 前按它用到的角色把这几台分好（如 B→' + got[0] + (f'、E→{got[1]}' if len(got) > 1 else '') + '），'
+                '调 sdd-agentdevice-agent（或自己跑）时把分工写进 prompt：每个角色的序列号（各自 --serial、各自 --session，如 sdd-task-N-B / sdd-task-N-E）、'
+                '登录的账号（kb_base 查测试账号，第二、第三个账号也在里面；密码用 kb_base_secret 取）；'
+                '多台 case 要用这几台一起跑，手机和账号都齐时不要标 ENV_BLOCKED / 记「设备不足」。')
     if swap:
         msg += ('\n点名的手机不可用（' + '；'.join(why) + '），已换成：'
                 + '、'.join(f'{a or "补位"} → {b}（{ds[b]["型号"]}）' for a, b in swap)
@@ -243,7 +293,15 @@ def _add_issue(d, title, detail='', kind='', need='', source='AI', key='', notif
 def add_issue(period, title, detail='', kind='', need=''):
     if not (title or '').strip():
         raise KBError('问题标题不能为空')
-    iid, new = _add_issue(period_dir(period), title, detail, kind, need)
+    d = period_dir(period)
+    k = kind if kind in ISSUE_KINDS else _issue_kind('', f'{title} {need}')
+    if k == '设备不足' and _adb():
+        free = [x for x in devices(d.name) if x['空闲'] or (x['本期'] and x['状态'] == '在线')]
+        if len(free) >= 2 or (free and not any(x['本期'] for x in free)):
+            return (f'没有记：现在有 {len(free)} 台手机可用（' + '、'.join(f'{x["序列号"]} {x["型号"]}' + ('（本期已占）' if x['本期'] else '（空闲）') for x in free)
+                    + '）。先 kb_device_claim 申请够台数（count 填要几台），再把多台 case 跑完；申请后仍不够才记「设备不足」。'
+                    '缺第二个账号先查 kb_base（测试账号都在基础知识库里）。')
+    iid, new = _add_issue(d, title, detail, kind, need)
     from kblib.plugins.registry import i18n_issue_tip      # 记的是「要拉多语言」：插件能用就让会话直接调，别停
     return (f'{iid} 已{"记下并通知用户" if new else "更新（这个问题之前记过）"}。这是非阻断问题：不用等回答，继续开发；'
             '因此没测成的 case 如实记 BLOCKED，用户条件具备后会在网页「复测」补测。'
