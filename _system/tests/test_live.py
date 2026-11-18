@@ -86,9 +86,10 @@ class LiveTest(unittest.TestCase):
         pg = kb.period_live(self.name)['进度']
         self.assertEqual((pg['总数'], pg['阶段']), (0, '规划中'))
 
+    @unittest.skip('公开版没有内置公司流程')
     def test_sdd_planning_stage(self):
         self.running()
-        self.meta(开发流程='sdd-android')
+        self.meta(开发流程='company-flow')
         (self.docs / 'sdd-status.md').write_text('step1_pm: done\nstep1_api: skipped\nstep2: in_progress\n')
         pg = kb.period_live(self.name)['进度']
         self.assertEqual((pg['总数'], pg['阶段'], pg['阶段序号'], pg['阶段总数']), (0, '技术规划', 3, 4))
