@@ -94,17 +94,18 @@ async function pushBox(name){
   const box=$('#pushBox');if(!box)return;
   let v;try{v=await api('/api/dev?name='+enc(name))}catch(e){box.innerHTML='';return}
   if(!$('#pushBox'))return;
-  const sig=JSON.stringify([v['会话'],v['待确认'],v['动作'].slice(-6)]);if(box.dataset.sig===sig)return;
+  const sig=JSON.stringify([v['会话'],v['待确认'],v['动作'].slice(-6),v['自动推送'],v['推送状态']]);if(box.dataset.sig===sig)return;
   if(box.dataset.sig&&document.activeElement&&box.contains(document.activeElement)&&document.activeElement.matches('textarea'))return;
   const s=v['会话'],run=s&&s['状态']==='运行中',pend=v['待确认'].filter(q=>q['状态']==='待回答');
   const go=$('#puGo');if(go){go.textContent=run?'发给正在推动的 AI':'分析推动'}
-  box.innerHTML=(s?`<div class="small" style="margin-top:10px">${run?`<span class="badge st-开发中">● 推动中</span> 已运行 <span data-since="${esc(s['开始时间'])}">${since(s['开始时间'])}</span> · ${esc((s['仓库']||'').split('/').pop())} ${esc(s['分支']||'')}　<a id="puStop" style="color:var(--s4)">停止</a>`
+  box.innerHTML=`<div class="small" style="margin-top:8px">${apSw(v,'puPush')}${v['推送状态']?`<span class="mut">📍 ${esc(v['推送状态'])}</span>`:''}</div>`+(s?`<div class="small" style="margin-top:10px">${run?`<span class="badge st-开发中">● 推动中</span> 已运行 <span data-since="${esc(s['开始时间'])}">${since(s['开始时间'])}</span> · ${esc((s['仓库']||'').split('/').pop())} ${esc(s['分支']||'')}　<a id="puStop" style="color:var(--s4)">停止</a>`
       :`<span class="badge st-${s['退出码']?'已暂停':'已完成'}">上次推动${esc(s['状态'])}</span> <span class="mut">${esc(s['结束时间']||'')}</span>`}</div>`:'')
     +pend.map(q=>`<div class="q" data-q="${esc(q['编号'])}"><div style="font-weight:600">🔔 ${esc(q['问题'])}</div>${q['背景']?`<div class="ctx md">${md(q['背景']).html}</div>`:''}
       ${q['AI建议']?`<div class="small">AI 建议：<b>${esc(q['AI建议'])}</b></div>`:''}<div class="opts">${q['选项'].map((o,i)=>`<button data-opt="${i}">${esc(o)}</button>`).join('')}${q['AI建议']?'<button data-ai="1">采用 AI 建议</button>':''}</div>
       <textarea rows="2" placeholder="你的回答（Cmd+Enter 提交）">${esc(drafts[q['编号']]||'')}</textarea><div class="row" style="margin-top:6px"><button class="pri" data-ans="1">提交回答</button></div></div>`).join('')
     +(v['动作'].length&&!$('#tkMsg')?`<details style="margin-top:8px" ${run?'open':''}><summary class="small mut">最近动作</summary><div class="act">${v['动作'].slice(-8).reverse().map(actLine).join('')}</div></details>`:'');
   box.dataset.sig=sig;
+  apBind(name,'puPush',v,()=>{box.dataset.sig='';pushBox(name)});
   const st=$('#puStop');if(st)st.onclick=async()=>{if(!await kbConfirm('停止正在推动的后台 AI？'))return;try{toast((await post('/api/dev/stop',{period:name})).msg);pushBox(name)}catch(e){toast(e.message)}};
   box.querySelectorAll('.q').forEach(el=>{const id=el.dataset.q,ta=el.querySelector('textarea'),q=pend.find(x=>x['编号']===id);
     ta.oninput=()=>drafts[id]=ta.value;

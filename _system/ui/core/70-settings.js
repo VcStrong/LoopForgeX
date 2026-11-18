@@ -102,7 +102,10 @@ async function settingsPage(){
         <div class="row" style="gap:10px;flex-wrap:wrap;margin:8px 0 2px"><b style="width:96px">自动归档</b><select id="smArc" style="width:auto">${[[7,'已完成满 7 天'],[14,'已完成满 14 天'],[30,'已完成满 30 天'],[0,'不自动（只手动归档）']].map(([n,t])=>`<option value="${n}" ${n===d.archiveDays?'selected':''}>${t}</option>`).join('')}</select></div>
         <div class="small mut" style="margin:0 0 4px 106px">做完的期和事项过一段时间不再出现在侧栏、总览和各种列表里，在「📦 归档」页能搜到、能恢复；又来了 Bug / ANR 会自动回来。</div>
         <div class="row" style="gap:10px;flex-wrap:wrap;margin:8px 0 2px"><b style="width:96px">网页终端</b><label class="row small" style="gap:4px"><input type="checkbox" id="smTerm" ${d.term?'checked':''} style="width:auto;margin:0"> 打开</label></div>
-        <div class="small mut" style="margin:0 0 4px 106px">期页面「终端 → ⌨ 我的终端」：在各端仓库里直接敲命令（AI 被拦、要登录、要推送时用）。等于在网页上开放 shell，只能你本人在网页上用；部署到不放心的环境可以关掉。</div></div>`})()}
+        <div class="small mut" style="margin:0 0 4px 106px">期页面「终端 → ⌨ 我的终端」：在各端仓库里直接敲命令（AI 被拦、要登录、要推送时用）。等于在网页上开放 shell，只能你本人在网页上用；部署到不放心的环境可以关掉。</div>
+        <div class="row" style="gap:10px;flex-wrap:wrap;margin:8px 0 2px"><b style="width:96px">自动推送</b><label class="row small" style="gap:4px"><input type="checkbox" id="smPush" ${d.autopush!==false?'checked':''} style="width:auto;margin:0"> 打开（总开关）</label></div>
+        <div class="small mut" style="margin:0 0 4px 106px">改完代码后由知识库把开发分支推到远端：单仓库开发 / 跟进 / 事项推动的会话正常结束且有新提交时、全栈某端审查通过时、Bug 修复合回后。每一期还可以在开发面板 / 全栈 / 事项顶部单独关。
+          关掉总开关 = 所有期都只在本地提交（全栈验收时照旧推送）。不强推；工作区有没提交的改动、HEAD 游离、和远端冲突、没权限时不推，在那一期的记录里写原因并出管家卡片。Gerrit 仓库推 refs/for 送审；svn 不自动提交。</div></div>`})()}
     ${rp&&rp.items.length?`<h3 style="margin-top:14px">按工程</h3>
     <p class="small mut">每个工程是哪一端、默认用哪套开发流程，随时可改。「自动」：端按仓库里的文件识别；流程按识别文件匹配，匹配不上用上面的默认流程。
       某一期在开发面板单独选了流程以那一期为准；事项默认用轻量流程。在全栈「各端」里给某端选了认不出的工程，也会记到这里。</p>
@@ -201,6 +204,7 @@ async function settingsPage(){
     c.checked?ev.add(c.dataset.tmt):ev.delete(c.dataset.tmt);
     try{toast((await post('/api/plugin',{id:p.id,enabled:true,events:[...ev],config:p['配置']})).msg)}catch(e){toast(e.message)}settingsPage()});
   $('#smArc').onchange=async e=>{try{toast((await post('/api/archive/days',{days:+e.target.value})).msg)}catch(err){toast(err.message)}settingsPage()};
+  $('#smPush').onchange=async e=>{try{toast((await post('/api/autopush',{on:e.target.checked})).msg)}catch(err){toast(err.message)}settingsPage()};
   $('#smTerm').onchange=async e=>{try{toast((await post('/api/term/enable',{on:e.target.checked})).msg)}catch(err){toast(err.message)}settingsPage()};
   $('#smFlow').onchange=async e=>{try{toast((await post('/api/settings/default',{id:e.target.value})).msg)}catch(err){toast(err.message)}settingsPage()};
   if($('#swSave'))$('#swSave').onclick=async()=>{const acts={};app.querySelectorAll('[data-swa]').forEach(x=>acts[x.dataset.swa]=x.checked);

@@ -1,3 +1,7 @@
+// 自动推送开关（开发面板 / 全栈 / 事项共用）：v 是 /api/dev 或 /api/stack 的返回
+function apSw(v,id){const a=v['自动推送']||{};if(!a['总开关'])return `<span class="small mut" id="${id}" title="「⚙ 设置 → 常用」里的自动推送总开关关着，所有期都只在本地提交">⬆ 自动推送（总开关已关）</span> `;
+  const r=a['最近'];return `<span class="sw ${a['开']?'on':''}" id="${id}" title="这一期改完代码后由知识库推到远端（会话正常结束且有新提交 / 全栈某端审查通过 / Bug 修复合回）；关掉 = 只在本地提交${r?'。最近：'+esc(r['时间']+' '+r['时机']+' '+r['结果']+(r['原因']?'：'+r['原因']:r['sha']?' '+r['sha']:'')):''}"><i></i>⬆ 自动推送${r&&r['结果']==='失败'?' <b style="color:var(--warn)">上次失败</b>':''}</span> `}
+function apBind(name,id,v,re){const el=$('#'+id);if(!el||!(v['自动推送']||{})['总开关'])return;el.onclick=async()=>{try{toast((await post('/api/autopush',{period:name,on:!v['自动推送']['开']})).msg)}catch(e){toast(e.message)}re()}}
 // ==== 期页面对话框、开发面板、开始开发
 // ---------------- 本期对话：期页面最上方的输入框 + 这一期所有会话的最近动作
 let tkTarget={};
@@ -131,8 +135,8 @@ async function devBox(name){
    v['角色团']!=='关'&&v['角色团全局']&&!v['角色团引擎支持']?' <span style="color:var(--warn)">这一期的引擎不支持角色团</span>':''}${
    u['合计']?` <span ${u['合计']>=u['上限']?'style="color:var(--warn)"':''} title="${esc(Object.entries(u['按角色']||{}).map(([k,n])=>k+' '+n).join('、'))}">本期 ${u['合计']}/${u['上限']}${u['合计']>=u['上限']?' · 已用完，不再派角色':''}</span>`:''}</label>`)(v['角色调用']||{合计:0,上限:30})}
     ${SP?'':`<span class="small mut" title="开发流程跟着端和仓库走：在「全栈 → 各端」里给每个端选">流程 ${(v['各端流程']||[]).length?v['各端流程'].map(x=>`${esc(x['端'])} <b>${esc(x['流程'])}</b>`).join('，'):`<b>${esc(v['当前流程'])}</b>`}${v['流程']?' <span class="badge" title="老的期在这里统一指定过流程">整期统一</span> <a id="dvFlowEnd" title="取消整期统一的流程，改为在「全栈 → 各端」按端选">改为按端</a>':''} · <a id="dvFlowGo">按端选 →</a></span>`}
-    <span class="sw ${v['免打扰']?'on':''}" id="dvDnd" title="整期生效：出方案、完善需求、各端开发、单端开发的提问都由 AI 按自己的建议决策并记录"><i></i>🌙 免打扰（整期）</span>${btn}</div>
-    ${v['代码基线']&&!SP?`<div class="small mut mono" title="${esc(v['代码基线详情']||'')}">📍 代码：${esc(v['代码基线'])}</div>`:''}
+    ${apSw(v,'dvPush')}<span class="sw ${v['免打扰']?'on':''}" id="dvDnd" title="整期生效：出方案、完善需求、各端开发、单端开发的提问都由 AI 按自己的建议决策并记录"><i></i>🌙 免打扰（整期）</span>${btn}</div>
+    ${v['代码基线']&&!SP?`<div class="small mut mono" title="${esc(v['代码基线详情']||'')}">📍 代码：${esc(v['代码基线'])}${v['推送状态']?' · '+esc(v['推送状态']):''}</div>`:''}
     ${v['免打扰']?`<div class="small mut" style="margin-top:4px">免打扰已开启（整期）：需要确认的地方由 AI 按自己的建议决策，结果记在「${SP?'确认与问题':'开发'}」里的「已处理的确认」和记录里。</div>`:''}`;
   const bar=$('#sessBar');if(bar&&bar.innerHTML!==barHtml)bar.innerHTML=barHtml;
   if(bar)bindIntr(bar,()=>devBox(name));
@@ -158,6 +162,7 @@ async function devBox(name){
     const ai=el.querySelector('[data-ai]');if(ai)ai.onclick=()=>{ta.value=q['AI建议'];drafts[id]=ta.value;ta.focus()};
     const go=async()=>{try{const r=await post('/api/answer',{period:name,id,answer:ta.value});delete drafts[id];toast(r.msg);devBox(name)}catch(e){toast(e.message)}};
     el.querySelector('[data-ans]').onclick=go;ta.onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey))go()}});
+  apBind(name,'dvPush',v,()=>devBox(name));
   $('#dvDnd').onclick=async()=>{try{const r=await post('/api/dnd',{period:name,on:!v['免打扰']});toast(r.msg);devBox(name);if($('#stackBox'))stackBox(name)}catch(e){toast(e.message)}};
   ['#dvToStack','#dvToStack2'].forEach(k=>{const a=$(k);if(a)a.onclick=()=>{const t=document.querySelector('[data-tab="stack"]');if(t)t.click();const p=document.querySelector('[data-pane="stack"]');if(p)p.scrollIntoView({behavior:'smooth',block:'start'})}});
   const st=$('#dvStart');if(st)st.onclick=()=>{

@@ -16,12 +16,12 @@ from kblib.ai.flows import flow_done, flow_for, flow_text, get_flow, period_flow
 from kblib.ai.engines import engine_bin, engine_popen, period_engine
 from kblib.ai import team
 from kblib.ai import supervise as _sup
-from kblib.steward import behavior as _beh
 from kblib.plugins.registry import _sources_prompt, i18n_hint, i18n_issue_tip, run_plugins
 from kblib.ai.devprep import _dev_target, _git, _git_root, _no_flow_msg, _sdd_repo
-from kblib.infra import hosts, timing
+from kblib.infra import autopush as _ap, hosts, timing
 from kblib import lazy
 _talk = lazy('kblib.ai.talk')
+_beh = lazy('kblib.steward.behavior')      # 上层模块：用到时才 import（管家按操作学习）
 _devices = lazy('kblib.ai.devices')      # 上层模块：用到时才 import（不形成循环）
 
 
@@ -292,7 +292,7 @@ def _dev_finish(name, code=None):
         try:
             # 打断 = 你在指挥正在做的事：处理完接着被打断的工作做，之后照常自动续跑到做完（不再是「答完就结束」）
             proc = _dev_spawn(d, Path(s['仓库']), s.get('分支', ''), _chat_prompt(s['插话'], True),
-                              _session_id(s.get('日志', '')), 续跑次数=s.get('续跑次数', 0))
+                              _session_id(s.get('日志', '')), 续跑次数=s.get('续跑次数', 0), 仅对话=s.get('仅对话', False))
             _deliver_now(d, [x for x in m.get('对话') or [] if x.get('内容') == s['插话'] and x.get('状态') == '已送达'
                              and not x.get('送达日志')][-1:], proc)
             return
@@ -349,12 +349,35 @@ def _dev_finish(name, code=None):
     save_meta(d, m)
     log(d, '开发会话结束', f'退出码 {code}' + (f'；{s.get("结果", "")[:100]}' if s.get('结果') else '')
         + (f'；{why}' if why else ''))
+    _session_push(d, s, code, {'跟进': '跟进结束', '复测': '复测结束'}.get(s.get('类型', ''), '开发会话结束'))
     _after_session(d, s)
     _notify(f'知识库 · {d.name}', '后台开发会话已结束' + ('（有错误）' if code else ''))
     try:
         _talk.talk_queue_tick(d.name)          # 排队的跟进内容：会话都结束了就开始处理
     except Exception as e:
         log(d, '排队处理', f'出错：{e}')
+
+
+def _head(root):
+    try:
+        return hosts.git(str(root), 'rev-parse', 'HEAD', timeout=15).stdout.strip() if hosts.vcs(str(root)) == 'git' else ''
+    except (OSError, KBError):
+        return ''
+
+
+def _session_push(d, s, code, when):
+    """会话正常结束且这次有新提交：按这一期的开关自动推送（被停止、出错、外部中断的不推）。全栈期多仓库，由审查通过 / 验收推。"""
+    try:
+        m = load_meta(d)
+        if code != 0 or s.get('停止中') or not _ap.autopush_on(m) or (m.get('全栈') or len(m.get('各端') or {}) > 1):
+            return
+        root = s.get('仓库') or ''
+        head = _head(root)
+        if not head or head == s.get('起点'):
+            return
+        _ap.autopush(d, root, s.get('分支', ''), '事项推动' if m.get('类型') == '事项' else when, s.get('起点', ''))
+    except Exception as e:          # noqa: BLE001  推送出问题不影响会话收尾
+        log(d, '自动推送', f'出错：{e}')
 
 
 def _deliver_now(d, xs, proc=None):
@@ -634,6 +657,8 @@ def _dev_spawn(d, root, branch, prompt, resume_id='', **extra):
          '流程': old.get('流程', ''), '引擎': eng['id'], '类型': old.get('类型', ''), '范围': old.get('范围', ''), **extra}
     if scene:
         s['场景'] = scene
+    # 自动推送判断「这次有没有新提交」用的起点：同一次会话的续跑 / 中断后接着做沿用，新的一次（开发、跟进）重新记
+    s['起点'] = old['起点'] if old.get('起点') and old.get('状态') in ('运行中', '中断待续') else _head(root)
     if resume_id:
         s['历史日志'] = (old.get('历史日志') or []) + [old.get('日志')]
         for k in ('角色', '角色日志'):

@@ -1,7 +1,8 @@
 # From 大大王.DT
 """Bug 修复：审核通过后的独立修复会话和修复队列；只在知识库标记。
 
-git 仓库：修复会话在独立 worktree（fixwt.py）里修，每个 Bug 本地提交一次（不推送），结束后合回目标分支；
+git 仓库：修复会话在独立 worktree（fixwt.py）里修，每个 Bug 本地提交一次（AI 不推送），结束后合回目标分支；
+  归属的期开着「自动推送」（默认开）时，合回后由知识库推送目标分支（infra/autopush.py，不强推，推不上记原因）；
   主工作区有改动、在别的分支上都不挡。worktree 建不起来才退回主工作区（要求干净、在目标分支上）。
 svn 工作副本：svn 一提交就进服务器，修复会话只改不提交，kb_bug_fixed 报这个 Bug 改了哪些文件（修复.待提交）；
   你在 Bug 上点「⬆ 提交到 svn」才提交（bug_svn_commit，只在网页，不给 AI）。同一个工作副本有待提交的改动时，后面的修复先排队。"""
@@ -14,7 +15,7 @@ from kblib.core.common import KBError, PERIODS, load_settings, now, uuid_hex
 from kblib.core.periods import load_meta, log, period_dir, period_names
 from kblib.ai.engines import engine_popen, role_engine
 from kblib.ai.devprep import _git
-from kblib.infra import hosts, timing
+from kblib.infra import autopush as _ap, hosts, timing
 from kblib.ai.devsession import _alive, _dev_env, _notify
 from kblib.ai.devices import dev_activity
 from kblib.bugs.index import ZT_DIR, _zt_recheck, an_skip, zt_load, zt_save
@@ -601,14 +602,50 @@ def fx_shelve(x, data):
         for e in (left or mine[:1]):
             _fx_log(e, f'修复会话 {sid} 留下的改动没能自动收起：{msg}；请手动处理')
         return f'；⚠ 遗留改动没收起：{msg}'
+    pushed = _fx_push(x, mine) if not _is_svn(root) else ''
     if not where:
-        return ''
+        return pushed
     x['遗留'] = where
     for e in left:
         e['修复']['遗留'] = where
     for e in (left or mine[:1]):
         _fx_log(e, f'修复会话 {sid} 结束时工作区还有改动，已收起：{where}')
-    return f'；遗留改动已收起（{where}）'
+    return f'；遗留改动已收起（{where}）' + pushed
+
+
+def _fx_push(x, mine):
+    """修复提交合回目标分支后自动推送：总开关开、归属的期（没归属的只看总开关）都没关「自动推送」时才推。→ 给通知的一句。"""
+    root, branch = x.get('仓库') or '', x.get('分支') or ''
+    try:
+        if hosts.vcs(root) != 'git':
+            return ''
+        if not x.get('工作树') and hosts.git(root, 'rev-parse', 'HEAD').stdout.strip() == x.get('起点'):
+            return ''                                      # 主工作区修的：这次没有新提交
+        owners = [(d, load_meta(d)) for d in _bug_an._owner_dirs(mine)]
+        if not _ap.autopush_global() or any(not _ap.autopush_on(m) for _, m in owners):
+            return ''
+        when = f'Bug 修复合回（{"、".join(x.get("Bug") or [])}）'
+        if owners:
+            r = _ap.autopush(owners[0][0], root, branch, when, x.get('起点', ''))
+            for d, _ in owners[1:]:
+                log(d, '自动推送', f'{when}：{r.get("结果")}（记录在「{owners[0][0].name}」）')
+        else:
+            try:
+                r = _ap.push_git(root, branch, x.get('起点', ''))
+            except KBError as ex:
+                r = {'结果': '失败', '原因': str(ex)}
+    except Exception as ex:                                # noqa: BLE001  推送出问题不影响修复收尾
+        r = {'结果': '失败', '原因': str(ex)}
+    if r.get('结果') == '已推送':
+        msg = f'已自动推送 {r.get("远端", "")} {branch}（{r.get("提交数")} 个提交，{r.get("sha")}）'
+    elif r.get('结果') == '失败':
+        msg = f'⚠ 自动推送失败：{str(r.get("原因"))[:200]}'
+    else:
+        return ''
+    x['推送'] = msg
+    for e in mine[:1]:
+        _fx_log(e, f'修复会话 {x["编号"]}：{msg}')
+    return f'；{msg}'
 
 
 def _fx_wrap_wt(x, data, mine, left, label):
@@ -650,6 +687,8 @@ def _fx_wrap_wt(x, data, mine, left, label):
                 f['说明'] = (f.get('说明') or '') + f'\n{msg}'
             if msg:
                 _fx_log(e, f'修复会话 {sid}：{msg}')
+    if ok and log:                     # 有修复提交合回了目标分支：按开关推送（锁外做，网络慢不卡队列）
+        tail += _fx_push(x, mine)
     return tail + (f'；{msg}' if msg else '')
 
 

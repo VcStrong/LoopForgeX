@@ -20,7 +20,7 @@ from kblib.ai.devices import dev_activity
 from kblib.ai.engines import engine_popen, period_engine
 from kblib.ai import team
 from kblib.ai import supervise as _sup
-from kblib.ai.devsession import DEV_DIR, PUSH_RULE, _NO_BG, _alive, _deliver_now, _dev_env, _dev_spawn, _notify, _session_id, dev_chat, dev_session
+from kblib.ai.devsession import DEV_DIR, PUSH_RULE, _NO_BG, _alive, _deliver_now, _dev_env, _dev_spawn, _head, _notify, _session_id, _session_push, dev_chat, dev_session
 from kblib.bugs.index import zt_load
 from kblib.infra import timing
 from kblib.bugs.analysis import _an_load, _an_save, an_sessions
@@ -160,7 +160,7 @@ def _task_prompt(d, m, root, branch, text, resumed):
 {text}
 
 接着上面的上下文继续做（比如上次只改了代码，这次让你编译校验，就去编译、跑相关测试并说明结果）。不走开发流程，不用 SDD；
-要再改代码先用 kb_ask 说清改法（提示免打扰就按你的建议做）；提交按仓库惯例，不 push。和某一条的结果有关的，用 kb_task_item 更新那一条的结论。
+要再改代码先用 kb_ask 说清改法（提示免打扰就按你的建议做）；提交按仓库惯例，不 push（推送由知识库在会话结束后按这一期的「自动推送」开关做）。和某一条的结果有关的，用 kb_task_item 更新那一条的结论。
 回复里简短说明做了什么、结果如何。不要改事项的状态。""" + _NO_BG
 
 
@@ -303,6 +303,7 @@ def _px_start(d, m, text, by, sess):
         f'这一期还有别的会话在跑（{others}），可能同时在改同一个仓库：改之前先 git status 看清楚，只改、只提交你这次需要的文件，'
         '不要 reset / checkout / stash 别人的改动；和正在做的事冲突时用 kb_ask 问。这是用户另起的任务，请推动解决：') + note
     eng = period_engine(m)
+    start = _head(root)
     proc = engine_popen(eng, prompt, f'kb·{d.name}·新会话', logf, root,
                         env_extra=dict(_dev_env(d.name, branch, root), KB_SESSION='px:' + pid_), scene='跟进', period=m)
     m = load_meta(d)
@@ -322,6 +323,7 @@ def _px_start(d, m, text, by, sess):
                 team.tally(x, x.get('日志', ''), mm, d, '跟进')
         save_meta(d, mm)
         log(d, '新会话结束', f'退出码 {code}：{text[:60]}')
+        _session_push(d, {'仓库': root, '分支': branch, '起点': start}, code, '新会话结束')
         _notify(f'知识库 · {d.name}', '另起的会话已结束' + ('（有错误）' if code else ''))
         try:
             talk_queue_tick(d.name)

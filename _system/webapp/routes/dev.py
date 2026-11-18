@@ -15,7 +15,7 @@ def _get_api_devices(self, u, q):
 
 @get('/api/dev')
 def _get_api_dev(self, u, q):
-    return self._guard(lambda: {**kb.dev_overview(q.get('name', '')), **kb.stack_brief(q.get('name', ''))})
+    return self._guard(lambda: {**kb.dev_overview(q.get('name', '')), **kb.stack_brief(q.get('name', '')), **kb.autopush_view(q.get('name', ''))})
 
 
 @post('/api/dev/start', page_only=True)
@@ -62,6 +62,13 @@ def _post_api_dev_stop(self, u, n, body):
 @post('/api/dnd', page_only=True)
 def _post_api_dnd(self, u, n, body):
     return self._guard(lambda: {'msg': kb.set_dnd(body.get('period', ''), bool(body.get('on')))})
+
+
+@post('/api/autopush', page_only=True)
+def _post_api_autopush(self, u, n, body):
+    """自动推送开关：带 period = 这一期；不带 = 「⚙ 设置 → 常用」总开关。"""
+    on = bool(body.get('on'))
+    return self._guard(lambda: {'msg': kb.autopush_set(body['period'], on) if body.get('period') else kb.autopush_set_global(on)})
 
 
 @post('/api/answer', page_only=True)

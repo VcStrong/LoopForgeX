@@ -5,7 +5,7 @@ from webapp.shared import *  # noqa: F401,F403
 
 @get('/api/stack')
 def _get_api_stack(self, u, q):
-    return self._guard(lambda: kb.stack_get(q.get('name', '')))
+    return self._guard(lambda: {**kb.stack_get(q.get('name', '')), **kb.autopush_view(q.get('name', ''))})
 
 
 @get('/api/stack/repos')

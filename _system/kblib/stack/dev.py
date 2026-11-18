@@ -9,7 +9,7 @@
 期信息「各端开发」：{端: {状态, 轮次, 起点, 会话, 日志, 审查日志, 开始, 结束, 汇报, 审查, 引擎, 待办}}
 状态：排队中 / 开发中 / 待审查 / 审查中 / 打回修改 / 审查通过 / 要你看 / 失败 / 已停止 / 中断待续（用量限制等外部原因，监工到点接着做）
 svn 的端：svn 一提交就进服务器，所以 AI 只改工作副本、不提交；审查看 svn diff；你验收时知识库只提交这次改的文件
-  （开工前工作副本里原有的改动不碰），各端开发记「已提交」= 版本号。git 的端：AI 在本地提交、不推送，你验收时知识库推送开发分支（记「已推送」）。
+  （开工前工作副本里原有的改动不碰），各端开发记「已提交」= 版本号。git 的端：AI 在本地提交、不推送，审查通过时（这一期开着「自动推送」）或你验收时知识库推送开发分支（记「已推送」）。
 """
 import json
 import os
@@ -24,7 +24,7 @@ from pathlib import Path
 
 from kblib.core.common import PERIODS, KBError, now
 from kblib.core.periods import load_meta, log, period_dir, period_names, save_meta, set_status
-from kblib.infra import hosts, timing
+from kblib.infra import autopush as _ap, hosts, timing
 from kblib.plugins import registry as _plugins
 from kblib.ai.devsession import DEV_DIR, _NO_BG, _alive, _dev_env, _dev_result, _notify, _session_id
 from kblib.ai.engines import engine_cmd, engine_popen, role_engine
@@ -211,8 +211,8 @@ def _dev_prompt(d, m, end, x, plan, issues=None, todo=''):
 - {'服务端已经做完并通过审查，客户端可以直接接真实接口。' if server_ok or end == '服务端' else '服务端接口可能还没做好：客户端先按接口契约写 mock（优先用项目已有的 mock 方式），做成一键切换，联调时再切真实接口。'}
 - 服务端：按契约实现接口和数据变更，写接口测试（至少覆盖契约里的每个接口的成功和主要错误码）。
 {_PLAIN_RULE if plain else _SVN_RULE if svn else '- 提交按仓库惯例，提交说明里带需求编号（如 feat(xxx): … REQ-001）；只改这个端的仓库。\n'
- '- 【不要 git push，不要加 / 改 remote】：推送由用户验收时知识库统一做（远端在网页「全栈 → 各端 → 推送到」里填）。'
- '用户要求推到某个仓库时，回复「验收时由知识库推送，请在「全栈 → 各端」填推送地址」，不要自己去推。'}
+ '- 【不要 git push，不要加 / 改 remote】：推送由知识库统一做（这一期开着「自动推送」时审查通过就推，否则用户验收时推；远端在网页「全栈 → 各端 → 推送到」里填）。'
+ '用户要求推到某个仓库时，回复「由知识库推送，请在「全栈 → 各端」填推送地址」，不要自己去推。'}
 - 做的过程中发现：需求得改、别的端也必须配合 / 兼容、接口契约得改、方案漏了东西——不要自己去改别的端或契约，
   用 kb_stack_change（iteration=「{d.name}」，from_end={end}）提出来（说清为什么、影响哪些端），然后继续做不受影响的部分；
   用户拍板后你会收到要补做的内容。
@@ -442,6 +442,8 @@ def _finish(name, end, phase, code=None):
             x.update(状态='打回修改', 轮次=x.get('轮次', 0) + 1)
         else:
             x.update(状态='要你看', 结束时间=now(), 结果=f'审查打回 {MAX_ROUNDS} 轮还没过')
+    if x['状态'] == '审查通过':
+        _push_on_pass(d, m, end, x)
     if end == '服务端' and x['状态'] == '审查通过':
         _queue_integration(d, m)
     save_meta(d, m)
@@ -458,6 +460,25 @@ def _finish(name, end, phase, code=None):
             _notify('知识库 · 全栈', f'「{d.name}」各端都结束了，通过 {len(ok)}/{len(dev)}')
     elif x['状态'] in ('要你看', '失败'):
         _notify('知识库 · 全栈', f'「{d.name}」{end}：{x["状态"]}')
+
+
+def _since(x):
+    return '' if x.get('起点') in (None, '', EMPTY_TREE) else x['起点']
+
+
+def _push_on_pass(d, m, end, x):
+    """某端审查通过：这一期开着「自动推送」就马上推这一端的开发分支（git 才推；svn 仍等验收 / 你点）。m 由调用方保存。"""
+    if x.get('版本库') in ('svn', '本地') or not _ap.autopush_on(m):
+        return
+    try:
+        r = _ap.autopush(d, x['仓库'], x.get('分支') or '', f'{end} 审查通过', _since(x), m=m)
+    except Exception as e:                # noqa: BLE001  推送出问题不影响审查结论
+        r = {'结果': '失败', '原因': str(e)}
+        log(d, '自动推送', f'{end} 出错：{e}')
+    if r.get('结果') == '已推送':
+        x.update(已推送=f'{r.get("远端")}/{r.get("分支")}@{r.get("sha")}', 推送时间=now())
+    elif r.get('结果') == '失败':
+        x.pop('已推送', None)             # 验收时再推一次
 
 
 def _end_interrupted(d, m, end, x, phase, code, res, cls):
@@ -656,36 +677,40 @@ def stack_accept(name, by='用户（网页）'):
     return '已验收，这一期标为已完成' + (f'；{"；".join(done)}' if done else '') + '；后续 Bug 照常同步、分析、修复'
 
 
-def _git_push_end(d, e, x):
-    """git 的端：把开发分支推到远端（只推这一个分支）。→ 一句结果；推不上抛错。"""
+def _git_push_end(d, e, x, m=None):
+    """git 的端：把开发分支推到远端（只推这一个分支；Gerrit 推去送审）。→ 一句结果；推不上抛错。"""
     root = x['仓库']
-    g = lambda *a, t=60: hosts.git(root, *a, timeout=t)
-    b = x.get('分支') or g('branch', '--show-current').stdout.strip()
-    if not b:
-        raise KBError(f'{e}：仓库不在任何分支上（游离 HEAD），不知道推哪个分支；切到开发分支后再验收')
-    if g('rev-parse', '--verify', '--quiet', f'refs/heads/{b}').returncode:
-        raise KBError(f'{e}：本地没有分支 {b}')
-    n = g('rev-list', '--count', f'refs/heads/{b}' if x.get('起点') == EMPTY_TREE else f'{x["起点"]}..refs/heads/{b}').stdout.strip() if x.get('起点') else '1'
-    if n == '0':
-        x['已推送'] = '无改动'
-        return f'{e}（git）分支 {b} 没有新提交，不用推送'
-    rs = g('remote').stdout.split()
-    remote = 'origin' if 'origin' in rs else (rs[0] if rs else '')
-    if not remote:
+    try:
+        r = _ap.push_git(root, x.get('分支') or '', _since(x), allow_dirty=True)
+    except _ap.PushError as ex:
+        if m is not None:
+            _ap._record(d, m, {'时间': now(), '时机': '验收', '仓库': str(root), '分支': x.get('分支') or '', '结果': '失败', '原因': str(ex)[:500]})
+        raise KBError(f'{e}：{ex}；处理后再验收') from None
+    b = r['分支']
+    if r['结果'] == '没有远端':
         x['已推送'] = '没有远端'
-        return f'{e}（git）仓库没有远端，没推送（{n} 个提交留在本地 {b}）'
-    up = hosts.git_catch_up(root, remote, b)                 # 推代码前更新：远端有新提交先 rebase 上去
-    r = hosts.run(root, f'GIT_TERMINAL_PROMPT=0 git push --follow-tags -u {remote} refs/heads/{b}:refs/heads/{b}', timeout=300)
-    if r.returncode:
-        err = (r.stderr or r.stdout).strip()[-600:]
-        hint = ('远端有别人的新提交：先在仓库里 git pull --rebase，解决冲突后再验收' if any(k in err for k in ('rejected', 'fetch first', 'non-fast-forward'))
-                else '没有推送权限或要登录：先在那台机器上手动 git push 一次' if any(k in err.lower() for k in ('denied', 'authentication', 'could not read', 'permission')) else '')
-        raise KBError(f'{e}：git push 失败' + (f'（{hint}）' if hint else '') + f'：{err}')
-    sha = g('rev-parse', '--short', f'refs/heads/{b}').stdout.strip()
-    x.update(已推送=f'{remote}/{b}@{sha}', 推送时间=now())
-    dirty = g('status', '--porcelain', '--untracked-files=no').stdout.strip()
-    log(d, '各端开发', f'{e} 验收后推送 {remote}/{b}（{n} 个提交，{sha}；推送前：{up}）')
-    return f'{e}（git）已推送 {remote}/{b}，{n} 个提交' + ('（' + up + '）' if up != '远端没有新提交' else '') + ('；工作区还有没提交的改动，没推送' if dirty else '')
+        return f'{e}（git）仓库没有远端，没推送（提交留在本地 {b}）'
+    if r['结果'] == '无新提交':
+        x['已推送'] = '无改动'
+        return f'{e}（git）分支 {b} 没有要推的新提交'
+    x.update(已推送=f'{r["远端"]}/{b}@{r["sha"]}', 推送时间=now())
+    if m is not None:
+        _ap._record(d, m, {'时间': now(), '时机': '验收', '仓库': str(root), '分支': b, '提交数': r['提交数'], 'sha': r['sha'],
+                           '结果': '已推送', '远端': r['远端'], **({'Gerrit': True} if r['Gerrit'] else {})})
+    up = r['推前']
+    dirty = hosts.git(root, 'status', '--porcelain', '--untracked-files=no').stdout.strip()
+    how = f'{r["远端"]}（Gerrit 送审 {b}）' if r['Gerrit'] else f'{r["远端"]}/{b}'
+    log(d, '各端开发', f'{e} 验收后推送 {how}（{r["提交数"]} 个提交，{r["sha"]}；推送前：{up}）')
+    return f'{e}（git）已推送 {how}，{r["提交数"]} 个提交' + ('（' + up + '）' if up != '远端没有新提交' else '') + ('；工作区还有没提交的改动，没推送' if dirty else '')
+
+
+def _pushed_now(x):
+    """审查通过时已经推过、之后分支没再动：验收时跳过。"""
+    p = str(x.get('已推送') or '')
+    if '@' not in p:
+        return bool(p) and p != '无改动' and p != '没有远端'
+    tip = hosts.git(x['仓库'], 'rev-parse', '--short', f'refs/heads/{x.get("分支") or "HEAD"}', timeout=15).stdout.strip()
+    return bool(tip) and p.rpartition('@')[2][:7] == tip[:7]
 
 
 def _publish_ends(d, m, plan):
@@ -699,12 +724,12 @@ def _publish_ends(d, m, plan):
                 out.append(f'{e}（本地目录）改动留在目录里，不用推送')
             continue
         if x.get('版本库') != 'svn':
-            if x.get('已推送'):
+            if x.get('已推送') and _pushed_now(x):
                 continue
             if x.get('状态') != '审查通过':
                 out.append(f'{e}（git）没通过审查，没有推送，提交留在本地')
                 continue
-            out.append(_git_push_end(d, e, x))
+            out.append(_git_push_end(d, e, x, m))
             save_meta(d, m)
             continue
         if x.get('已提交'):

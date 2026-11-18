@@ -552,6 +552,11 @@ def steward_view():
         cards += _upd.update_cards()          # 知识库有新版本：「⬆ 更新并重启」
     except Exception:                         # noqa: BLE001
         pass
+    try:
+        from kblib.infra.autopush import fail_cards
+        cards += fail_cards()                 # 自动推送失败：推送失败：xx（之后推成功了就不再提）
+    except Exception:                         # noqa: BLE001
+        pass
     cards += _beh.learned_cards()             # 从你的操作里学到的提议（归档天数、接着推动）：都要你点一下
     cards = [c for c in cards if c['id'] not in ign]
     order = {'问你': 0, '待你': 1, '建议': 2}
