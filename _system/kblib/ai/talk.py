@@ -9,11 +9,12 @@
 """
 import os
 import re
+import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
 
-from kblib.core.common import KBError, now, sess_env, uuid_hex
+from kblib.core.common import SYS, KBError, now, sess_env, uuid_hex
 from kblib.core.periods import load_meta, log, period_dir, period_names, save_meta, set_status, unarchive_if
 from kblib.core.notes import add_note, note_title, notes_of
 from kblib.ai.devices import dev_activity
@@ -223,14 +224,49 @@ def _to_other(d, m, key, text, name):
     m.setdefault('对话', []).append({'时间': now(), '内容': text, '方式': '排队', '状态': '待送达', '会话': key, '目标': name})
 
 
-def period_say(name, text, target='', interrupt=True, by='用户（网页）', mode='insert'):
+ATTACH_DIR = '对话附件'
+STAGE = SYS / 'tmp' / 'chat-stage'           # 网页上传的暂存区（和交给管家共用 /api/chat/stage）
+
+
+def talk_attach(d, ids):
+    """把网页暂存的文件（暂存号）复制进这一期的「对话附件/<时间>/」，返回复制后的路径。暂存区是临时的，会话晚点才读也不会丢。"""
+    srcs = [STAGE / i for i in ids or [] if re.fullmatch(r'[0-9a-f]{32}', i or '') and (STAGE / i).is_dir()]
+    if not srcs:
+        return []
+    dst = d / ATTACH_DIR / datetime.now().strftime('%Y%m%d-%H%M%S')
+    dst.mkdir(parents=True, exist_ok=True)
+    out = []
+    for s in srcs:
+        for f in s.iterdir():                       # 一个暂存号一个顶层文件 / 文件夹
+            to = dst / f.name
+            n = 1
+            while to.exists():
+                to = dst / f'{f.stem}-{n}{f.suffix}'
+                n += 1
+            (shutil.copytree if f.is_dir() else shutil.copy2)(f, to)
+            out.append(to)
+    return out
+
+
+def _with_files(text, files):
+    if not files:
+        return text
+    block = '附件（用 Read 查看；文件夹用 ls 看里面的文件）：\n' + '\n'.join(f'- {f}{"/" if f.is_dir() else ""}' for f in files)
+    return f'{text}\n\n{block}' if text else block
+
+
+def period_say(name, text, target='', interrupt=True, by='用户（网页）', mode='insert', files=None):
     """期页面最上方的输入框。没有会话在跑：推动解决。有会话在跑时 mode：
     insert 插入当前会话（target：会话的键 dev / an:… / px:…，或 all；开发会话默认打断当前这一步、带着补充立即接着做）；
-    new 另起一个新会话并行执行；queue 排队，这一期的会话都结束后自动开始处理。"""
+    new 另起一个新会话并行执行；queue 排队，这一期的会话都结束后自动开始处理。
+    files：网页暂存的文件（暂存号），复制进这一期后把路径附在消息末尾。"""
     d = period_dir(name)
     text = (text or '').strip()
-    if not text:
+    if not text and not files:
         raise KBError('消息不能为空')
+    text = _with_files(text, talk_attach(d, files))
+    if not text:
+        raise KBError('附件已经失效（暂存区被清理了），重新选一下文件')
     unarchive_if(d.name, '你在这一期的页面里说了话')
     m = load_meta(d)
     sess = period_sessions(d.name)

@@ -42,6 +42,7 @@ _MODULES = [   # 按依赖从下往上：后面的可以用前面的；分包说
     'bugs.analysis',
     'bugs.fix',
     'ai.talk',
+    'ai.live',
     'anr.store',
     'anr.manual',
     'plugins.builds',

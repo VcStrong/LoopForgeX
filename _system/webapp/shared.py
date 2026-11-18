@@ -164,6 +164,7 @@ def api_overview():
                         'kind': '事项' if kb.is_task(m) else '期', 'taskKind': m.get('事项类型', ''),
                         'priority': m.get('优先级', ''), 'from': m.get('来自', ''),
                         'running': (kb.dev_session(n) or {}).get('状态') == '运行中',
+                        'live': _try(kb.live_brief, n),
                         'plugins': sorted({x.get('插件') for x in m.get('外部来源') or []}),
                         'srcTitles': [x.get('标题') or x.get('编号') for x in m.get('外部来源') or []]})
     try:

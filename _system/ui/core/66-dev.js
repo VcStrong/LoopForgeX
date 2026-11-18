@@ -6,15 +6,23 @@ function apSw(v,id){const a=v['自动推送']||{开:true,总开关:true},g=a['�
 function apBind(name,id,v,re){const a=v['自动推送']||{开:true,总开关:true},el=$('#'+id);if(!el||a['总开关']===false)return;el.onclick=async()=>{try{toast((await post('/api/autopush',{period:name,on:!a['开']})).msg)}catch(e){toast(e.message)}re()}}
 // ==== 期页面对话框、开发面板、开始开发
 // ---------------- 本期对话：期页面最上方的输入框 + 这一期所有会话的最近动作
-let tkTarget={};
+let tkTarget={};const tkStaged={};   // 每一期「跟这一期说」已附的文件（还没发出去）
 function talkBind(name){
   const mt=$('#tkMsg');if(!mt)return;
   mt.oninput=()=>drafts['tk:'+name]=mt.value;
-  const send=async()=>{const t=mt.value.trim();if(!t)return;const b=$('#tkSend'),sel=$('#tkSel');
+  const st=tkStaged[name]=tkStaged[name]||[],show=()=>stagedShow($('#tkFiles'),st);show();
+  const tf=$('#tkFile');if(tf)tf.onchange=e=>{stageFiles([...e.target.files],st,show);e.target.value=''};   // 期页面、事项页共用：页面上没有 📎 时跳过
+  mt.addEventListener('paste',e=>{const fs=[...(e.clipboardData||{}).files||[]];if(fs.length){e.preventDefault();stageFiles(fs,st,show)}});
+  const card=mt.closest('.talk');if(card&&!card._tkDrop){card._tkDrop=1;
+    card.addEventListener('dragover',e=>{if([...(e.dataTransfer||{}).types||[]].includes('Files')){e.preventDefault();card.classList.add('tkdrop')}});
+    card.addEventListener('dragleave',()=>card.classList.remove('tkdrop'));
+    card.addEventListener('drop',async e=>{if(![...(e.dataTransfer||{}).types||[]].includes('Files'))return;e.preventDefault();card.classList.remove('tkdrop');
+      const fs=await dropFiles(e,{n:2000,bytes:2*1024**3});if(fs&&fs.length)stageFiles(fs,tkStaged[curPeriod()]||st,()=>stagedShow($('#tkFiles'),tkStaged[curPeriod()]||st))})}
+  const send=async()=>{const t=mt.value.trim();if(!t&&!st.length)return;if(stagedBusy(st))return toast('文件还在上传，传完再发');const b=$('#tkSend'),sel=$('#tkSel');
     const mode=(document.querySelector('input[name=tkM]:checked')||{}).value||'insert';
     const target=sel?sel.value:'';if(mode==='insert'&&sel&&!target)return toast('选一下发给哪个会话');
     b.disabled=true;
-    try{const r=await post('/api/period/say',{period:name,text:t,target,mode,interrupt:!$('#tkWait').checked});delete drafts['tk:'+name];mt.value='';$('#tkWait').checked=false;toast(r.msg);talkBox(name)}
+    try{const r=await post('/api/period/say',{period:name,text:t,target,mode,interrupt:!$('#tkWait').checked,files:st.map(f=>f.id)});delete drafts['tk:'+name];mt.value='';st.length=0;show();$('#tkWait').checked=false;toast(r.msg);talkBox(name)}
     catch(e){toast(e.message)}finally{b.disabled=false}};
   document.querySelectorAll('input[name=tkM]').forEach(r=>r.onchange=()=>talkBox(name));$('#tkWait').onchange=()=>talkBox(name);
   $('#tkSend').onclick=send;mt.onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey))send()};
@@ -80,15 +88,23 @@ async function devBox(name){
     +(!run&&ts2?'<button id="dvRetest" title="开发时手机不够、没连手机等没测成的 case，条件具备后补测">🔁 复测</button>':'');
   const URG=['设备不足','账号','环境'],KINDS=['设备不足','账号','环境','未验证','待排查','工具链','其他'];
   const iss=v['非阻断问题']||[],openI=iss.filter(x=>x['状态']==='待处理'),doneI=iss.filter(x=>x['状态']!=='待处理').reverse();
-  const issCard=x=>`<div class="iss${x['状态']==='待处理'?'':' done'}" data-i="${esc(x['编号'])}"><div class="row" style="gap:6px;align-items:baseline"><b style="flex:1">${esc(x['标题'])}</b>
-    <span class="mut small">${esc(x['编号'])} · ${esc(x['来源'])}${x['状态']!=='待处理'?' · '+esc(x['状态']):''}</span>
-    ${x['状态']==='待处理'?`${['工具链','环境','账号','其他'].includes(x['类型'])?'<button data-iterm="1" title="打开「我的终端」（目录是这一期的仓库），自己敲命令处理">⌨ 去终端处理</button>':''}<button data-is="已处理">✓ 已处理</button><button data-is="已忽略">忽略</button>`:'<button data-is="待处理">恢复</button>'}</div>
-    ${x['详情']?`<details class="small"><summary class="mut">详情</summary><div class="md">${md(x['详情']).html}</div></details>`:''}</div>`;
-  const issHtml=iss.length?`<details data-k="iss" ${openI.some(x=>URG.includes(x['类型']))?'open':''} style="margin-top:12px">
-    <summary class="small"><b style="color:var(--warn)">⚠ 不阻断开发、需要你处理的问题</b>（待处理 ${openI.length}${doneI.length?' · 已处理 '+doneI.length:''}）<span class="mut">　手机不够、缺账号、环境不满足等；处理好后点「🔁 复测」补测</span></summary>
+  // 问题卡片：一行短标题（从原标题取「人话」那半句，不改数据），TASK 号 / 编号 / 来源放右侧小字；完整标题和详情收进「详情」；按钮悬停才出现
+  const issShort=tt=>{const s=String(tt||''),i=s.search(/(?<!:)[：:](?!:)/),tk=(s.match(/TASK-\d+(?:\/TASK-\d+)*/)||[''])[0];
+    if(i<0)return{t:s.replace(tk,'').trim()||s,tk};
+    const a=s.slice(0,i).trim(),b=s.slice(i+1).trim(),aa=a.replace(tk,'').trim();
+    if(!/^TASK-\d/.test(a))return{t:a,tk};
+    const triv=b.replace(/[—\-\s]/g,'').length<=4,human=!aa.includes('::')&&(aa.replace(/\b(?:AG|FC|SM|T\d)-[\w~、,，/\-:：]*/g,'').match(/[\u4e00-\u9fa5]/g)||[]).length>=2;   // 冒号前去掉用例号还有中文 = 说的是「什么事」
+    return{t:triv?[aa,b].filter(x=>x&&!/^[—\-]$/.test(x)).join(' · ')||s:human?aa+'：'+b:b,tk}};
+  const issCard=x=>{const sh=issShort(x['标题']),open=x['状态']==='待处理';
+    return `<div class="iss${open?'':' done'}" data-i="${esc(x['编号'])}" tabindex="0"><div class="ihd"><b class="it" title="${esc(x['标题'])}">${esc(sh.t)}</b>
+    <span class="mut small im">${sh.tk?esc(sh.tk)+' · ':''}${esc(x['编号'])} · ${esc(x['来源'])}${open?'':' · '+esc(x['状态'])}</span></div>
+    <details class="small"><summary class="mut">详情</summary><div><b>${esc(x['标题'])}</b></div>${x['详情']?`<div class="md">${md(x['详情']).html}</div>`:''}</details>
+    <div class="iacts">${open?`${['工具链','环境','账号','其他'].includes(x['类型'])?'<button data-iterm="1" title="打开「我的终端」（目录是这一期的仓库），自己敲命令处理">⌨ 去终端处理</button>':''}<button data-is="已处理">✓ 已处理</button><button data-is="已忽略">忽略</button>`:'<button data-is="待处理">恢复</button>'}</div></div>`};
+  const issHtml=iss.length?`<details data-k="iss" ${openI.length?'open':''} style="margin-top:12px">
+    <summary class="small"><b style="color:var(--warn)">⚠ 不阻断开发、需要你处理的问题</b> ${openI.length?`<span class="badge icnt">待处理 ${openI.length}</span>`:'<span class="mut">（没有待处理的）</span>'}${doneI.length?' <span class="mut">已处理 '+doneI.length+'</span>':''}<span class="mut">　手机不够、缺账号、环境不满足等；处理好后点「🔁 复测」补测</span></summary>
     ${KINDS.filter(k=>openI.some(x=>x['类型']===k)).map(k=>{const xs=openI.filter(x=>x['类型']===k);
-      return `<details data-k="iss-${k}" ${URG.includes(k)?'open':''}><summary class="small"><b>${k}</b>（${xs.length}）</summary>${xs.map(issCard).join('')}</details>`}).join('')}
-    ${doneI.length?`<details data-k="issDone"><summary class="small mut">已处理 / 已忽略（${doneI.length}）</summary>${doneI.map(issCard).join('')}</details>`:''}</details>`:'';
+      return `<details data-k="iss-${k}" class="igrp"><summary class="small"><b>${k}</b> <span class="n${URG.includes(k)?' w':''}">${xs.length}</span></summary>${xs.map(issCard).join('')}</details>`}).join('')}
+    ${doneI.length?`<details data-k="issDone" class="igrp"><summary class="small mut">已处理 / 已忽略 <span class="n">${doneI.length}</span></summary>${doneI.map(issCard).join('')}</details>`:''}</details>`:'';
   const last=(rt['记录']||[]).slice(-1)[0];
   const testHtml=ts2?`<div class="small"><b>🧪 测试</b>　识别到 ${ts2['文件数']} 个测试文件${ts2['用例']?` · ${ts2['用例']} 个 case：`+Object.entries(ts2['统计']).map(([k,n])=>esc(k)+' '+n).join(' / '):''}${ts2['环境阻塞']?` · <b style="color:var(--warn)">${ts2['环境阻塞']} 个因手机 / 账号 / 环境没测成</b>`:''}
     ${plan?`<div style="margin-top:4px">${plan['自动']?`⏰ 空闲手机够 <b>${plan['手机']}</b> 台时自动复测（现在空闲 ${freeN} 台，每分钟检查）　<a data-noauto>取消自动复测</a>`:`🔁 待复测${plan['原因']?'：'+esc(plan['原因']):''}　<span class="mut">条件具备后点「🔁 复测」，或设成手机够了自动复测</span>`}${plan['失败']?`<div style="color:var(--warn)">上次自动复测没能开始：${esc(plan['失败'])}</div>`:''}</div>`:''}
@@ -142,15 +158,13 @@ async function devBox(name){
     ${v['免打扰']?`<div class="small mut" style="margin-top:4px">免打扰已开启（整期）：需要确认的地方由 AI 按自己的建议决策，结果记在「${SP?'确认与问题':'开发'}」里的「已处理的确认」和记录里。</div>`:''}`;
   const bar=$('#sessBar');if(bar&&bar.innerHTML!==barHtml)bar.innerHTML=barHtml;
   if(bar)bindIntr(bar,()=>devBox(name));
-  box.innerHTML=`    <div class="two"><div class="stack">
-    ${pend.map(qCard).join('')}
-    ${prog}
-    ${done.length?`<details data-k="done" style="margin-top:8px"><summary class="small"><b>已处理的确认</b>（${done.length}）</summary>${done.map(q=>`<div class="small" style="padding:6px 0;border-bottom:1px solid var(--soft)"><span class="mut">${esc(q['编号'])} · ${esc(q['回答时间']||q['时间'])} · ${esc(q['回答人']||q['状态'])}</span><br><b>${esc(q['问题'])}</b><br>→ ${esc(q['回答']||q['状态'])}</div>`).join('')}</details>`:''}
-    </div><div class="stack">
-    ${issHtml?`<div class="card2 issbox"><div class="bd">${issHtml}</div></div>`:''}
+  const doneHtml=done.length?`<details data-k="done" style="margin-top:8px"><summary class="small"><b>已处理的确认</b>（${done.length}）</summary>${done.map(q=>`<div class="small" style="padding:6px 0;border-bottom:1px solid var(--soft)"><span class="mut">${esc(q['编号'])} · ${esc(q['回答时间']||q['时间'])} · ${esc(q['回答人']||q['状态'])}</span><br><b>${esc(q['问题'])}</b><br>→ ${esc(q['回答']||q['状态'])}</div>`).join('')}</details>`:'';
+  const side=`${issHtml?`<div class="card2 issbox"><div class="bd">${issHtml}</div></div>`:''}
     ${testHtml?`<div class="card2"><div class="bd">${testHtml}</div></div>`:''}
-    ${devHtml?`<div class="card2"><div class="bd">${devHtml}</div></div>`:''}
-    </div></div>`;
+    ${devHtml?`<div class="card2"><div class="bd">${devHtml}</div></div>`:''}`;
+  // 有待确认：双栏（左边回答问题）；没有待确认：整块单栏全宽，问题在前
+  box.innerHTML=pend.length?`<div class="two"><div class="stack">${pend.map(qCard).join('')}${prog}${doneHtml}</div><div class="stack">${side}</div></div>`
+    :`<div class="stack one">${side}${prog}${doneHtml}</div>`;
   box.dataset.sig=sig;
   box.querySelectorAll('details[data-k]').forEach(x=>{if(x.dataset.k in keep)x.open=keep[x.dataset.k]});
   const na=box.querySelector('.act');if(na&&oTop>0)na.scrollTop=oTop+(na.scrollHeight-oH);   // 看旧记录时，新动作加在上面也不跳

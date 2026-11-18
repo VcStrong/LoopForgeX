@@ -257,13 +257,13 @@ a.scard:hover{border-color:var(--acc)}
 .pwhole .ptabs{display:none}
 .psec{display:flex;align-items:baseline;gap:8px;margin:0 0 8px;font-size:16px}
 .psec .cur{font-size:11px;font-weight:500;color:var(--acc);border:1px solid var(--acc);border-radius:999px;padding:0 7px}
-.matgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px;align-items:start}.matgrid .cat{margin:0}
+.matgrid{columns:420px;column-gap:14px}.matgrid .cat{margin:0 0 14px;break-inside:avoid;display:inline-block;width:100%}   /* 瀑布流：短卡片不再被同一行最高的卡片撑出空洞 */
 .two{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px;align-items:start;margin-top:12px}
 .stack{display:grid;gap:14px;min-width:0;align-content:start}
 .stack>.q{margin:0}
 .issbox .bd>details{margin-top:0!important}
 @media (max-width:1100px){.two{grid-template-columns:minmax(0,1fr)}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:520px){.matgrid{grid-template-columns:1fr}.kpis{grid-template-columns:1fr}}
+@media (max-width:520px){.matgrid{columns:1}.kpis{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){.pcard2{transition:none}.pcard2:hover{transform:none}}
 
 /* 长下拉框（工程路径等）不撑破窄屏 */
@@ -320,3 +320,24 @@ dialog .pv-code pre{white-space:pre;word-break:normal;font-size:12.5px;line-heig
 :root[data-theme=dark] .hljs-string,:root[data-theme=dark] .hljs-regexp{color:#a5d6ff}:root[data-theme=dark] .hljs-number{color:#79c0ff}
 :root[data-theme=dark] .hljs-title,:root[data-theme=dark] .hljs-section{color:#d2a8ff}:root[data-theme=dark] .hljs-attr,:root[data-theme=dark] .hljs-name,:root[data-theme=dark] .hljs-tag{color:#7ee787}
 :root[data-theme=dark] .hljs-type,:root[data-theme=dark] .hljs-built_in{color:#ffa657}
+/* AI 实时状态一行（63-live.js） */
+.livebar{margin:8px 0 2px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.livebar details summary{cursor:pointer}
+.livepop{position:fixed;z-index:60;max-width:520px;min-width:260px;padding:10px 12px;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.15);font-size:13px;pointer-events:none}
+/* 不阻断开发的问题：一行短标题 + 右侧小字，按钮悬停才出现（66-dev.js issCard） */
+.iss{position:relative;padding:4px 10px 4px}
+.iss .ihd{display:flex;gap:8px;align-items:baseline;min-width:0}
+.iss .it{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.iss .im{flex:none;white-space:nowrap}
+.iss .iacts{display:flex;justify-content:flex-end;gap:6px;height:0;overflow:hidden;opacity:0;transition:opacity .12s}
+.iss:hover .iacts,.iss:focus-within .iacts,.iss:focus .iacts{height:auto;opacity:1;margin-top:2px}
+.igrp>summary{cursor:pointer;padding:3px 0}
+.igrp .n,.issbox summary .n{display:inline-block;min-width:18px;padding:0 6px;border-radius:9px;background:var(--soft);font-size:11px;text-align:center}
+.igrp .n.w{background:var(--warn);color:#fff}
+.icnt{background:var(--warn);color:#fff;border-color:var(--warn);font-weight:600}
+.stack.one{margin-top:12px}
+.talk.tkdrop{outline:3px dashed var(--acc);outline-offset:-4px}
+
+/* 全栈「各端开发」：参与、代码基线、推送放在每端下面的整行副行，不挤在状态列里 */
+tr:has(+tr.esub)>td{border-bottom:0}.esub td{padding-top:0;word-break:break-word}
+.etbl button{white-space:nowrap}.etbl td:nth-child(2){min-width:96px}.etbl .badge{white-space:nowrap}.etbl td .mono{word-break:break-all}

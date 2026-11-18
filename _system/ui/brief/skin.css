@@ -329,7 +329,7 @@ body[data-tpl-r="period"] .pagehead>.row button,body[data-tpl-r="period"] .pageh
 .tpl-chap .tpl-chno,.psec .tpl-chno{font-size:12px;letter-spacing:.2em;color:var(--tpl-red);font-weight:700}
 .pwhole [data-pane]{margin-bottom:40px;padding-top:6px;border-top:2px solid var(--tpl-rule)}
 .psec .cur{border-radius:2px;color:var(--tpl-red);border-color:var(--tpl-red);font-family:var(--f-body)}
-.matgrid{gap:0 30px}
+.matgrid{column-gap:30px}
 .matgrid .cat{border-top:2px solid var(--tpl-rule)}
 .two{gap:30px}
 

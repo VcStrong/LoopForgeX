@@ -38,6 +38,11 @@ def _get_api_period_talk(self, u, q):
     return self._guard(lambda: kb.period_talk(q.get('name', '')))
 
 
+@get('/api/period/live')
+def _get_api_period_live(self, u, q):
+    return self._guard(lambda: kb.period_live(q.get('name', '')))
+
+
 @get('/api/search')
 def _get_api_search(self, u, q):
     return self._guard(lambda: dict(zip(('hits', 'mode'), kb.search_hits(
@@ -123,7 +128,8 @@ def _post_api_task_push(self, u, n, body):
 @post('/api/period/say', page_only=True)
 def _post_api_period_say(self, u, n, body):
     return self._guard(lambda: {'msg': kb.period_say(body.get('period', ''), body.get('text', ''), body.get('target', ''),
-                                                     body.get('interrupt', True) is not False, mode=body.get('mode') or 'insert')})
+                                                     body.get('interrupt', True) is not False, mode=body.get('mode') or 'insert',
+                                                     files=body.get('files') or [])})
 
 
 @post('/api/new')

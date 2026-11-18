@@ -109,6 +109,8 @@ def index_docs():
         rel = p.relative_to(PERIODS).parts
         if not p.is_file() or HIST in rel or p.name == '期信息.json' or p.name.startswith('.'):
             continue
+        if len(rel) > 2 and rel[1] == '对话附件':      # 期页面对话里附的文件（ai/talk.py）：只给会话看，不进检索
+            continue
         if p.suffix.lower() not in DOC_EXT:
             continue
         cat = rel[1] if len(rel) > 2 and rel[1] in CATS + ['来源快照'] else ('记录' if p.name == '记录.md' else '')

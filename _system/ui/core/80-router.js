@@ -33,7 +33,7 @@ function softRender(){if(!canRender()){pagePending=true;return}pagePending=false
   render().then(()=>{if(!(app&&app._morphed))scrollTo(0,y)})}   // morph 刷新时浏览器的滚动锚定已经保住位置，再 scrollTo 反而会错位；整块重写的才拉回
 function onEvt(ev){
   const h=decodeURIComponent(location.hash.slice(1)||'/'), p=curPeriod();
-  if(ev.kind==='dev'&&p===ev.period){if($('#pushBox')){pushBox(p);if($('#tkMsg'))talkBox(p)}else{devBox(p);talkBox(p)}}
+  if(ev.kind==='dev'&&p===ev.period){if($('#pushBox')){pushBox(p);if($('#tkMsg'))talkBox(p)}else{devBox(p);talkBox(p);liveBox(p)}}
   if(ev.kind==='overview'&&p&&$('#tkMsg'))talkBox(p);
   else if(ev.kind==='page'&&p===ev.period)softRender();
   else if(ev.kind==='overview'&&(h==='/'||h==='/bugs'||h==='/anr'))softRender();

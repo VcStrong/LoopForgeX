@@ -30,7 +30,7 @@ async function overview(){
   const tag=(cls,t,tip)=>`<span class="badge ${cls}"${tip?` title="${esc(tip)}"`:''}>${t}</span>`;
   const card=p=>`<a class="pcard2" href="#/p/${enc(p.name)}">
     <div class="cover">${p.cover?`<img loading="lazy" src="${fileUrl(p.cover)}" alt="">`:`<div class="ph">${esc((p.name.split('-').slice(1).join('-')||p.name).slice(0,8))}</div>`}
-      <div class="ctags">${badge(p.status)}${p.running?'<span class="badge st-开发中">● 后台开发中</span>':''}</div></div>
+      <div class="ctags">${badge(p.status)}${p.live?liveMini(p.live):p.running?'<span class="badge st-开发中">● 后台开发中</span>':''}</div></div>
     <div class="pb"><h3>${esc(p.name)}</h3><div class="sum">${esc(p.summary||'（没有简介）')}</div>
       <div class="meta">${d.cats.map(c=>`<span class="${p.counts[c]?'':'zero'}">${c} ${p.counts[c]}</span>`).join('')}<span class="${p.designImages?'':'zero'}">设计稿 ${p.designImages}</span></div>
       ${p.branches&&p.branches.length?`<div class="meta mono" title="开发分支">🌿 ${esc(p.branches.join('；'))}</div>`:''}</div>

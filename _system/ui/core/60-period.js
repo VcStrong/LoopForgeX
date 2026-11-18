@@ -56,16 +56,18 @@ async function period(name){
   const branches=Object.values(d.notes).flat().filter(n=>n['类型']==='分支'),bhist=(m['分支历史']||[]).filter(x=>!x['端']);
   const pend=(m['来源']||[]).filter(x=>x['核对']!=='已核对').length;
   const pageHtml=`<div class="pagehead"><div style="min-width:0"><div class="crumb"><a href="#/">总览</a> / ${isTask?(((ovPeriods.find(p=>p.name===name)||{}).batch||{})['来源']==='anr'?'<a href="#/anr">💥 ANR / 崩溃</a> / 批次':'事项'):'期'}${isTask?` · <a id="toPush">← ${(m['外部来源']||[]).length?'回到原始内容':'回到简洁版'}</a>`:''}</div>
-      <h1>${esc(d.name)} ${badge(m['状态'])}${isTask?` <span class="badge st-收集中">${esc(m['事项类型']||'其他')}</span> <span class="badge ${PRI_C[m['优先级']]||''}">优先级 ${esc(m['优先级']||'中')}</span>`:''}</h1><div class="mut">${esc(m['说明']||'')}${isTask&&m['来自']?`　<span class="small">来自：${esc(m['来自'])}</span>`:''}${isTask?` <a class="small" id="tkEdit">✎ 编辑</a>`:''}</div>
+      <h1>${esc(d.name)} <span id="pStBadge" data-livepop>${liveHead(d.name,m['状态'])}</span>${isTask?` <span class="badge st-收集中">${esc(m['事项类型']||'其他')}</span> <span class="badge ${PRI_C[m['优先级']]||''}">优先级 ${esc(m['优先级']||'中')}</span>`:''}</h1><div class="mut">${esc(m['说明']||'')}${isTask&&m['来自']?`　<span class="small">来自：${esc(m['来自'])}</span>`:''}${isTask?` <a class="small" id="tkEdit">✎ 编辑</a>`:''}</div>
       <div class="pmeta">${stackP?`<span>各端 ${Object.entries(m['各端']||{}).map(([e,x])=>`<b>${esc(e)}</b> <span class="mono">${esc(String(x['仓库']||'').replace(/^\/Users\/[^/]+/,'~'))}${x['分支']?' · '+esc(x['分支']):''}</span>`).join('，')||'<span class="mut">还没有加端</span>'}</span>`:`${m['开发分支']?`<span>🌿 开发分支 <b class="mono">${esc(m['开发分支'])}</b>${bhist.length?` <span class="mut small" title="${esc(bhist.map(x=>`${x['分支']}（${x['起']||'?'} ~ ${x['止']}${x['原因']?'，'+x['原因']:''}）`).join('\n'))}">· 历史 ${bhist.map(x=>esc(x['分支'])).join('、')}</span>`:''}</span>`:branches.length?`<span>🌿 开发分支 ${branches.map(n=>`<b class="mono">${esc(noteTitle(n))}</b>`).join('；')}</span>`:''}
         ${m['开发仓库']?`<span>仓库 <span class="mono">${esc(m['开发仓库'].replace(/^\/Users\/[^/]+/,'~'))}</span></span>`:''}
         <span>关联仓库 ${esc((m['关联仓库']||[]).join('、')||'无')}</span>`}<span class="mono" title="这一期的资料目录">${esc(d.dir.replace(/^\/Users\/[^/]+/,'~'))}</span></div></div>
     <div class="row"><span class="pview" title="分栏：按分类切换；整页：所有内容一页看完，按流程先后排，正在进行的放最上面"><button data-pv="tab" class="${whole?'':'on'}">▤ 分栏</button><button data-pv="whole" class="${whole?'on':''}">☰ 整页</button></span><label class="small mut" for="stSel">状态</label><select id="stSel">${[...new Set([m['状态'],'收集中','开发中','已完成','已暂停'])].map(s=>`<option ${s===m['状态']?'selected':''}>${s}</option>`).join('')}</select>${(stackP?Object.values(m['各端']||{}).some(x=>x['仓库']&&(x['版本库']||'git')==='git'):m['开发仓库'])?'<button id="bsBtn" title="这一期已合进上线分支：之后的开发、跟进、复测、Bug 修复改到新分支；老分支不删，构建、Bug、记录照旧能查">⇄ 换分支</button>':''}<button id="fixLink" title="设计稿、文档地址给错了：所有地方一起换成正确链接">✎ 更正链接</button>${d.archived?'<button id="arcBtn" data-on="" title="已归档：不在列表里。恢复后重新出现">↩ 恢复到列表</button>':m['状态']==='已完成'?'<button id="arcBtn" data-on="1" title="做完了：从侧栏、总览、各种列表里收起来（资料和记录都在，能搜到）；有新 Bug / ANR 会自动回来">📦 归档</button>':''}<button class="danger" id="delP" title="没用的${isTask?'事项':'期'}：从知识库里整个删掉">🗑 删除</button></div></div>
-    ${d.guide?guideHtml(d.guide):`<div class="steps">${steps}</div>${notice}`}
+    <div id="liveBar" class="livebar" data-keep data-livepop hidden></div>
+    <div data-livepop>${d.guide?guideHtml(d.guide):`<div class="steps">${steps}</div>${notice}`}</div>
     <div class="card2 talk"><div class="bd">
       <div id="sessBar">${devCache.name===d.name?devCache.bar||'':''}</div>
       <textarea id="tkMsg" rows="2" placeholder="跟这一期说：有会话在跑就补充给它；没有就按内容推动解决（后续发现的问题、需求扩展）。Cmd+Enter 发送">${esc(drafts['tk:'+d.name]||'')}</textarea>
-      <div class="ctl"><button class="pri" id="tkSend">发送</button><span id="tkMode" class="small row" hidden>
+      <div class="files small" id="tkFiles" data-keep></div>
+      <div class="ctl"><button class="pri" id="tkSend">发送</button><label class="btn" title="附文件：截图、日志、文档……也可以拖到这块卡片上，或在输入框里粘贴截图" style="cursor:pointer;padding:2px 8px">📎<input type="file" id="tkFile" multiple hidden></label><span id="tkMode" class="small row" hidden>
         <label class="row"><input type="radio" name="tkM" value="insert" checked> 插入当前会话</label>
         <label class="row"><input type="radio" name="tkM" value="new"> 启动新会话执行</label>
         <label class="row"><input type="radio" name="tkM" value="queue"> 排队处理</label></span>
@@ -94,7 +96,7 @@ async function period(name){
     app.querySelectorAll('[data-tab]').forEach(x=>x.classList.toggle('on',x===a));app.querySelectorAll('[data-pane]').forEach(x=>x.hidden=x.dataset.pane!==a.dataset.tab)});
   const gb=$('#gGo');if(gb)gb.onclick=()=>{const k=(gb.dataset.to||'').replace('tab:','');if(!k)return;
     if(whole){const p=app.querySelector(`[data-pane="${k}"]`);if(p)p.scrollIntoView({behavior:'smooth',block:'start'})}else{const a=app.querySelector(`[data-tab="${k}"]`);if(a)a.click()}};
-  devBox(d.name);talkBind(d.name);termBind(d.name);buildBox(d.name);stackBox(d.name);
+  liveBox(d.name);livePopBind(d.name);devBox(d.name);talkBind(d.name);termBind(d.name);buildBox(d.name);stackBox(d.name);
   bindBugs(app);
   app.querySelectorAll('[data-read]').forEach(a=>a.onclick=()=>a.dataset.dir?toast('目录：请在 Finder 或让 Claude 查看'):readFile(a.dataset.read));
   app.querySelectorAll('[data-img]').forEach(a=>a.onclick=()=>showImg(a.dataset.img,d));

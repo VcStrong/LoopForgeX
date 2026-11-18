@@ -27,22 +27,27 @@ function bindProp(root,url,extra){
     box.querySelector('[data-pgo]').onclick=async e=>{const b=e.target;b.disabled=true;b.textContent='推动中…';
       try{toast((await post(url,{id:box.dataset.prop,repo:box.querySelector('[data-prepo]').value.trim(),branch:br.value.trim(),...(extra||{})})).msg.split('\n')[0])}catch(err){toast(err.message);b.disabled=false;b.textContent='▶ 推动'}
       askLoad();if(typeof loadStw==='function')loadStw()}})}
+// 附文件（交给管家、期页面「跟这一期说」共用）：选文件 / 拖进来 / 粘贴 → 先传到暂存区 /api/chat/stage，发送时带暂存号
+// list：已暂存的 [{id,name,n,done}]；show：重画已选文件的小标签
+function stagedHtml(list){return list.map((f,i)=>`<span>${f.n?`📁 ${esc(f.name)}（${f.done<f.n?`上传中 ${f.done}/${f.n}`:`${f.n} 个文件`}）`:esc(f.name)}${f.done<f.n?'':` <a data-afx="${i}">✕</a>`}</span>`).join('')}
+function stagedShow(el,list){if(!el)return;el.innerHTML=stagedHtml(list);el.querySelectorAll('[data-afx]').forEach(a=>a.onclick=()=>{list.splice(+a.dataset.afx,1);stagedShow(el,list)})}
+const stagedBusy=list=>list.some(f=>f.n&&f.done<f.n);
 let askStaged=[];
-function askFilesShow(){$('#askFiles').innerHTML=askStaged.map((f,i)=>`<span>${f.n?`📁 ${esc(f.name)}（${f.done<f.n?`上传中 ${f.done}/${f.n}`:`${f.n} 个文件`}）`:esc(f.name)}${f.done<f.n?'':` <a data-afx="${i}">✕</a>`}</span>`).join('');
-  $('#askFiles').querySelectorAll('[data-afx]').forEach(a=>a.onclick=()=>{askStaged.splice(+a.dataset.afx,1);askFilesShow()})}
+function askFilesShow(){stagedShow($('#askFiles'),askStaged)}
 const askUp=async(f,sid)=>{const r=await fetch('/api/chat/stage',{method:'POST',headers:{'X-Filename':encodeURIComponent(f.name),...(sid?{'X-Stage':sid}:{})},body:f});
   const j=await r.json();if(!r.ok)throw new Error(j.error||'上传失败');return j.id};
 const askErr=(f,e)=>toast(e instanceof TypeError?`${f.name} 是文件夹或读取失败，可以压成 zip 再拖`:f.name+'：'+e.message);
-// 拖进来的文件夹（名字带 logs/… 的一组）整个传到同一个暂存目录，面板上只显示一个「📁 logs（87 个文件）」
-async function askStage(fs){
+// 拖进来的文件夹（名字带 logs/… 的一组）整个传到同一个暂存目录，只显示一个「📁 logs（87 个文件）」
+async function stageFiles(fs,list,show){
   const dirs={},single=[];for(const f of fs){const k=f.name.includes('/')?f.name.split('/')[0]:'';if(k)(dirs[k]=dirs[k]||[]).push(f);else single.push(f)}
-  for(const f of single){try{askStaged.push({id:await askUp(f),name:f.name})}catch(e){askErr(f,e)}askFilesShow()}
-  for(const [name,list] of Object.entries(dirs)){const it={id:'',name,n:list.length,done:0};askStaged.push(it);askFilesShow();
-    try{it.id=await askUp(list[0]);it.done=1;askFilesShow();let k=1;
-      await Promise.all(Array.from({length:4},async()=>{while(k<list.length){const f=list[k++];await askUp(f,it.id);it.done++;if(it.done%10===0||it.done===it.n)askFilesShow()}}))}
-    catch(e){toast(`文件夹 ${name} 没传完：${e instanceof TypeError?'有文件读取失败':e.message}，可以压成 zip 再拖`);askStaged.splice(askStaged.indexOf(it),1)}
-    askFilesShow()}}
-async function askSend(){const v=$('#askIn').value.trim();if(!v&&!askStaged.length)return;if(askStaged.some(f=>f.n&&f.done<f.n))return toast('文件夹还在上传，传完再发');
+  for(const f of single){try{list.push({id:await askUp(f),name:f.name})}catch(e){askErr(f,e)}show()}
+  for(const [name,files] of Object.entries(dirs)){const it={id:'',name,n:files.length,done:0};list.push(it);show();
+    try{it.id=await askUp(files[0]);it.done=1;show();let k=1;
+      await Promise.all(Array.from({length:4},async()=>{while(k<files.length){const f=files[k++];await askUp(f,it.id);it.done++;if(it.done%10===0||it.done===it.n)show()}}))}
+    catch(e){toast(`文件夹 ${name} 没传完：${e instanceof TypeError?'有文件读取失败':e.message}，可以压成 zip 再拖`);list.splice(list.indexOf(it),1)}
+    show()}}
+const askStage=fs=>stageFiles(fs,askStaged,askFilesShow);
+async function askSend(){const v=$('#askIn').value.trim();if(!v&&!askStaged.length)return;if(stagedBusy(askStaged))return toast('文件夹还在上传，传完再发');
   try{await post('/api/chat/ask',{text:v,files:askStaged.map(f=>f.id),page:decodeURIComponent(location.hash.slice(1)||'/')});$('#askIn').value='';askStaged=[];askFilesShow();askLoad()}catch(e){toast(e.message)}}
 $('#askFile').onchange=e=>{askStage([...e.target.files]);e.target.value=''};
 const ap=$('#askPanel');ap.addEventListener('dragover',e=>{e.preventDefault();ap.classList.add('drop')});ap.addEventListener('dragleave',()=>ap.classList.remove('drop'));

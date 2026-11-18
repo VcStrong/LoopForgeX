@@ -12,7 +12,8 @@ async function memoPage(name){
       <div class="small mut">${esc(v['事项类型'])} · 优先级 ${esc(v['优先级']||'中')}${v['说明']?' · '+esc(v['说明']):''}　<a id="mmFull">完整页面</a>${sideOn()?`　<a id="mmNav" data-show="${ob['侧栏']===false?'1':''}">${ob['侧栏']===false?'加回侧栏':'从侧栏移除'}</a>`:''}　<a id="mmDel" style="color:var(--s4)">删除</a></div></div></div>
     <div class="card2 talk" style="margin-bottom:12px"><div class="bd">
       <textarea id="tkMsg" rows="2" placeholder="接着刚才的上下文说：如「编译校验一下」「把刚才的改动提交」。Cmd+Enter 发送">${esc(drafts['tk:'+name]||'')}</textarea>
-      <div class="ctl"><button class="pri" id="tkSend">发送</button><span id="tkMode" class="small row" hidden>
+      <div class="files small" id="tkFiles"></div>
+      <div class="ctl"><button class="pri" id="tkSend">发送</button><label class="btn" title="附文件：截图、日志、文档……也可以拖到这块卡片上，或在输入框里粘贴截图" style="cursor:pointer;padding:2px 8px">📎<input type="file" id="tkFile" multiple hidden></label><span id="tkMode" class="small row" hidden>
         <label class="row"><input type="radio" name="tkM" value="insert" checked> 插入当前会话</label>
         <label class="row"><input type="radio" name="tkM" value="new"> 启动新会话执行</label>
         <label class="row"><input type="radio" name="tkM" value="queue"> 排队处理</label></span>
