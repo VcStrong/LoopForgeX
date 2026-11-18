@@ -122,3 +122,101 @@ class LiveTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+# ---- SDD：子进度、子 agent 次数、预计剩余时间（kblib/ai/eta.py）
+from datetime import datetime, timedelta, timezone  # noqa: E402
+from kblib.ai import eta  # noqa: E402
+
+T0 = datetime(2026, 11, 18, 1, 0, tzinfo=timezone.utc)
+
+
+def _iso(m):
+    return (T0 + timedelta(minutes=m)).isoformat().replace('+00:00', 'Z')
+
+
+def call(cid, kind, desc, start, end=None):
+    """一次子 agent 调用：tool_use 行 + （可选）tool_result 行；中间插一条带 tool_use_id 的 system 事件（不算返回）。"""
+    s = _line({'type': 'assistant', 'timestamp': _iso(start), 'message': {'content': [
+        {'type': 'tool_use', 'id': cid, 'name': 'Agent', 'input': {'subagent_type': kind, 'description': desc}}]}})
+    s += _line({'type': 'system', 'subtype': 'task_started', 'tool_use_id': cid})
+    if end is not None:
+        s += _line({'type': 'user', 'timestamp': _iso(end), 'message': {'content': [
+            {'type': 'tool_result', 'tool_use_id': cid, 'content': '{"timestamp":"2000-01-01T00:00:00Z"}'}]}})
+    return s
+
+
+def task(n, start, dev=10, rev=5, dvc=15):
+    """一个完整 TASK：开发 → 审查 → 真机 → 提交，返回 (日志, 结束分钟)。"""
+    t, s = start, ''
+    for kind, label, d in (('sdd-dev-agent', '开发', dev), ('sdd-reviewer-agent', '审查', rev),
+                           ('sdd-agentdevice-agent', '真机验证', dvc), ('sdd-task-commit-agent', '提交', 1)):
+        s += call(f'toolu_{n}_{label}', kind, f'SDD TASK-{n} {label}', t, t + d)
+        t += d
+    return s, t
+
+
+class EtaTest(unittest.TestCase):
+    def setUp(self):
+        kb.init()
+        self.name = f'SDD{self._testMethodName}'
+        kb.create_period(self.name)
+        self.d = kb.period_dir(self.name)
+        (self.d / eta.DEV_DIR).mkdir(exist_ok=True)
+        self.log = self.d / eta.DEV_DIR / 'Android开发-20261118-090000.jsonl'
+        self.docs = TMP / f'sdd-{self._testMethodName}'
+        self.docs.mkdir()
+
+    def status(self, idx, total=5, phase='device', step3='in_progress', **kv):
+        lines = ['step1_pm: done', 'step1_api: done', 'step2: done', f'step3: {step3}', f'step3_current_index: {idx}',
+                 f'step3_task_total: {total}', f'step3_current_task: TASK-{idx}', f'step3_task_phase: {phase}']
+        lines += [f'{k}: {v}' for k, v in kv.items()]
+        (self.docs / 'sdd-status.md').write_text('\n'.join(lines) + '\n')
+
+    def test_durations_and_eta(self):
+        a, t = task(1, 0, dev=10, rev=5, dvc=15)            # 31 分钟
+        b, t = task(2, t, dev=20, rev=5, dvc=25)            # 51 分钟
+        cur = call('toolu_3_dev', 'sdd-dev-agent', 'SDD TASK-3 开发', t, t + 12) + call('toolu_3_rev', 'sdd-reviewer-agent', 'SDD TASK-3 审查', t + 12)
+        self.log.write_text(a + b + cur)
+        self.status(3, total=5, phase='review')
+        now = (T0 + timedelta(minutes=t + 14)).timestamp()
+        r = eta.sdd_eta(self.d, self.docs, [str(self.log)], now=now)
+        rows = {x['任务']: x for x in r['任务表']}
+        self.assertEqual((rows['TASK-1']['耗时'], rows['TASK-2']['耗时'], rows['TASK-1']['状态']), (31, 51, '已完成'))
+        self.assertEqual(rows['TASK-3']['状态'], '进行中')
+        self.assertEqual(rows['TASK-5']['状态'], '未开始')
+        self.assertEqual(r['子agent']['已派'], 10)
+        self.assertEqual([x['类型'] for x in r['子agent']['在跑']], ['sdd-reviewer-agent'])
+        self.assertEqual(r['子进度']['当前'], '审查')
+        self.assertEqual([s['状态'] for s in r['子进度']['步骤']], ['done', 'cur', 'todo', 'todo'])
+        e = r['预估']
+        self.assertFalse(e['约'])                           # 已完成 2 个：用实际耗时 31–51
+        self.assertEqual(e['剩余TASK'], 2)
+        # 当前剩余 ≈ 审查(中位 5 − 已跑 2) + 真机(15/25 中位) + 提交 1；+ 2×(31..51) + 1
+        self.assertTrue(60 <= e['低'] <= 100 and 100 <= e['高'] <= 160, e)
+        self.assertEqual(e['低'] % 5, 0)
+        self.assertIn('31–51', e['依据'])
+
+    def test_overrun_and_blocked(self):
+        a, t = task(1, 0)
+        self.log.write_text(a + call('toolu_2_d', 'sdd-agentdevice-agent', 'SDD TASK-2 真机验证', t))
+        self.status(2, total=3, phase='device')
+        now = (T0 + timedelta(minutes=t + 200)).timestamp()            # 真机跑了 200 分钟：比历来最长的还久
+        e = eta.sdd_eta(self.d, self.docs, [str(self.log)], now=now)['预估']
+        self.assertTrue(e['约'])                                       # 只完成 1 个
+        self.assertGreater(e['超出'], 0)
+        self.status(2, total=3, phase='device', step3_task_blocked_reason='缺第二台手机')
+        r = eta.sdd_eta(self.d, self.docs, [str(self.log)], now=now)
+        self.assertIsNone(r['预估'])
+        self.assertIn('第二台手机', r['阻塞'])
+
+    def test_planning_no_eta(self):
+        self.log.write_text(call('toolu_p', 'sdd-arch-planner-agent', 'SDD arch planner', 0))
+        (self.docs / 'sdd-status.md').write_text('step1_pm: done\nstep2: pending\nstep3: pending\n')
+        r = eta.sdd_eta(self.d, self.docs, [str(self.log)], now=(T0 + timedelta(minutes=20)).timestamp())
+        self.assertIsNone(r['预估'])
+        self.assertEqual(r['总体']['规划'], '进行中')
+        self.assertEqual(r['总体']['规划步骤']['已跑'], 20)
+
+    def test_not_sdd(self):
+        self.assertIsNone(eta.sdd_eta(self.d, '', []))

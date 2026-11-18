@@ -12,6 +12,7 @@
 import json
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 
 from kblib.core.periods import load_meta, period_dir
@@ -19,6 +20,7 @@ from kblib.ai.devices import dev_activity
 from kblib.ai.devsession import dev_session, session_flow
 from kblib.ai.flows import flow_progress
 from kblib.ai import supervise as _sup
+from kblib.ai.eta import sdd_eta
 from kblib import lazy
 _talk = lazy('kblib.ai.talk')
 
@@ -154,11 +156,18 @@ def period_live(name):
     else:
         st = '已完成' if m.get('状态') == '已完成' else '已停'
     last = max([x['最后动静'] for x in sess] + [0]) or max([_mtime(s.get('日志'))] + [0])
+    resume = min(x.get('恢复时间') or '' for x in pause) if pause else ''
+    eta = None
+    try:
+        if session_flow(m).get('进度类型') == 'SDD':
+            ra = datetime.strptime(resume, '%Y-%m-%d %H:%M').timestamp() if resume else 0
+            eta = sdd_eta(d, m.get('SDD目录'), [logs.get(x['键'], '') for x in sess], ra)
+    except Exception as e:           # 预估是辅助信息：算不出来就不显示
+        print('sdd_eta:', d.name, repr(e), flush=True)
     return {'状态': st, '期状态': m.get('状态', ''), '会话': sess, 'AI数': len(sess) + sum(x['子agent'] for x in sess),
             '最后动静': last, '现在': time.time(), '安静分钟': QUIET_MIN, '卡住分钟': STUCK_MIN,
             '问题': {'编号': pend[0].get('编号') or pend[0].get('id', ''), '问题': (pend[0].get('问题') or '')[:120], '个数': len(pend)} if pend else None,
-            '恢复时间': min(x.get('恢复时间') or '' for x in pause) if pause else '',
-            '进度': _progress(d, m, s), '可停止': any(x['键'] == 'dev' for x in sess)}
+            '恢复时间': resume, '进度': _progress(d, m, s), 'SDD': eta, '可停止': any(x['键'] == 'dev' for x in sess)}
 
 
 def live_brief(name):
@@ -170,4 +179,4 @@ def live_brief(name):
     pg = v['进度'] or {}
     return {'状态': v['状态'], '最后动静': v['最后动静'], 'AI数': v['AI数'], '在跑': len(v['会话']),
             '完成': pg.get('完成', 0), '总数': pg.get('总数', 0), '约': pg.get('约', False), '阶段': pg.get('阶段', ''),
-            '恢复时间': v['恢复时间']}
+            '恢复时间': v['恢复时间'], '预估': ((v['SDD'] or {}).get('预估') or None)}

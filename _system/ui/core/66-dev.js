@@ -163,8 +163,9 @@ async function devBox(name){
     ${testHtml?`<div class="card2"><div class="bd">${testHtml}</div></div>`:''}
     ${devHtml?`<div class="card2"><div class="bd">${devHtml}</div></div>`:''}`;
   // 有待确认：双栏（左边回答问题）；没有待确认：整块单栏全宽，问题在前
-  box.innerHTML=pend.length?`<div class="two"><div class="stack">${pend.map(qCard).join('')}${prog}${doneHtml}</div><div class="stack">${side}</div></div>`
-    :`<div class="stack one">${side}${prog}${doneHtml}</div>`;
+  const ltc=`<div id="liveTasks">${liveTasksHtml(liveCache[name])}</div>`;   // ⏱ 进度卡片（63-live.js，liveBox 刷新）
+  box.innerHTML=pend.length?`<div class="two"><div class="stack">${pend.map(qCard).join('')}${ltc}${prog}${doneHtml}</div><div class="stack">${side}</div></div>`
+    :`<div class="stack one">${ltc}${side}${prog}${doneHtml}</div>`;
   box.dataset.sig=sig;
   box.querySelectorAll('details[data-k]').forEach(x=>{if(x.dataset.k in keep)x.open=keep[x.dataset.k]});
   const na=box.querySelector('.act');if(na&&oTop>0)na.scrollTop=oTop+(na.scrollHeight-oH);   // 看旧记录时，新动作加在上面也不跳
