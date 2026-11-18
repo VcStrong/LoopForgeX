@@ -89,7 +89,7 @@ function updHtml(v){
 }
 async function loadUpd(){
   const el=$('#ovUpd');if(!el)return;let v;try{v=await api('/api/update')}catch(_){return}
-  el.innerHTML=updHtml(v);const b=$('#updGo');if(b)b.onclick=()=>updRun(b);
+  el.innerHTML=updHtml(v);updBarPaint();const b=$('#updGo');if(b)b.onclick=()=>updRun(b);
 }
 // 一键更新：网页进程拉代码、装依赖后原地重启；这里等新版本起来再刷新页面
 async function updRun(btn){
@@ -106,4 +106,25 @@ async function updRun(btn){
     await new Promise(ok=>setTimeout(ok,3000));
   }
   toast('网页还没起来：稍后手动刷新，或看 _system/web.log');
+}
+// 各套界面模板的首页：顶部统一的更新提示条（模板各画各的首页，都加载 core.js；经典总览有自己的横幅 #ovUpd 时不重复）
+let updBarV=null;
+function updBarPaint(){
+  let el=document.getElementById('kbUpdBar');
+  const v=updBarV,h=curHash(),home=h==='/'||h==='',seen=(()=>{try{return localStorage.getItem('kb.updSeen')||''}catch(_){return ''}})();
+  const show=v&&v['落后']&&v['设置']['模式']!=='关'&&home&&!document.getElementById('ovUpd')&&seen!==v['远端'];
+  if(!show){if(el)el.remove();return}
+  if(!el){el=document.createElement('div');el.id='kbUpdBar';document.body.prepend(el);
+    el.style.cssText='position:fixed;top:10px;left:50%;transform:translateX(-50%);width:min(860px,calc(100vw - 24px));box-sizing:border-box;z-index:2147483000;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 14px;font-size:13px;line-height:1.5;background:#fff;color:#222;border:1px solid #cfe3d8;border-left:4px solid #2f7d5b;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.14)'}
+  const cs=v['提交']||[],main=cs.filter(c=>c['类型']!=='其他'),blk=v['不能更新']||[];
+  el.innerHTML=`<b>⬆ 知识库有 ${v['落后']} 项更新</b><span style="flex:1;min-width:160px;opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc((main.length?main:cs).map(c=>c['标题']).join('\n'))}">${esc((main.length?main:cs).slice(0,3).map(c=>c['标题']).join('；'))}</span>
+    ${blk.length?`<span style="color:var(--warn,#b26b00)">只提示不更新：${esc(blk[0])}</span>`:v['排队']?'<span style="opacity:.7">已排队，等后台会话结束后自动更新</span>':'<button class="pri small" id="kbUpdGo">⬆ 更新并重启</button>'}
+    <a class="small" href="#/settings" id="kbUpdSee">看说明</a><a class="small" id="kbUpdNo" style="cursor:pointer;opacity:.7" title="这个版本先不提；有更新的版本会再出现">先不提</a>`;
+  const g=document.getElementById('kbUpdGo');if(g)g.onclick=()=>updRun(g);
+  document.getElementById('kbUpdNo').onclick=()=>{try{localStorage.setItem('kb.updSeen',v['远端'])}catch(_){}updBarPaint()};
+}
+async function updBarLoad(){try{updBarV=await api('/api/update')}catch(_){updBarV=null}updBarPaint()}
+if(typeof window!=='undefined'&&!window.__kbUpdBar){window.__kbUpdBar=1;
+  window.addEventListener('load',()=>{setTimeout(updBarLoad,1500);setInterval(updBarLoad,600000)});
+  window.addEventListener('hashchange',()=>setTimeout(updBarPaint,800));
 }
