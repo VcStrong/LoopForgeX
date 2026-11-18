@@ -43,9 +43,9 @@ def autopush_set(period, on, by='用户（网页）'):
     m = load_meta(d)
     m['自动推送'] = bool(on)
     save_meta(d, m)
-    log(d, '自动推送', ('打开' if on else '关闭') + f'（{by}）')
+    log(d, '自动推远程', ('打开' if on else '关闭') + f'（{by}）')
     tail = '' if autopush_global() else '；但「⚙ 设置」里的总开关关着，现在不会推'
-    return (f'「{d.name}」改完代码后自动推送到远端' if on else f'「{d.name}」不再自动推送，只在本地提交') + tail
+    return (f'「{d.name}」自动推远程：已打开，改完代码后自动推到远端' if on else f'「{d.name}」自动推远程：已关闭，只在本地提交') + tail
 
 
 def autopush_info(m):

@@ -1,6 +1,8 @@
-// 自动推送开关（开发面板 / 全栈 / 事项共用）：v 是 /api/dev 或 /api/stack 的返回
-function apSw(v,id){const a=v['自动推送']||{};if(!a['总开关'])return `<span class="small mut" id="${id}" title="「⚙ 设置 → 常用」里的自动推送总开关关着，所有期都只在本地提交">⬆ 自动推送（总开关已关）</span> `;
-  const r=a['最近'];return `<span class="sw ${a['开']?'on':''}" id="${id}" title="这一期改完代码后由知识库推到远端（会话正常结束且有新提交 / 全栈某端审查通过 / Bug 修复合回）；关掉 = 只在本地提交${r?'。最近：'+esc(r['时间']+' '+r['时机']+' '+r['结果']+(r['原因']?'：'+r['原因']:r['sha']?' '+r['sha']:'')):''}"><i></i>⬆ 自动推送${r&&r['结果']==='失败'?' <b style="color:var(--warn)">上次失败</b>':''}</span> `}
+// 「自动推远程」开关（开发面板 / 全栈 / 事项共用）：v 是 /api/dev 或 /api/stack 的返回；总开关关着时置灰不能点
+function apSw(v,id){const a=v['自动推送']||{},g=a['总开关'],r=a['最近'];
+  const tip=g?`这一期改完代码后由知识库推到远端（会话正常结束且有新提交 / 全栈某端审查通过 / Bug 修复合回）；关掉 = 只在本地提交${r?'。最近：'+(r['时间']+' '+r['时机']+' '+r['结果']+(r['原因']?'：'+r['原因']:r['sha']?' '+r['sha']:'')):''}`
+    :'「⚙ 设置 → 常用 → 自动推送」总开关关着，所有期都只在本地提交';
+  return `<span class="sw ${g&&a['开']?'on':''}" id="${id}" title="${esc(tip)}" ${g?'':'style="opacity:.5;cursor:not-allowed"'}><i></i>自动推远程${g&&r&&r['结果']==='失败'?' <b style="color:var(--warn)">上次失败</b>':''}</span> `}
 function apBind(name,id,v,re){const el=$('#'+id);if(!el||!(v['自动推送']||{})['总开关'])return;el.onclick=async()=>{try{toast((await post('/api/autopush',{period:name,on:!v['自动推送']['开']})).msg)}catch(e){toast(e.message)}re()}}
 // ==== 期页面对话框、开发面板、开始开发
 // ---------------- 本期对话：期页面最上方的输入框 + 这一期所有会话的最近动作
