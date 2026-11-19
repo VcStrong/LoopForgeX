@@ -144,8 +144,10 @@ TOOLS = [
        max_lines={'type': 'integer', 'description': '最多行数，默认 300'}), ['path']),
     ('kb_annotate_image', '给设计图写文字说明（保存为同目录 <图片名>.说明.md 并建索引）。',
      S(path=STR('图片绝对路径'), description=STR('图片说明：页面、模块、交互、文案、状态')), ['path', 'description']),
-    ('kb_add_repo', '登记本地代码文件夹并建立代码索引（大仓库首次可能需要几分钟）。',
-     S(path=STR('代码目录绝对路径'), name=STR('仓库名，默认目录名')), ['path']),
+    ('kb_add_repo', '登记代码仓库并建立代码索引（大仓库首次可能需要几分钟）。path 可以是本机目录，也可以是克隆地址'
+                    '（ssh://user@host:29418/xxx、git@…、https://…）：按地址登记的拉到 工作区/<名称>/1，开工时由工作副本池分配空闲副本。',
+     S(path=STR('代码目录绝对路径，或 git 克隆地址'), name=STR('仓库名，默认目录名 / 地址最后一段'),
+       post=STR('克隆后命令（可选，<dir> 换成副本目录），如 scp -O -P 29418 user@host:hooks/commit-msg <dir>/.git/hooks/；Gerrit 地址不填时自动装 commit-msg 钩子')), ['path']),
     ('kb_link_repo', '把已登记的代码仓库关联到某一期（开发包会带上它）。',
      S(iteration=STR('期名'), repo=STR('仓库名')), ['iteration', 'repo']),
     ('kb_reindex', '重建/增量更新索引。', S(target=STR('all / docs / code / 仓库名，默认 all')), []),
@@ -159,7 +161,9 @@ TOOLS = [
     ('kb_base', '查看 / 搜索基础知识库（所有期共用：网站账号、测试账号、Wi-Fi / 代理 / VPN、环境配置等）。机密字段只显示掩码。',
      S(query=STR('关键词，可空（空 = 全部）'), category={'type': 'string', 'enum': BASE_CATS, 'description': '分类，可空'}), []),
     ('kb_base_save', '新增 / 修改 / 删除基础知识库条目。密码、令牌、密钥等字段务必 机密=true（只存 macOS 钥匙串）。'
-                     '修改时只传要改的项；fields 传入后整体替换字段列表，机密字段值留空表示保持原值。',
+                     '修改时只传要改的项；fields 传入后整体替换字段列表，机密字段值留空表示保持原值。'
+                     '分类「远程仓库」（多人 / 服务器部署时的代码仓库，一个马甲一条）字段按顺序：克隆地址（必填）、基线分支（必填，这个马甲的 master）、'
+                     '平台类型、运行模块、运行变体、包名、克隆后命令；登记后各处选仓库的下拉里能选它，开工时由工作副本池分配副本。',
      S(id=STR('编号，如 B001；新增时不传'), category={'type': 'string', 'enum': BASE_CATS, 'description': '分类'},
        name=STR('名称，如「测试账号（国内）」「办公室 Wi-Fi」'), scope=STR('适用产品 / 场景，如「签到功能测试」'),
        fields={'type': 'array', 'description': '字段列表',
@@ -393,7 +397,7 @@ def _call_tool(name, a):
     if name == 'kb_annotate_image':
         return annotate_image(g('path'), g('description') or '')
     if name == 'kb_add_repo':
-        return add_repo(g('path'), g('name'))
+        return add_repo(g('path'), g('name'), g('post'))
     if name == 'kb_link_repo':
         return link_repo(g('iteration'), g('repo'))
     if name == 'kb_reindex':

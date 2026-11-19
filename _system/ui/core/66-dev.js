@@ -154,7 +154,7 @@ async function devBox(name){
    u['合计']?` <span title="${esc(Object.entries(u['按角色']||{}).map(([k,n])=>k+' '+n).join('、'))}">本期已派 ${u['合计']} 次</span>`:''}</label>`)(v['角色调用']||{合计:0})}
     ${SP?'':`<span class="small mut" title="开发流程跟着端和仓库走：在「全栈 → 各端」里给每个端选">流程 ${(v['各端流程']||[]).length?v['各端流程'].map(x=>`${esc(x['端'])} <b>${esc(x['流程'])}</b>`).join('，'):`<b>${esc(v['当前流程'])}</b>`}${v['流程']?' <span class="badge" title="老的期在这里统一指定过流程">整期统一</span> <a id="dvFlowEnd" title="取消整期统一的流程，改为在「全栈 → 各端」按端选">改为按端</a>':''} · <a id="dvFlowGo">按端选 →</a></span>`}
     ${apSw(v,'dvPush')}<span class="sw ${v['免打扰']?'on':''}" id="dvDnd" title="整期生效：出方案、完善需求、各端开发、单端开发的提问都由 AI 按自己的建议决策并记录"><i></i>🌙 免打扰（整期）</span>${btn}</div>
-    ${v['代码基线']&&!SP?`<div class="small mut mono" title="${esc(v['代码基线详情']||'')}">📍 代码：${esc(v['代码基线'])}${v['推送状态']?' · '+esc(v['推送状态']):''}</div>`:''}
+    ${v['代码基线']&&!SP?`<div class="small mut mono" title="${esc(v['代码基线详情']||'')}">📍 代码：${esc(v['代码基线'])}${v['推送状态']?' · '+esc(v['推送状态']):''}${v['工作副本']?` · <span title="工作副本池开工时分配的副本">🗂 ${esc(v['工作副本'])}</span>`:''}</div>`:''}
     ${v['免打扰']?`<div class="small mut" style="margin-top:4px">免打扰已开启（整期）：需要确认的地方由 AI 按自己的建议决策，结果记在「${SP?'确认与问题':'开发'}」里的「已处理的确认」和记录里。</div>`:''}`;
   const bar=$('#sessBar');if(bar&&bar.innerHTML!==barHtml)bar.innerHTML=barHtml;
   if(bar)bindIntr(bar,()=>devBox(name));
@@ -242,10 +242,10 @@ function needDlg(body,n){
   if(n['需要']==='仓库'){
     const cs=n['候选']||[],first=cs.findIndex(x=>x['可用']);
     h=`<p>${esc(n['说明']||(cs.length?'找到多个可能的代码仓库，确定不了用哪个，请选一个：':'本期文字资料里没有找到本机代码路径，请填写：'))}</p>
-      ${cs.map((x,i)=>radio(x['路径'],`<code>${esc(x['路径'])}</code>　<span class="mut small">当前分支 ${esc(x['当前分支']||'—')} · 来自 ${esc(x['依据'].join('、'))} · ${x['可用']?'流程 '+esc(x['流程']):'没有匹配的开发流程（可在「全栈 → 各端」给端选流程）'}</span>`,!x['可用'],i===first)).join('')}
+      ${cs.map((x,i)=>radio(x['路径'],`${x['远程仓库']?`<b>${esc(x['远程仓库'])}</b> <span class="small mut">远程仓库，开工时自动分配空闲副本</span>`:`<code>${esc(x['路径'])}</code>`}　<span class="mut small">当前分支 ${esc(x['当前分支']||'—')} · 来自 ${esc(x['依据'].join('、'))} · ${x['可用']?'流程 '+esc(x['流程']):'没有匹配的开发流程（可在「全栈 → 各端」给端选流程）'}</span>`,!x['可用'],i===first)).join('')}
       ${radio('*','其他路径　<input type="text" id="ndP" style="width:420px" placeholder="/Users/…/代码仓库根目录">',false,first<0)}
       ${n['分支']&&n['分支'].length?`<p class="mut small">本期登记的开发分支：${esc(n['分支'].join('、'))}</p>`:''}
-      <p class="mut small">选定后会记在这一期，下次开始开发直接使用。</p>`;
+      <p class="mut small">选定后会记在这一期，下次开始开发直接使用。远程仓库在「🗂 基础信息 → ＋ 新增 → 分类选 远程仓库」按模板填。</p>`;
   }else{
     const dirty=n['未提交数']||0;
     h=`<p>仓库 <code>${esc(n['仓库'])}</code> 当前在分支 <b>${esc(n['当前分支']||'（游离）')}</b>，本期登记的开发分支是 <b>${esc(n['分支'].join('、'))}</b>。SDD 文档目录按分支名生成，请确认：</p>

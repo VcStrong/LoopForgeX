@@ -6,7 +6,7 @@
 - 平台：现在只做 Android（gradle：./gradlew <模块>:install<变体>，ANDROID_SERIAL 指定只装到选的那台 → adb 拉起启动页）；
   iOS（xcodebuild + devicectl）、鸿蒙（hvigor + hdc）先只识别出来，PLATFORMS 里留了位置，后续再做。
 - 模块 / 变体：默认自动识别 application 模块（build.gradle 里有 com.android.application，多个时 app 优先）、变体 debug；
-  「⚙ 设置 → 按工程」或弹框里可指定（设置.json「工程」{路径: {运行模块, 运行变体, 运行参数}}）。
+  「🗂 基础信息 → 工程设置」或弹框里可指定（设置.json「工程」{路径: {运行模块, 运行变体, 运行参数}}）。
 - 手机：走现有占用（devlock）：没点名 → 本期占着的优先，再挑空闲的（最近最少用）；别的期 / 本人在用的不装。开工时记为本期占用，
   失败时如果是这次新占的就释放。
 - 任务是独立的后台进程（start_new_session），状态、日志写在 _system/cache/devrun/<任务号>.json / .log：
@@ -27,9 +27,9 @@ import uuid
 from pathlib import Path
 
 from kblib.core.common import SYS, KBError, now, sess_env
-from kblib.core.periods import load_meta, log, period_dir
+from kblib.core.periods import load_meta, log, period_dir, save_meta
 from kblib.core.repos import repo_pref, save_repo_pref
-from kblib.infra import devlock, hosts, timing
+from kblib.infra import devlock, hosts, pool as _pool, timing
 from kblib.ai import devices as _dev
 from kblib.plugins import install as _ins
 
@@ -157,6 +157,23 @@ def _git_info(root):
             '未提交': len([x for x in st.splitlines() if x.strip()])}
 
 
+def _module_word(c):
+    """模块对应的马甲名：:app-alpha / :app:alpha / app/alpha → alpha；:app → ''。"""
+    w = (c['模块'].rstrip(':').rsplit(':', 1)[-1] or c['目录'].rsplit('/', 1)[-1]).lower()
+    w = re.sub(r'^app[-_]', '', w)
+    return '' if w == 'app' else w
+
+
+def guess_module(cands, branch, line=''):
+    """按分支名和它所在的马甲线 master 认出要跑哪个 app 模块：分支 feature-alpha-xxx / 马甲线 beta-master → :app:alpha / :app:beta。
+    → {模块, 马甲线, 依据}；认不出（只有 master、没有对得上的模块）返回 None。"""
+    for src, words in (('分支 ' + (branch or ''), _pool.line_tokens(branch)), ('马甲线 ' + (line or ''), _pool.line_tokens(line))):
+        hit = [c for c in cands if _module_word(c) in words]
+        if len(hit) == 1:
+            return {'模块': hit[0]['模块'], '马甲线': line, '依据': src.strip()}
+    return None
+
+
 def devrun_options(name, repo=''):
     """「▶ 运行到手机」弹框：工程（各带平台、模块候选、记住的模块 / 变体）、手机、当前分支、时机设置、这一期在跑的任务。"""
     d = period_dir(name)
@@ -170,14 +187,36 @@ def devrun_options(name, repo=''):
     if not repos:
         raise KBError('这一期还没有工程：先在开发面板选开发仓库，或在事项「补充」里选工程')
     cur = str(Path(repo).expanduser()) if repo else repos[0]['路径']
+    want = (m.get('开发会话') or {}).get('分支') or m.get('开发分支', '')
+    mine = m.get('运行到手机') or {}               # 这一期自己记住的模块 / 变体（按工程，池里各份副本算一个）
+    ents = {x: _pool.remote_entry(x) for x in [m.get('远程仓库')] + [(v or {}).get('远程仓库') for v in (m.get('各端') or {}).values()] if x}
     for r in repos:
         pf = repo_pref(r['路径'])
-        r.update(记住模块=pf.get('运行模块', ''), 记住变体=pf.get('运行变体', ''), 运行参数=pf.get('运行参数', ''))
+        pm = mine.get(_pool.canonical(r['路径'])) or {}
+        c = _pool.copy_of(r['路径'])
+        ent = next((e for e in ents.values() if e and c and e.get('仓库') == c[0]), None)
+        if ent and not pm.get('模块'):             # 基础信息「远程仓库」条目里填的运行模块 / 变体
+            pm = {'模块': ent.get('运行模块', ''), '变体': pm.get('变体') or ent.get('运行变体', '')}
+        elif ent and not pm.get('变体'):
+            pm = dict(pm, 变体=ent.get('运行变体', ''))
+        pool_ = bool(_pool.copy_of(r['路径']))
+        # 一个远程仓库多个马甲（:app:alpha / :app:beta…）：工程级记住的模块是所有期共用的，不能当成这一期的；
+        # 优先级：这一期记住的 > 本机工程的设置 > 按分支所在的马甲线认出来的 > 远程仓库的工程设置 > 第一个候选
+        r.update(记住模块=pm.get('模块') or ('' if pool_ else pf.get('运行模块', '')),
+                 记住变体=pm.get('变体') or ('' if pool_ else pf.get('运行变体', '')), 运行参数=pf.get('运行参数', ''))
         if r['路径'] == cur:
             r['模块候选'] = android_modules(r['路径']) if r['平台'] == 'Android' else []
             r.update(_git_info(r['路径']))
             r['代码更新'] = timing.timing_policy('run_device', r['路径'])[0]
-    want = (m.get('开发会话') or {}).get('分支') or m.get('开发分支', '')
+            if not r['记住模块'] and r['模块候选']:
+                br = r.get('分支') if r.get('分支') not in ('', 'HEAD') else want
+                g = guess_module(r['模块候选'], br, _pool.branch_base_line(r['路径'], br))
+                if g:
+                    r.update(记住模块=g['模块'], 马甲线=g['马甲线'], 模块依据=g['依据'])
+            if not r['记住模块'] and pool_:
+                r['记住模块'] = pf.get('运行模块', '')
+            if not r['记住变体'] and pool_:
+                r['记住变体'] = pf.get('运行变体', '')
     return {'期': d.name, '工程': repos, '当前': cur, '期分支': want, '手机': _ins._phones(d.name) if _dev._adb() else [],
             'adb': bool(_dev._adb()), '在跑': next((j for j in devrun_jobs(d.name) if j['状态'] not in DONE), None),
             '上次': next((j for j in devrun_jobs(d.name) if j['状态'] in DONE), None), '平台支持': list(PLATFORMS)}
@@ -279,7 +318,7 @@ def devrun_start(name, repo='', serial='', module='', variant='', remember=False
     module = (module or r['记住模块'] or (r['模块候选'][0]['模块'] if r['模块候选'] else '')).strip()
     if not module:
         raise KBError(f'{r["名称"]} 里没找到 application 模块（build.gradle 里有 com.android.application 的）：'
-                      '在弹框或「⚙ 设置 → 按工程」里填模块，如 :app')
+                      '在弹框或「🗂 基础信息 → 工程设置」里填模块，如 :app')
     if not module.startswith(':'):
         module = ':' + module
     variant = (variant or r['记住变体'] or 'debug').strip()
@@ -298,8 +337,12 @@ def devrun_start(name, repo='', serial='', module='', variant='', remember=False
         serial = next((p['序列号'] for p in o['手机'] if p['可装']), '')
         if not serial:
             raise KBError('没有能用的手机：' + ('没连着手机' if not ph else '；'.join(f'{p["序列号"]} {p["说明"]}' for p in ph.values())))
-    if remember:
+    if remember and not _pool.copy_of(r['路径']):          # 本机工程：照旧记到工程设置（一个目录一个马甲）
         save_repo_pref(r['路径'], 运行模块=module, 运行变体='' if variant == 'debug' else variant)
+    if remember or _pool.copy_of(r['路径']):
+        m = load_meta(d)                                  # 这一期记住自己跑的模块 / 变体：同一个远程仓库的别的期（别的马甲）不受影响
+        m.setdefault('运行到手机', {})[_pool.canonical(r['路径'])] = {'模块': module, '变体': variant}
+        save_meta(d, m)
     jid = uuid.uuid4().hex[:10]
     j = {'编号': jid, '期': d.name, '工程': r['路径'], '工程名': r['名称'], '平台': plat, '模块': module, '变体': variant,
          '参数': r.get('运行参数', ''), '序列号': serial, '型号': ph[serial]['型号'], '发起': by, 'me': me,
@@ -502,9 +545,9 @@ def devrun_summary(text):
     if cand:
         hint.append('这个模块有多个渠道（productFlavors），要指定变体，如 ' + '、'.join(cand[:4]))
     elif re.search(r"Task '[^']*install\w*' not found|Cannot locate tasks that match '[^']*install", text):
-        hint.append('没有这个安装任务：检查变体名（有渠道时要写全，如 xxxDebug），或在「⚙ 设置 → 按工程」里指定')
+        hint.append('没有这个安装任务：检查变体名（有渠道时要写全，如 xxxDebug），或在「🗂 基础信息 → 工程设置」里指定')
     if re.search(r"Project '[^']+' not found", text):
-        hint.append('模块路径不对：在弹框或「⚙ 设置 → 按工程」里填对 application 模块（如 :app）')
+        hint.append('模块路径不对：在弹框或「🗂 基础信息 → 工程设置」里填对 application 模块（如 :app）')
     if re.search(r'Unable to locate a Java Runtime|JAVA_HOME is not set|Could not find java', text):
         hint.append('找不到 Java：在登录 shell（~/.zshrc）里设好 JAVA_HOME')
     if 'INSTALL_FAILED_UPDATE_INCOMPATIBLE' in text or re.search(r'signatures do not match', text, re.I):
@@ -631,9 +674,11 @@ def devrun_worker(jid):
     j['pid'] = os.getpid()
     _save(j)
     d = period_dir(j['期'])
-    fh = None
+    fh, lease = None, None
     try:
         fh = _wait_repo(j)
+        lease = _pool.pool_lease(j['工程'], f'「{j["期"]}」运行到手机')      # 编译期间这份副本算占用（工作副本池分配时跳过）
+        lease.__enter__()
         _say(j, '按时机「运行到手机前」更新代码', '准备中')
         base = timing.code_update('run_device', j['工程'], d=d)
         print(f'代码：{timing.baseline_text(base)} · {base.get("结果", "")}', flush=True)
@@ -666,6 +711,8 @@ def devrun_worker(jid):
         log(d, '运行到手机', f'{_ref(j)} → {j["型号"]}（{j["序列号"]}）失败：'
                          f'{(j["摘要"] or str(e)).splitlines()[0][:200]}（{j["发起"]}）')
     finally:
+        if lease:
+            lease.__exit__(None, None, None)
         if fh:
             fh.close()
 

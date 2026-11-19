@@ -392,7 +392,7 @@ def api_period(name):
 def api_base():
     files = [_file_info(p) for p in sorted(kb.BASE.rglob('*')) if p.is_file() and not p.name.startswith('.')
              and p not in (kb.BASE_FILE, kb.BASE_MD)] if kb.BASE.exists() else []
-    return {**kb.base_load(), 'cats': kb.BASE_CATS, 'files': files, 'dir': str(kb.BASE)}
+    return {**kb.base_load(), 'cats': kb.BASE_CATS, 'templates': kb.BASE_TEMPLATES, 'files': files, 'dir': str(kb.BASE)}
 
 
 DOC_FIRST = ['使用说明']

@@ -761,4 +761,5 @@ def dev_overview(period):
             '角色团引擎支持': team.is_claude(period_engine(m)),
             '待确认': m.get('待确认') or [], '对话': (m.get('对话') or [])[-8:], '设备': devices(d.name) if _adb() else None,
             '非阻断问题': m.get('非阻断问题') or [], '复测': retest_info(d, m),
-            '代码基线': timing.baseline_text(m.get('代码基线')), '代码基线详情': (m.get('代码基线') or {}).get('记录', '')}
+            '代码基线': timing.baseline_text(m.get('代码基线')), '代码基线详情': (m.get('代码基线') or {}).get('记录', ''),
+            '工作副本': m.get('工作副本', '')}

@@ -80,7 +80,7 @@ async function settingsPage(){
       ${st(e)['已安装']?`<button data-ets="${esc(e.id)}" title="让它调用一次 kb_overview，验证能运行、能用知识库工具（约半分钟）">测试</button>`:''}
       ${e['内置']?(e['已修改']?`<button data-erm="${esc(e.id)}">恢复默认</button>`:''):`<button class="danger" data-erm="${esc(e.id)}">删除</button>`}</div></div>`;
   let sw=null;try{sw=await api('/api/steward')}catch(_){}
-  let rp=null;try{rp=await api('/api/repos/settings')}catch(_){}
+  let pl=null;try{pl=await api('/api/pool')}catch(_){}
   let up=null;try{up=await api('/api/update')}catch(_){}
   const sws=sw?sw['设置']:null;
   app.innerHTML=`<h1>⚙ 设置</h1>
@@ -106,18 +106,15 @@ async function settingsPage(){
         <div class="row" style="gap:10px;flex-wrap:wrap;margin:8px 0 2px"><b style="width:96px">自动推送</b><label class="row small" style="gap:4px"><input type="checkbox" id="smPush" ${d.autopush!==false?'checked':''} style="width:auto;margin:0"> 打开（总开关）</label></div>
         <div class="small mut" style="margin:0 0 4px 106px">改完代码后由知识库把开发分支推到远端：单仓库开发 / 跟进 / 事项推动的会话正常结束且有新提交时、全栈某端审查通过时、Bug 修复合回后。每一期还可以在开发面板 / 全栈 / 事项顶部单独关。
           关掉总开关 = 所有期都只在本地提交（全栈验收时照旧推送）。不强推；工作区有没提交的改动、HEAD 游离、和远端冲突、没权限时不推，在那一期的记录里写原因并出管家卡片。Gerrit 仓库推 refs/for 送审；svn 不自动提交。</div></div>`})()}
-    ${rp&&rp.items.length?`<h3 style="margin-top:14px">按工程</h3>
-    <p class="small mut">每个工程是哪一端、默认用哪套开发流程，随时可改。「自动」：端按仓库里的文件识别；流程按识别文件匹配，匹配不上用上面的默认流程。
-      某一期在开发面板单独选了流程以那一期为准；事项默认用轻量流程。在全栈「各端」里给某端选了认不出的工程，也会记到这里。</p>
-    <div class="tw"><table><tr><th>工程</th><th style="width:180px">端</th><th style="width:230px">默认流程</th><th style="width:150px" title="对这个工程所有可选的时机生效（锁定的不受影响）；跟随全局 = 按下面「⏱ 时机」表">代码更新</th><th style="width:200px" title="「▶ 运行到手机」（Android）：./gradlew <模块>:install<变体>。空 = 自动识别 application 模块、变体 debug">运行到手机</th></tr>
-      ${rp.items.map(r=>`<tr><td><b>${esc(r['名称'])}</b>${r['分支']?` <span class="small mut">${esc(r['分支'])}</span>`:''}<div class="small mut mono">${esc(r['路径'].replace(/^\/Users\/[^/]+/,'~'))}</div></td>
-        <td><select data-rpend="${esc(r['路径'])}"><option value="">自动${r['远程']?'':r['识别端'].length?'（'+esc(r['识别端'].join(' / '))+'）':'（认不出）'}</option>${(r['端']&&!rp.ends.includes(r['端'])?rp.ends.concat([r['端']]):rp.ends).map(e=>`<option ${e===r['端']?'selected':''}>${esc(e)}</option>`).join('')}</select></td>
-        <td><select data-rpflow="${esc(r['路径'])}"><option value="">自动</option>${d.flows.map(f=>`<option value="${esc(f.id)}" ${f.id===r['默认流程']?'selected':''}>${esc(f['名称'])}</option>`).join('')}</select></td>
-        <td><select data-rpcode="${esc(r['路径'])}"><option value="">跟随全局</option>${['拉最新','只fetch','不动'].map(o=>`<option ${o===r['代码更新']?'selected':''}>${o}</option>`).join('')}</select></td>
-        <td>${r['远程']?'<span class="mut small">远程工程不支持</span>':`<div class="row" style="gap:4px"><input type="text" class="mono" data-rprun="${esc(r['路径'])}" data-k="模块" value="${esc(r['运行模块']||'')}" placeholder="模块：自动" title="application 模块，如 :app" style="width:96px"><input type="text" class="mono" data-rprun="${esc(r['路径'])}" data-k="变体" value="${esc(r['运行变体']||'')}" placeholder="debug" title="变体，有渠道时写全，如 prodDebug" style="width:96px"></div>`}</td></tr>`).join('')}</table></div>`:''}
+    ${pl?`<h3 style="margin-top:14px">工作副本池</h3>
+    <p class="small mut">全局开关：远程仓库开工时从 <span class="mono">${esc(pl['目录'])}/&lt;仓库&gt;/&lt;n&gt;</span> 里挑一份空闲副本，全占了就新拉一份，到上限排队。
+      各个工程 / 远程仓库自己的东西（地址、基线分支、端、流程、代码更新、运行模块）都在 <a href="#/base">🗂 基础信息</a> 里填，副本状态也在那里看。</p>
+    <div class="row small" style="gap:10px;flex-wrap:wrap;margin:8px 0">每仓库最多 <input type="number" id="plLim" min="1" value="${pl['设置']['上限']}" style="width:60px"> 份 · 闲置 <input type="number" id="plIdle" min="1" value="${pl['设置']['闲置天数']}" style="width:60px"> 天自动清理 · 新副本用
+      <select id="plMode" style="width:auto">${[['worktree','git worktree（最快、最省盘）'],['reference','clone --reference'],['clone','完整克隆']].map(([v,t])=>`<option value="${v}" ${v===pl['设置']['新副本方式']?'selected':''}>${t}</option>`).join('')}</select>
+      <button id="plSave">保存</button><button id="plClean" title="现在就清理：N 天没用、没人占、干净、没有未推送提交的副本（第 1 份保留）">🧹 清理闲置</button></div>`:''}
     ${(()=>{const mp=d.plugins.filter(p=>p['启用']&&!p['工具']&&!p['Bug平台']&&!p['错误']);
       return `<h2 style="margin-top:18px">⏱ 时机</h2>
-    <p class="small mut">知识库在这些时候自动更新代码、跑插件：同一个时机里<b>先更新代码，再跑插件</b>。「代码更新」改的是全局，某个工程要不一样就在上面「按工程」里单独选（工程 &gt; 全局 &gt; 默认）。每次更新都会在那一期的记录里写一条「更新代码」：时机 · 仓库@分支 · 设置 · 实际结果 · 落后远端几个提交。</p>
+    <p class="small mut">知识库在这些时候自动更新代码、跑插件：同一个时机里<b>先更新代码，再跑插件</b>。「代码更新」改的是全局，某个工程要不一样就到「🗂 基础信息 → 工程设置」里单独选（工程 &gt; 全局 &gt; 默认）。每次更新都会在那一期的记录里写一条「更新代码」：时机 · 仓库@分支 · 设置 · 实际结果 · 落后远端几个提交。</p>
     <div class="tw"><table><tr><th>时机</th><th style="width:150px">代码更新</th>${mp.map(p=>`<th style="width:90px;text-align:center" title="勾上 = 这个时机运行插件「${esc(p['名称'])}」">🔌 ${esc(p['名称'])}</th>`).join('')}</tr>
       ${d.timings.map(t=>`<tr><td><b>${esc(t['名称'])}</b><div class="small mut">${esc(t['说明'])}</div></td>
         <td>${t['锁定']?`<span title="${esc(t['原因'])}">🔒 ${esc(t['当前'])}</span>`
@@ -176,7 +173,7 @@ async function settingsPage(){
     <p class="mut">点「开始开发」后，后台 AI 按开发流程干活：怎么认代码仓库、文档目录放哪、按什么步骤推进、什么时候要你确认、进度怎么看。
     默认是「通用模板」；已有自己的流程命令（如 <code>/my-flow</code>）的，点<b>「从命令 / 技能添加」</b>选中它即可自动生成，不用写脚本；
     也可以复制「通用模板」手动改，用「导出 / 导入」在同事之间共享。
-    每一期可以在开发面板单独选流程；不选就按工程的默认流程（上面「按工程」里指定），再按仓库里的识别文件自动匹配，都没有用默认流程。详见 <a href="#/d/使用说明">使用说明</a>。</p>
+    每一期可以在开发面板单独选流程；不选就按工程的默认流程（「🗂 基础信息 → 工程设置」里指定），再按仓库里的识别文件自动匹配，都没有用默认流程。详见 <a href="#/d/使用说明">使用说明</a>。</p>
     <div class="bgrid">${d.flows.map(card).join('')}</div></div>
     <div class="row" style="justify-content:space-between;margin-top:18px"><h2>插件</h2><button id="plAdd">＋ 添加插件目录</button></div>
     <p class="mut">插件不属于知识库本身（如公司定制的多语言拉取），挂载后在选定的时机自动运行：能挂的时机有 ${d.timings.filter(t=>t['插件']).map(t=>`<b>${esc(t['名称'])}</b>`).join('、')}，在上面「⏱ 时机」表里勾选，或点插件的「时机与配置」。
@@ -210,14 +207,11 @@ async function settingsPage(){
   if($('#upGo'))$('#upGo').onclick=()=>updRun($('#upGo'));
   $('#advTog').onclick=()=>{setAdv=!setAdv;try{localStorage.setItem('kb.setAdv',setAdv?'1':'')}catch(_){}settingsPage()};
   $('#smEng').onchange=async e=>{try{toast((await post('/api/engine/default',{id:e.target.value})).msg)}catch(err){toast(err.message)}settingsPage()};
-  const rpSet=async b=>{try{toast((await post('/api/repos/settings',b)).msg)}catch(e){toast(e.message)}settingsPage()};
-  app.querySelectorAll('[data-rpend]').forEach(s=>s.onchange=()=>rpSet({path:s.dataset.rpend,end:s.value}));
-  app.querySelectorAll('[data-rpflow]').forEach(s=>s.onchange=()=>rpSet({path:s.dataset.rpflow,flow:s.value}));
-  app.querySelectorAll('[data-rpcode]').forEach(s=>s.onchange=()=>rpSet({path:s.dataset.rpcode,code:s.value}));
-  app.querySelectorAll('[data-rprun]').forEach(s=>s.onchange=()=>rpSet({path:s.dataset.rprun,run:{[s.dataset.k]:s.value.trim()}}));
+  if($('#plSave'))$('#plSave').onclick=async()=>{try{toast((await post('/api/pool/settings',{limit:$('#plLim').value,idle:$('#plIdle').value,mode:$('#plMode').value})).msg)}catch(e){toast(e.message)}settingsPage()};
+  if($('#plClean'))$('#plClean').onclick=async()=>{try{toast((await post('/api/pool/cleanup',{})).msg)}catch(e){toast(e.message)}settingsPage()};
   const tmSet=async b=>{try{toast((await post('/api/timing',b)).msg)}catch(e){toast(e.message)}settingsPage()};
   app.querySelectorAll('[data-tmc]').forEach(s=>s.onchange=()=>tmSet({id:s.dataset.tmc,policy:s.value}));
-  if($('#tmReset'))$('#tmReset').onclick=async()=>{if(await kbConfirm('时机的代码更新都恢复默认？（按工程单独选的不变，插件勾选不变）'))tmSet({reset:true})};
+  if($('#tmReset'))$('#tmReset').onclick=async()=>{if(await kbConfirm('时机的代码更新都恢复默认？（工程设置里单独选的不变，插件勾选不变）'))tmSet({reset:true})};
   app.querySelectorAll('[data-tmp]').forEach(c=>c.onchange=async()=>{const p=d.plugins.find(x=>x.id===c.dataset.tmp),ev=new Set(p['时机']);
     c.checked?ev.add(c.dataset.tmt):ev.delete(c.dataset.tmt);
     try{toast((await post('/api/plugin',{id:p.id,enabled:true,events:[...ev],config:p['配置']})).msg)}catch(e){toast(e.message)}settingsPage()});

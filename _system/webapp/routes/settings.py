@@ -120,7 +120,7 @@ def _post_api_period_flow(self, u, n, body):
 
 @get('/api/repos/settings')
 def _get_api_repos_settings(self, u, q):
-    return self._guard(lambda: {'items': kb.repo_settings(), 'ends': list(kb.REPO_ENDS)})
+    return self._guard(lambda: {'items': kb.repo_settings(), 'ends': list(kb.REPO_ENDS), 'flows': [{'id': f['id'], '名称': f['名称']} for f in kb.flows()]})
 
 
 @post('/api/repos/settings', page_only=True)
@@ -137,3 +137,27 @@ def _get_api_timings(self, u, q):
 @post('/api/timing', page_only=True)
 def _post_api_timing(self, u, n, body):
     return self._guard(lambda: {'msg': kb.reset_timings() if body.get('reset') else kb.save_timing(body.get('id', ''), body.get('policy', ''))})
+
+
+# ---- 工作副本池：按克隆地址登记仓库，开工时分配空闲副本（kblib/infra/pool.py）
+from kblib.infra import pool as _wcpool  # noqa: E402
+
+
+@get('/api/pool')
+def _get_api_pool(self, u, q):
+    return self._guard(lambda: _wcpool.pool_status())
+
+
+@post('/api/pool/settings', page_only=True)
+def _post_api_pool_settings(self, u, n, body):
+    return self._guard(lambda: {'msg': _wcpool.pool_save_settings(body.get('limit'), body.get('idle'), body.get('mode'))})
+
+
+@post('/api/pool/add', page_only=True)
+def _post_api_pool_add(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.add_repo(body.get('url', ''), body.get('name') or None, body.get('post', ''), background=True)})
+
+
+@post('/api/pool/cleanup', page_only=True)
+def _post_api_pool_cleanup(self, u, n, body):
+    return self._guard(lambda: {'msg': _wcpool.pool_cleanup()['说明']})

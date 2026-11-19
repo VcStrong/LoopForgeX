@@ -19,7 +19,7 @@ from pathlib import Path
 from kblib.core.common import PERIODS, KBError, now, sess_env
 from kblib.core.periods import load_meta, log, period_dir, period_names
 from kblib.core.baseinfo import base_load
-from kblib.infra import hosts
+from kblib.infra import hosts, pool as _pool
 from kblib.plugins.registry import _git_changed, get_plugin, run_plugins
 from kblib.ai.devprep import _git
 
@@ -128,6 +128,17 @@ def _run(j, p, d, root, branch, push):
     if not kind:
         raise KBError(f'{rp} 不是 git 仓库，也不是 svn 工作副本')
     rp = Path(top)
+    if kind == 'git' and _pool.copy_of(rp):          # 按地址登记的仓库：这份被开发 / 修复会话占着就换一份空闲副本，不排队
+        busy = _pool.pool_busy(rp)
+        held = branch and (_git(rp, 'branch', '--show-current').stdout.strip() == branch
+                           or _pool.branch_holder(rp, branch))      # 分支检出在别的副本里（worktree 共用分支）换了也切不过去：照旧排队
+        if busy and not held:
+            try:
+                alt = Path(_pool.pool_claim(str(rp), f'插件「{p["名称"]}」', switch=False))
+                _step(j, f'{busy}，工作副本池改用 {_pool.copy_label(alt)}')
+                rp = alt
+            except KBError as ex:
+                _step(j, str(ex))
     if kind == 'svn':
         cur = hosts.branch_of(str(rp), 'svn')
         branch, remote = _svn_branch(rp, branch) if branch else cur, ''
@@ -142,9 +153,11 @@ def _run(j, p, d, root, branch, push):
     lk = _wait_repo(j, rp)
     j['状态'] = '运行中'
     try:
-        if kind == 'svn':
-            return _run_locked_svn(j, p, d, rp, cur, branch, push)
-        return _run_locked(j, p, d, rp, cur, branch, remote, push)
+        with _pool.pool_lease(rp, f'插件「{p["名称"]}」'):
+            _pool.pool_release(rp)
+            if kind == 'svn':
+                return _run_locked_svn(j, p, d, rp, cur, branch, push)
+            return _run_locked(j, p, d, rp, cur, branch, remote, push)
     finally:
         lk.release()
 

@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from kblib.core.common import PERIODS, KBError, now
-from kblib.infra import hosts, timing
+from kblib.infra import hosts, pool as _pool, timing
 from kblib.core.periods import design_previews, load_meta, log, period_dir, period_names, save_meta
 from kblib.core.repos import REPO_ENDS, load_repos, repo_pref, save_repo_pref
 from kblib.ai.devsession import _alive, _dev_result, _notify, auto_decide_on
@@ -105,7 +105,7 @@ def stack_repos():
         m = load_meta(PERIODS / n)
         for x in [m.get('开发仓库')] + [v.get('仓库') for v in (m.get('各端') or {}).values()]:
             if x:
-                seen.setdefault(x, Path(x).name)
+                seen.setdefault(_pool.canonical(x), Path(x).name)       # 工作副本池的各份副本合成一个（选仓库，开工时分配）
     out = []
     for pth, nm in seen.items():
         if hosts.is_remote(pth):          # 远程的不在这里逐个连（慢），选了再校验
@@ -115,6 +115,10 @@ def stack_repos():
         if not kind:
             continue
         out.append({'路径': pth, '名称': nm, '端': detect_ends(pth), '版本库': kind, '分支': '' if kind == '本地' else hosts.branch_of(pth, kind)})
+    out = [x for x in out if not _pool.copy_of(x['路径'])]      # 池里的副本不单列，按基础信息的远程仓库条目列
+    for e in _pool.remote_entries():
+        out.append({'路径': _pool.REMOTE + e['编号'], '名称': _pool.remote_label(e), '端': [end_name(e['平台类型'])] if e.get('平台类型') else [],
+                    '版本库': 'git', '分支': e.get('基线分支', ''), '远程仓库': e['编号']})
     return sorted(out, key=lambda x: (end_key(x['端'][0]) if x['端'] else (99, ''), x['名称']))
 
 
@@ -169,6 +173,11 @@ def stack_set_end(name, end, repo='', branch='', by='用户（网页）'):
     m = load_meta(d)
     ends = period_ends(d, m)
     repo = (repo or '').strip()
+    ent = None
+    if _pool.is_remote_choice(repo):          # 基础信息里的远程仓库：从工作副本池分配一份，切到这个端的分支（没有就从基线分支拉）
+        repo, ent = _pool.remote_claim(repo, f'{d.name}/{end}', (branch or '').strip())
+        _pool.pool_release(repo)
+        branch = branch or ''
     if repo:
         kind, rp = hosts.check_dir(repo)      # 路径不存在 / 远程连不上 在这里报；不是 git / svn 的目录 → 本地
         branch = '' if kind == '本地' else (branch or '').strip()
@@ -179,10 +188,11 @@ def stack_set_end(name, end, repo='', branch='', by='用户（网页）'):
                 branch = ''
         if kind == 'svn' and branch:
             branch = hosts.svn_branch(rp, branch)        # feat-x → branches/feat-x（服务器上没有就报错）
-        ends[end] = {'仓库': rp, '分支': branch, '版本库': kind, **({'流程': ends[end]['流程']} if (ends.get(end) or {}).get('流程') else {})}
+        ends[end] = {'仓库': rp, '分支': branch, '版本库': kind, **({'流程': ends[end]['流程']} if (ends.get(end) or {}).get('流程') else {}),
+                     **({'远程仓库': ent['编号']} if ent else {})}
         if end not in detect_ends(rp):          # 认不出或认成别的端：记住这个工程是这一端，以后选它就知道
             save_repo_pref(rp, 端=end)
-        msg = f'{end}：{hosts.label(rp)}' + ('（svn：AI 只改工作副本，你验收后由知识库提交）' if kind == 'svn' else
+        msg = (f'{end}：基础信息「{ent["名称"]}」→ {_pool.copy_label(rp)}' if ent else f'{end}：{hosts.label(rp)}') + ('（svn：AI 只改工作副本，你验收后由知识库提交）' if kind == 'svn' else
                                            '（不是 git / svn 的本地目录：AI 直接改目录里的文件，不提交、不推送）' if kind == '本地' else '') + (f'，分支 {branch}' if branch else '')
     else:
         ends.pop(end, None)
@@ -289,17 +299,28 @@ def stack_set_flow(name, end, flow='', by='用户（网页）'):
     return f'{end} 的开发流程改为「{f["名称"] if f else "自动"}」'
 
 
-# ---------------------------------------------------------------- 工程设置：端、默认流程（⚙ 设置 → 开发流程 → 按工程）
+# ---------------------------------------------------------------- 工程设置：端、默认流程（🗂 基础信息 → 工程设置）
 
 def repo_settings():
     """可选的工程，各带认出的端、手动指定的端和默认流程。"""
     out = []
     for r in stack_repos():
+        if r.get('远程仓库'):          # 基础信息里的远程仓库条目：设置在基础信息里改，这里不列
+            continue
         p = repo_pref(r['路径'])
         out.append({'路径': r['路径'], '名称': r['名称'], '分支': r.get('分支', ''), '远程': bool(r.get('远程')),
                     '识别端': [] if r.get('远程') else _detect_ends_files(r['路径']),
                     '端': p.get('端', ''), '默认流程': p.get('默认流程', ''), '代码更新': p.get('代码更新', ''),
                     '运行模块': p.get('运行模块', ''), '运行变体': p.get('运行变体', ''), '运行参数': p.get('运行参数', '')})
+    names = {}
+    for e in _pool.remote_entries():
+        names.setdefault(e['克隆地址'], []).append(e['名称'])
+    for nm, r in _pool.pool_repos().items():     # 远程仓库：各份副本共用一套（按第 1 份记）；运行模块 / 变体在基础信息条目里填
+        p = repo_pref(r['路径'])
+        out.append({'路径': r['路径'], '名称': '🌐 ' + ('、'.join(names.get(r['克隆地址']) or []) or nm), '分支': '', '远程': False, '远程仓库': nm,
+                    '识别端': _detect_ends_files(r['路径']) if Path(r['路径']).is_dir() else [],
+                    '端': p.get('端', ''), '默认流程': p.get('默认流程', ''), '代码更新': p.get('代码更新', ''),
+                    '运行模块': '', '运行变体': '', '运行参数': p.get('运行参数', '')})
     return out
 
 

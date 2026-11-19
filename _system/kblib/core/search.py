@@ -155,8 +155,11 @@ def reindex(target='all'):
     out = []
     if target in ('all', 'docs'):
         out.append(index_docs())
-    for name in load_repos():
+    for name, r in load_repos().items():
         if target in ('all', 'code', name):
+            if isinstance(r, dict) and r.get('克隆地址') and not Path(r.get('路径') or '/nonexistent').is_dir():
+                out.append(f'{name}：远程仓库还没克隆（开工时自动拉），跳过')      # 工作副本池按需拉
+                continue
             out.append(index_repo(name))
     if not out:
         raise KBError(f'不认识的目标：{target}（可用 all / docs / code / 仓库名）')

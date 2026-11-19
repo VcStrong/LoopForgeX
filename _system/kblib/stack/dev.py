@@ -24,7 +24,7 @@ from pathlib import Path
 
 from kblib.core.common import PERIODS, KBError, now
 from kblib.core.periods import load_meta, log, period_dir, period_names, save_meta, set_status
-from kblib.infra import autopush as _ap, hosts, timing
+from kblib.infra import autopush as _ap, hosts, pool as _pool, timing
 from kblib.plugins import registry as _plugins
 from kblib.ai.devsession import DEV_DIR, _NO_BG, _alive, _dev_env, _dev_result, _notify, _session_id
 from kblib.ai.engines import engine_cmd, engine_popen, role_engine
@@ -98,7 +98,9 @@ def stack_dev_start(name, only='', by='用户（网页）'):
         if _launch.scaffold_busy(m, e):
             skip.append(f'{e}（脚手架还在生成，好了再开工）')
             continue
-        dev[e] = {'状态': '排队中', '轮次': 0, '排队时间': now(), '仓库': ends[e]['仓库'], '分支': ends[e].get('分支', ''), '版本库': ends[e].get('版本库', ''),
+        same = cur.get('仓库') and _pool.copy_of(cur['仓库']) and _pool.canonical(cur['仓库']) == _pool.canonical(ends[e]['仓库'])
+        dev[e] = {'状态': '排队中', '轮次': 0, '排队时间': now(), '仓库': cur['仓库'] if same else ends[e]['仓库'],   # 池里上次那份副本接着用
+                  '分支': ends[e].get('分支', ''), '版本库': ends[e].get('版本库', ''),
                   '会话': cur.get('会话', '') if only else '',
                   '起点': cur.get('起点', '') if only and not (cur.get('已推送') or cur.get('已提交')) else ''}
         out.append(e)
@@ -168,6 +170,18 @@ def stack_tick(only=''):
                 if busy >= MAX_PAR:
                     break
                 why = _repo_free(d, e, dev[e]['仓库'], dev)
+                if why and _pool.copy_of(dev[e]['仓库']):          # 按地址登记的仓库：这份被占了就换一份空闲的 / 新拉一份
+                    try:
+                        alt = _pool.pool_claim(dev[e]['仓库'], f'{d.name}/{e}', dev[e].get('分支', ''))
+                    except KBError as ex:
+                        why = str(ex)
+                    else:
+                        m = load_meta(d)
+                        m['各端开发'][e].update(仓库=alt, 工作副本=_pool.copy_label(alt))
+                        save_meta(d, m)
+                        dev = m['各端开发']
+                        log(d, '各端开发', f'{e}：原副本{why}，工作副本池改用 {_pool.copy_label(alt)}')
+                        why = ''
                 if why:
                     if dev[e].get('等待') != why:
                         m = load_meta(d)
@@ -806,7 +820,8 @@ def stack_dev_view(d, m):
         if not x:
             continue
         out.append({'端': e, **{k: x.get(k) for k in ('状态', '轮次', '开始时间', '结束时间', '引擎', '等待', '结果', '汇报', '审查', '仓库', '分支', '版本库', '已提交', '已推送', '参与', '中断')},
-                    '在跑': x.get('状态') in RUNNING and _alive(x.get('pid', 0)), '代码基线': timing.baseline_text(x.get('代码基线'))})
+                    '在跑': x.get('状态') in RUNNING and _alive(x.get('pid', 0)), '代码基线': timing.baseline_text(x.get('代码基线')),
+                    '工作副本': x.get('工作副本', '')})
     return out
 
 

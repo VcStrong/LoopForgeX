@@ -81,9 +81,10 @@ def main(argv=None):
     x.add_argument('-p', '--period')
     x.add_argument('-s', '--scope', choices=['all', 'docs', 'code'], default='all')
     x.add_argument('-n', '--limit', type=int, default=10)
-    x = sp.add_parser('repo', help='登记代码仓库：kb repo <路径> [名称]')
+    x = sp.add_parser('repo', help='登记代码仓库：kb repo <路径或克隆地址> [名称] [--post 克隆后命令]')
     x.add_argument('path')
     x.add_argument('repo_name', nargs='?')
+    x.add_argument('--post', default='', help='克隆后命令（<dir> 换成副本目录）；Gerrit 地址不填时自动装 commit-msg 钩子')
     x = sp.add_parser('link', help='关联仓库到某期')
     x.add_argument('name')
     x.add_argument('repo')
@@ -219,7 +220,7 @@ def main(argv=None):
         elif a.cmd == 'search':
             r = search(' '.join(a.query), a.period, None, a.scope, None, a.limit)
         elif a.cmd == 'repo':
-            r = add_repo(a.path, a.repo_name)
+            r = add_repo(a.path, a.repo_name, a.post)
         elif a.cmd == 'link':
             r = link_repo(a.name, a.repo)
         elif a.cmd == 'index':

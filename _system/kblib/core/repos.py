@@ -2,10 +2,12 @@
 """登记的本地代码仓库。"""
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from kblib.core.common import CODE_EXT, KBError, REPOS_FILE, SKIP_DIRS, load_settings, now, safe_name, save_settings
 from kblib.core.periods import init, load_meta, log, period_dir, save_meta
+from kblib.infra import pool as _pool
 from kblib import lazy
 _search = lazy('kblib.core.search')      # 上层模块：用到时才 import（不形成循环）
 
@@ -21,7 +23,9 @@ REPO_ENDS = ('服务端', 'Web', 'iOS', 'Android', '鸿蒙', '小程序', '桌�
 
 def _repo_key(path):
     p = str(path or '').strip()
-    return p if ':' in p.split('/')[0] else str(Path(p).expanduser())       # 远程 user@主机:/路径 原样
+    if ':' in p.split('/')[0]:
+        return p                                                        # 远程 user@主机:/路径 原样
+    return _pool.canonical(str(Path(p).expanduser()))                    # 工作副本池里的各份副本按第 1 份记（端、流程共用）
 
 
 def repo_prefs():
@@ -51,8 +55,13 @@ def save_repo_pref(path, **kv):
     return x
 
 
-def add_repo(path, name=None):
+def add_repo(path, name=None, post='', background=False):
+    """登记仓库：本机目录照旧；克隆地址（ssh:// / git@ / https://）按地址登记，拉到 工作区/<名称>/1，
+    开工时由工作副本池分配（infra/pool.py）。post：克隆后命令（<dir> 换成副本目录），Gerrit 不写时自动装 commit-msg 钩子。
+    background：网页用，克隆和建索引在后台做，马上返回。"""
     init()
+    if _pool.is_clone_url(path) and not Path(str(path)).expanduser().is_dir():
+        return _add_clone(path.strip(), name, post, background)
     p = Path(path).expanduser().resolve()
     if not p.is_dir():
         raise KBError(f'目录不存在：{p}')
@@ -61,6 +70,47 @@ def add_repo(path, name=None):
     repos[name] = {'路径': str(p), '加入时间': now()}
     REPOS_FILE.write_text(json.dumps(repos, ensure_ascii=False, indent=2), 'utf-8')
     return f'已登记代码仓库：{name} → {p}\n' + _search.index_repo(name)
+
+
+def _add_clone(url, name, post, background):
+    base = re.sub(r'\.git$', '', url.rstrip('/')).rsplit('/', 1)[-1].rsplit(':', 1)[-1]
+    name = safe_name(name or base)
+    repos = load_repos()
+    old = repos.get(name)
+    if old and old.get('克隆地址') not in (None, url):
+        raise KBError(f'已有同名仓库「{name}」（{old.get("克隆地址") or old.get("路径")}），换个名称')
+    if old and not old.get('克隆地址'):
+        raise KBError(f'已有同名的本机仓库「{name}」（{old.get("路径")}），换个名称')
+    repos[name] = dict(old or {}, 克隆地址=url, 克隆后命令=(post or '').strip(), 路径=str(_pool.repo_home(name) / '1'),
+                       加入时间=(old or {}).get('加入时间') or now(), 状态='克隆中')
+    REPOS_FILE.write_text(json.dumps(repos, ensure_ascii=False, indent=2), 'utf-8')
+    hook = '' if post or not _pool.is_gerrit(url) else '（Gerrit：自动装 commit-msg 钩子）'
+
+    def run():
+        try:
+            msg = _pool.pool_clone_first(name)
+            _set_repo_state(name, '')
+            return msg + '\n' + _search.index_repo(name)
+        except Exception as e:
+            _set_repo_state(name, f'克隆失败：{e}')
+            if not background:
+                raise
+            print('克隆失败：', name, repr(e), flush=True)
+    if background:
+        import threading
+        threading.Thread(target=run, daemon=True).start()
+        return f'已登记远程仓库：{name} → {url}{hook}；正在后台克隆到 {_pool.repo_home(name) / "1"}，好了自动建索引'
+    return f'已登记远程仓库：{name} → {url}{hook}\n' + run()
+
+
+def _set_repo_state(name, state):
+    repos = load_repos()
+    if name in repos:
+        if state:
+            repos[name]['状态'] = state
+        else:
+            repos[name].pop('状态', None)
+        REPOS_FILE.write_text(json.dumps(repos, ensure_ascii=False, indent=2), 'utf-8')
 
 
 def link_repo(period, repo):

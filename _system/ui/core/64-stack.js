@@ -82,6 +82,7 @@ async function stackBox(name){
       ${(()=>{const meta=[x['参与']?`<span title="这一端的开发 / 审查会话派过的角色团专家">${esc(x['参与'])}</span>`:'',
           x['仓库']&&/android|安卓/i.test(x['端'])?`<a data-devrun="${esc(name)}" data-repo="${esc(x['仓库'])}" title="用这一端当前工作区的代码编译、装到手机并拉起">▶ 运行到手机</a>`:'',
           x['代码基线']?`<span class="mono" title="${esc('开工前更新代码后的代码基线（分支 @提交 · 时间 · 哪个时机 · 落后远端）')}">📍 代码：${esc(x['代码基线'])}</span>`:'',
+          x['工作副本']?`<span title="工作副本池开工时分配的副本">🗂 ${esc(x['工作副本'])}</span>`:'',
           x['版本库']==='本地'?'本地目录：改动留在目录里':x['版本库']==='svn'?(x['已提交']?(x['已提交']==='无改动'?'svn 无改动':'svn 已提交 r'+esc(x['已提交'])):'svn：验收时提交')
             :`${x['已推送']?(x['已推送'].includes('@')?'已推送 '+esc(x['已推送'].split('@')[0]):esc(x['已推送'])):((v['自动推送']||{})['生效']?'审查通过时推送':'验收时推送')}${(v['各端推送状态']||{})[x['端']]?' · '+esc(v['各端推送状态'][x['端']]):''}`].filter(Boolean);
         return meta.length?`<tr class="esub"><td></td><td colspan="4" class="small mut">${meta.join('　·　')}</td></tr>`:''})()}`}).join('')}</table></div>`:''}</div>`:'';

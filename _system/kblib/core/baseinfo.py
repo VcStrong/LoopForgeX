@@ -16,7 +16,19 @@ from kblib.core.search import index_docs
 BASE_FILE = BASE / '基础信息.json'
 BASE_MD = BASE / '基础信息.md'
 BASE_LOG = BASE / '记录.md'
-BASE_CATS = ['账号密码', '测试账号', '网络代理', 'VPN', '环境配置', '其他']
+BASE_CATS = ['账号密码', '测试账号', '网络代理', 'VPN', '环境配置', '远程仓库', '其他']
+# 分类模板：网页新增 / 编辑时选了这个分类，按顺序出这些字段（名、提示、必填）。远程仓库一个马甲一条，同一个克隆地址的几条共用工作副本池
+BASE_TEMPLATES = {
+    '远程仓库': [
+        {'名': '克隆地址', '提示': 'ssh://user@host:29418/xxx、git@host:group/xxx.git、https://…（ssh 密钥先在服务器 ~/.ssh 配好）', '必填': True},
+        {'名': '基线分支', '提示': '这个马甲的 master，如 alpha-master；开发分支不存在时从这里拉，也用来认马甲线', '必填': True},
+        {'名': '平台类型', '提示': 'Android / iOS / 鸿蒙 / 服务端 / Web…'},
+        {'名': '运行模块', '提示': '运行到手机编哪个 app 模块，如 :app-alpha（空 = 按马甲线自动认）'},
+        {'名': '运行变体', '提示': '如 alphaGpDebug（空 = debug）'},
+        {'名': '包名', '提示': '如 com.example.alpha'},
+        {'名': '克隆后命令', '提示': '可空；<dir> = 副本目录。Gerrit 地址不填时自动装 commit-msg 钩子'},
+    ],
+}
 KC_SERVICE = os.environ.get('KB_KC_SERVICE', 'kb-base')
 MASK = '●●●●●●'
 
@@ -147,6 +159,15 @@ def base_save(id='', category='', name='', fields=None, scope='', note='', file=
         shutil.copy2(src, BASE / '附件' / src.name)
         if f'附件/{src.name}' not in e['附件']:
             e['附件'].append(f'附件/{src.name}')
+    if e['分类'] in BASE_TEMPLATES:
+        vals = {fd['名']: fd.get('值', '') for fd in e.get('字段') or []}
+        miss = [t['名'] for t in BASE_TEMPLATES[e['分类']] if t.get('必填') and not str(vals.get(t['名']) or '').strip()]
+        if miss:
+            raise KBError(f'「{e["分类"]}」要填：{"、".join(miss)}')
+        if e['分类'] == '远程仓库':
+            from kblib.infra.pool import is_clone_url
+            if not is_clone_url(vals['克隆地址']):
+                raise KBError(f'克隆地址不像 git 地址：{vals["克隆地址"]}（ssh://…、git@…:…、https://…）')
     e['更新时间'] = now()
     _base_save_all(data)
     _base_log(action, f'{e["编号"]} ［{e["分类"]}］{e["名称"]}（{by}）')

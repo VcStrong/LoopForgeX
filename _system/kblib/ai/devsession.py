@@ -17,8 +17,8 @@ from kblib.ai.engines import engine_bin, engine_popen, period_engine
 from kblib.ai import team
 from kblib.ai import supervise as _sup
 from kblib.plugins.registry import _sources_prompt, i18n_hint, i18n_issue_tip, run_plugins
-from kblib.ai.devprep import _dev_target, _git, _git_root, _no_flow_msg, _sdd_repo
-from kblib.infra import autopush as _ap, hosts, timing
+from kblib.ai.devprep import _dev_target, _git, _git_root, _no_flow_msg, _sdd_repo, want_branches
+from kblib.infra import autopush as _ap, hosts, pool as _pool, timing
 from kblib import lazy
 _talk = lazy('kblib.ai.talk')
 _beh = lazy('kblib.steward.behavior')      # 上层模块：用到时才 import（管家按操作学习）
@@ -862,6 +862,15 @@ def dev_start(period, note='', repo='', branch='', keep_branch=False):
         raise KBError('这一期已完成；如要继续开发，先把状态改为「已暂停」再开始')
     if m.get('类型') != '事项' and (m.get('全栈') or m.get('各端')) and not (s and s.get('类型') != '复测'):
         raise KBError('这一期走全栈：开发在「全栈」里，方案拍板后点「▶ 各端开工」（各端按方案开发、互相审查）')
+    if repo and _pool.is_remote_choice(repo):          # 选了基础信息里的「远程仓库」条目：从工作副本池拿一份（没有开发分支就从条目的基线分支拉）
+        repo, ent = _pool.remote_claim(repo, d.name, '' if branch else (want_branches(d, m) or [''])[0])
+        m = load_meta(d)
+        if m.get('远程仓库') != ent['编号']:
+            m['远程仓库'] = ent['编号']
+            save_meta(d, m)
+            log(d, '确认开发仓库', f'基础信息 {ent["编号"]}「{ent["名称"]}」（{ent["克隆地址"]}，基线 {ent.get("基线分支") or "—"}）')
+    elif repo and (repo in _pool.pool_repos() or _pool.copy_of(repo)):      # 按地址登记的仓库：从工作副本池拿一份空闲的
+        repo = _pool.pool_claim(repo, d.name, '' if branch else (want_branches(d, m) or [''])[0])
     if repo:
         root = _git_root(repo)
         if not root:
@@ -871,7 +880,7 @@ def dev_start(period, note='', repo='', branch='', keep_branch=False):
         repo = str(root)
     steps = []
     if branch or keep_branch:
-        root = Path(repo) if repo else _sdd_repo(d, m, '')
+        root = Path(repo) if repo else _sdd_repo(d, m, '', claim=True)
         steps = switch_branch(root, branch) if branch else ['拉取：' + _switch_pull(root)]
         cur = _git(root, 'branch', '--show-current').stdout.strip()
         repo = str(root)
@@ -881,7 +890,7 @@ def dev_start(period, note='', repo='', branch='', keep_branch=False):
         m['开发分支'] = cur
         save_meta(d, m)
         log(d, '确认开发分支', f'{root.name} · {cur}' + (f'（网页确认切换：{"；".join(steps)}）' if branch else f'（沿用当前分支；{steps[0]}）'))
-    root, branch, f, docs = _dev_target(d, m, repo)
+    root, branch, f, docs = _dev_target(d, m, repo, claim=True)
     if not steps:                                       # 开发前更新代码（时机 dev_start；刚切过分支的已经按「切开发分支」拉过）
         base = timing.code_update('dev_start', str(root), 'git', d=d)
     else:
@@ -891,9 +900,14 @@ def dev_start(period, note='', repo='', branch='', keep_branch=False):
     if m.get('状态') not in DEV_OK:
         set_status(d.name, '已批准开发', note or '网页「开始开发」批准', by_human=True)
     m = load_meta(d)
+    wc = _pool.copy_label(root)
     if m.get('开发仓库') != str(root):
-        log(d, '确认开发仓库', str(root))
+        log(d, '确认开发仓库', str(root) + (f'（工作副本池分配：{wc}）' if wc else ''))
     m['开发仓库'] = str(root)
+    if wc:
+        m['工作副本'] = wc
+    else:
+        m.pop('工作副本', None)
     m['SDD目录'] = str(docs)
     m['开发会话'] = {'备注': note, '流程': f['id'], '引擎': eng['id']}
     m['代码基线'] = base
@@ -905,6 +919,7 @@ def dev_start(period, note='', repo='', branch='', keep_branch=False):
     if plug:
         prompt += f'\n\n【开发开始时已运行的插件】（知识库自动运行，结果供参考）\n{plug}'
     proc = _dev_spawn(d, root, branch, prompt, '', 续跑次数=0)
+    _pool.pool_release(root, d.name)              # 会话起来了，占用按会话算
     log(d, '开始开发', f'后台会话 pid {proc.pid}（{eng["名称"]} · {f["名称"]} · {root.name} · {branch}）' + (f'；{note}' if note else ''))
     return (f'已开始开发「{d.name}」：后台会话 pid {proc.pid}，{eng["名称"]}，流程「{f["名称"]}」，仓库 {root.name}（{branch}）'
             + (''.join(f'\n{x}' for x in steps) if steps else '') + (f'\n\n{plug}' if plug else ''))

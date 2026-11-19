@@ -92,7 +92,7 @@ def repo_choices():
     from kblib.core.repos import load_repos
     from kblib.core.periods import load_meta, period_names
     import subprocess
-    from kblib.infra import hosts
+    from kblib.infra import hosts, pool as _pool
     from kblib.stack.plan import detect_ends
     paths = {}
     try:                                       # 基础信息里写的本机代码路径也算
@@ -108,13 +108,13 @@ def repo_choices():
     for n in period_names():
         m = load_meta(PERIODS / n)
         if m.get('开发仓库'):
-            u = paths.setdefault(m['开发仓库'], set())
+            u = paths.setdefault(_pool.canonical(m['开发仓库']), set())     # 工作副本池的各份副本合成一个
             s = m.get('开发会话') or {}
             if m.get('状态') in ('已批准开发', '开发中') or s.get('状态') == '运行中':
                 u.add(n)
     out = []
     for pth, users in paths.items():
-        if hosts.is_remote(pth):
+        if hosts.is_remote(pth) or _pool.copy_of(pth):        # 池里的副本不单列，下面按基础信息的远程仓库条目列
             continue
         if (Path(pth) / '.git').exists():
             g = lambda *a: subprocess.run(['git', '-C', pth, *a], capture_output=True, text=True).stdout.strip()
@@ -127,6 +127,14 @@ def repo_choices():
         else:
             continue
         out.append({'路径': pth, '名称': Path(pth).name, '端': detect_ends(pth), '分支': branch, '改动': dirty, '在用': sorted(users)})
+    use = {}
+    for n in period_names():
+        rid = load_meta(PERIODS / n).get('远程仓库')
+        if rid:
+            use.setdefault(rid, []).append(n)
+    for e in _pool.remote_entries():
+        out.append({'路径': _pool.REMOTE + e['编号'], '名称': _pool.remote_label(e) + '　开工时自动分配副本',
+                    '端': [e['平台类型']] if e.get('平台类型') else [], '分支': e.get('基线分支', ''), '改动': 0, '在用': use.get(e['编号'], [])})
     return sorted(out, key=lambda x: (bool(x['在用']) or x['改动'] > 0, x['名称']))
 
 
@@ -139,7 +147,16 @@ def _setup_task(name, branch, repo, by):
     if branch:
         add_note(d.name, branch, '其他资料', '分支', source=by)
         out.append(f'分支 {branch}')
-    if repo:
+    if repo and str(repo).startswith('remote:'):        # 基础信息里的远程仓库：从工作副本池分配一份
+        from kblib.infra import pool as _pool
+        path, ent = _pool.remote_claim(repo, d.name, branch)
+        _pool.pool_release(path, d.name)
+        m = load_meta(d)
+        m.update(开发仓库=path, 远程仓库=ent['编号'], 工作副本=_pool.copy_label(path))
+        save_meta(d, m)
+        log(d, '确认开发仓库', f'基础信息 {ent["编号"]}「{ent["名称"]}」→ {_pool.copy_label(path)}（{by}）')
+        out.append(f'远程仓库 {ent["名称"]}（{_pool.copy_label(path)}）')
+    elif repo:
         rp = Path(repo).expanduser()
         if not ((rp / '.git').exists() or (rp / '.svn').exists()):
             raise KBError(f'{rp} 不是 git 仓库，也不是 svn 工作副本')

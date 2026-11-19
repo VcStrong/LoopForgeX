@@ -522,9 +522,18 @@ def steward_tick(by='定时'):
             upd = _upd.update_tick()              # 程序更新：满 1 小时检查一次；排队的 / 设成自动的空闲时更新（有自己的开关）
         except Exception as e:                    # noqa: BLE001
             upd = f'出错：{e}'
+        try:
+            from kblib.infra.pool import pool_tick
+            pool_warn = pool_tick()               # 工作副本池：一天清理一次闲置副本；有未推送提交的不删、提醒
+        except Exception as e:                    # noqa: BLE001
+            pool_warn = [f'出错：{e}']
+        if pool_warn:
+            _notify('知识库 · 工作副本没清理', '\n'.join(pool_warn)[:400], '管家')
         res = [f'{ACTIONS[r["动作"]][0]}：{r["结果"]}' for r in did] + [f'中断续跑：{r[:60]}' for _, r in resumed] + [f'自动推送{r[:60]}' for _, r in pushed]
         if upd:
             res.append(f'程序更新：{upd[:80]}')
+        if pool_warn:
+            res.append(f'工作副本池：{"；".join(pool_warn)[:120]}')
         for _, r in resumed:
             _record(方式='自动', 动作='中断续跑', 结果='失败' if '失败' in r or '出错' in r else '已续', 说明=r)
         st.update(上次=now(), 结果=('；'.join(res) or '没有要自动做的事'), 发起=by)

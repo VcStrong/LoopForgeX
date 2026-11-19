@@ -11,6 +11,7 @@ from kblib.core.periods import load_meta, log, period_dir, save_meta
 from kblib.core.notes import BRANCH_RE, NOTES_FILE, URL_RE, note_md, note_title, notes_of
 from kblib.core.repos import load_repos
 from kblib.core.baseinfo import BASE_MD, base_load
+from kblib.infra import pool as _pool
 from kblib.ai.flows import flow_docs, flow_for, flow_text, flows, get_flow
 from kblib import lazy
 _urlimport = lazy('kblib.sources.urlimport')      # 上层模块：用到时才 import（不形成循环）
@@ -113,12 +114,23 @@ def repo_candidates(d, m):
                     r['只供选择'] = True          # 和这一期对不上的公共路径：弹窗里给你选，不自动用
     want = want_branches(d, m)
     for x in out.values():
+        if _pool.copy_of(x['路径']) and m.get('远程仓库'):
+            e = _pool.remote_entry(m['远程仓库'])
+            if e:
+                x['远程仓库'] = _pool.remote_label(e)
         root = Path(x['路径'])
         f = flow_for(m, root)
         x['可用'], x['流程'] = bool(f), f['名称'] if f else ''
         x['当前分支'] = _git(root, 'branch', '--show-current').stdout.strip()
         x['有开发分支'] = any(_git(root, 'rev-parse', '--verify', '--quiet', b).returncode == 0 for b in want)
-    return list(out.values())
+    res = list(out.values())
+    for e in _pool.remote_entries():           # 基础信息里的远程仓库：都给你选（开工时工作副本池分配副本、切到开发分支 / 从基线分支拉），不自动用
+        if e['编号'] == m.get('远程仓库') and any(x.get('远程仓库') for x in res):
+            continue                               # 这一期已经在用它（上面「网页上确认过」那份副本）
+        res.append({'路径': _pool.REMOTE + e['编号'], '依据': [f'基础信息 {e["编号"]}'], '明确': False, '只供选择': True,
+                    '可用': True, '流程': '开工时按副本认', '当前分支': e.get('基线分支', ''), '有开发分支': False,
+                    '远程仓库': _pool.remote_label(e)})
+    return res
 
 
 def _pick_repo(cands, m):
@@ -140,7 +152,16 @@ def _pick_repo(cands, m):
     return None
 
 
-def _sdd_repo(d, m, repo):
+def _sdd_repo(d, m, repo, claim=False):
+    """开发用哪个仓库。claim：开工时（不是会话里调 kb_dev_prepare）——仓库是按地址登记的，就从工作副本池拿一份空闲副本。"""
+    root = _sdd_repo0(d, m, repo)
+    if claim and _pool.copy_of(root):
+        want = want_branches(d, m)
+        root = Path(_pool.pool_claim(str(root), d.name, want[0] if want else ''))
+    return root
+
+
+def _sdd_repo0(d, m, repo):
     if repo:
         root = _git_root(repo)
         if not root:
@@ -203,9 +224,9 @@ def _no_flow_msg(m, root):
     return f'{root} 没有匹配的开发流程，请在「全栈 → 各端」给这个仓库所在的端选流程，或在「⚙ 设置」里新建本组的流程'
 
 
-def _dev_target(d, m, repo='', store=''):
+def _dev_target(d, m, repo='', store='', claim=False):
     """目标仓库、当前分支、开发流程、文档目录。"""
-    root = _sdd_repo(d, m, repo)
+    root = _sdd_repo(d, m, repo, claim)
     f = flow_for(m, root)
     if not f:
         raise KBNeed(_no_flow_msg(m, root), {'需要': '仓库', '候选': repo_candidates(d, m), '分支': want_branches(d, m),
