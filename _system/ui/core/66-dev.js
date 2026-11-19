@@ -149,23 +149,24 @@ async function devBox(name){
   const acts=v['动作'];
   const barHtml=`<div class="top"><b>会话</b>${sess}<span class="sp"></span>
  <label class="small mut" title="这一期 AI 开发用的引擎（全栈各端没单独指定时也用它）；在「⚙ 设置」里管理">AI <select id="dvEng" ${run?'disabled':''}><option value="">默认（${esc(v['默认引擎'])}）</option>${v['引擎列表'].map(x=>`<option value="${esc(x.id)}" ${x.id===v['引擎']?'selected':''}>${esc(x['名称'])}</option>`).join('')}</select></label>
- ${(u=>`<label class="small mut" title="角色团：后台会话按场景请专家子 agent（产品经理、架构师…）出意见；只对 Claude 引擎生效。全局开关和每期上限在「⚙ 设置 → 角色团」">🧑‍🤝‍🧑 <select id="dvTeam"><option value="跟随" ${v['角色团']!=='关'?'selected':''}>跟随全局（${v['角色团全局']?'开':'关'}）</option><option value="关" ${v['角色团']==='关'?'selected':''}>关</option></select>${
+ ${(u=>`<label class="small mut" title="角色团：后台会话按场景请专家子 agent（产品经理、架构师…）出意见；只对 Claude 引擎生效。全局开关、安装 / 移除在「⚙ 设置 → 角色团」">🧑‍🤝‍🧑 <select id="dvTeam"><option value="跟随" ${v['角色团']!=='关'?'selected':''}>跟随全局（${v['角色团全局']?'开':'关'}）</option><option value="关" ${v['角色团']==='关'?'selected':''}>关</option></select>${
    v['角色团']!=='关'&&v['角色团全局']&&!v['角色团引擎支持']?' <span style="color:var(--warn)">这一期的引擎不支持角色团</span>':''}${
-   u['合计']?` <span ${u['合计']>=u['上限']?'style="color:var(--warn)"':''} title="${esc(Object.entries(u['按角色']||{}).map(([k,n])=>k+' '+n).join('、'))}">本期 ${u['合计']}/${u['上限']}${u['合计']>=u['上限']?' · 已用完，不再派角色':''}</span>`:''}</label>`)(v['角色调用']||{合计:0,上限:30})}
+   u['合计']?` <span title="${esc(Object.entries(u['按角色']||{}).map(([k,n])=>k+' '+n).join('、'))}">本期已派 ${u['合计']} 次</span>`:''}</label>`)(v['角色调用']||{合计:0})}
     ${SP?'':`<span class="small mut" title="开发流程跟着端和仓库走：在「全栈 → 各端」里给每个端选">流程 ${(v['各端流程']||[]).length?v['各端流程'].map(x=>`${esc(x['端'])} <b>${esc(x['流程'])}</b>`).join('，'):`<b>${esc(v['当前流程'])}</b>`}${v['流程']?' <span class="badge" title="老的期在这里统一指定过流程">整期统一</span> <a id="dvFlowEnd" title="取消整期统一的流程，改为在「全栈 → 各端」按端选">改为按端</a>':''} · <a id="dvFlowGo">按端选 →</a></span>`}
     ${apSw(v,'dvPush')}<span class="sw ${v['免打扰']?'on':''}" id="dvDnd" title="整期生效：出方案、完善需求、各端开发、单端开发的提问都由 AI 按自己的建议决策并记录"><i></i>🌙 免打扰（整期）</span>${btn}</div>
     ${v['代码基线']&&!SP?`<div class="small mut mono" title="${esc(v['代码基线详情']||'')}">📍 代码：${esc(v['代码基线'])}${v['推送状态']?' · '+esc(v['推送状态']):''}</div>`:''}
     ${v['免打扰']?`<div class="small mut" style="margin-top:4px">免打扰已开启（整期）：需要确认的地方由 AI 按自己的建议决策，结果记在「${SP?'确认与问题':'开发'}」里的「已处理的确认」和记录里。</div>`:''}`;
   const bar=$('#sessBar');if(bar&&bar.innerHTML!==barHtml)bar.innerHTML=barHtml;
   if(bar)bindIntr(bar,()=>devBox(name));
+  const autoHtml=autoQsHtml(v['待确認'.replace('認','认')]);
   const doneHtml=done.length?`<details data-k="done" style="margin-top:8px"><summary class="small"><b>已处理的确认</b>（${done.length}）</summary>${done.map(q=>`<div class="small" style="padding:6px 0;border-bottom:1px solid var(--soft)"><span class="mut">${esc(q['编号'])} · ${esc(q['回答时间']||q['时间'])} · ${esc(q['回答人']||q['状态'])}</span><br><b>${esc(q['问题'])}</b><br>→ ${esc(q['回答']||q['状态'])}</div>`).join('')}</details>`:'';
   const side=`${issHtml?`<div class="card2 issbox"><div class="bd">${issHtml}</div></div>`:''}
     ${testHtml?`<div class="card2"><div class="bd">${testHtml}</div></div>`:''}
     ${devHtml?`<div class="card2"><div class="bd">${devHtml}</div></div>`:''}`;
   // 有待确认：双栏（左边回答问题）；没有待确认：整块单栏全宽，问题在前
   const ltc=`<div id="liveTasks">${liveTasksHtml(liveCache[name])}</div>`;   // ⏱ 进度卡片（63-live.js，liveBox 刷新）
-  box.innerHTML=pend.length?`<div class="two"><div class="stack">${pend.map(qCard).join('')}${ltc}${prog}${doneHtml}</div><div class="stack">${side}</div></div>`
-    :`<div class="stack one">${ltc}${side}${prog}${doneHtml}</div>`;
+  box.innerHTML=pend.length?`<div class="two"><div class="stack">${pend.map(qCard).join('')}${autoHtml}${ltc}${prog}${doneHtml}</div><div class="stack">${side}</div></div>`
+    :`<div class="stack one">${autoHtml}${ltc}${side}${prog}${doneHtml}</div>`;
   box.dataset.sig=sig;
   box.querySelectorAll('details[data-k]').forEach(x=>{if(x.dataset.k in keep)x.open=keep[x.dataset.k]});
   const na=box.querySelector('.act');if(na&&oTop>0)na.scrollTop=oTop+(na.scrollHeight-oH);   // 看旧记录时，新动作加在上面也不跳
@@ -179,6 +180,7 @@ async function devBox(name){
     const ai=el.querySelector('[data-ai]');if(ai)ai.onclick=()=>{ta.value=q['AI建议'];drafts[id]=ta.value;ta.focus()};
     const go=async()=>{try{const r=await post('/api/answer',{period:name,id,answer:ta.value});delete drafts[id];toast(r.msg);devBox(name)}catch(e){toast(e.message)}};
     el.querySelector('[data-ans]').onclick=go;ta.onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey))go()}});
+  autoQsBind(box,name,()=>devBox(name));
   apBind(name,'dvPush',v,()=>devBox(name));
   $('#dvDnd').onclick=async()=>{try{const r=await post('/api/dnd',{period:name,on:!v['免打扰']});toast(r.msg);devBox(name);if($('#stackBox'))stackBox(name)}catch(e){toast(e.message)}};
   ['#dvToStack','#dvToStack2'].forEach(k=>{const a=$(k);if(a)a.onclick=()=>{const t=document.querySelector('[data-tab="stack"]');if(t)t.click();const p=document.querySelector('[data-pane="stack"]');if(p)p.scrollIntoView({behavior:'smooth',block:'start'})}});
@@ -271,4 +273,18 @@ async function instLatestLoad(name){
   const t=instLatest[name];if(t&&Date.now()-t._t<90000)return;
   try{const x=await api('/api/build/install/latest?name='+enc(name));x._t=Date.now();instLatest[name]=x;
     const el=$('#instLatest');if(el&&curPeriod()===name){el.innerHTML=instLatestBtn(x);bind()}}catch(_){}
+}
+
+// 「AI 已自动定」：明确的事 AI 没等你就定了（或免打扰时替你定的），显示定了什么、为什么，可一键改回让 AI 重做（/api/answer 改回 → 发给会话）
+function autoQsHtml(qs){
+  const xs=(qs||[]).filter(q=>q['状态']==='AI决策').slice(-6).reverse();if(!xs.length)return '';
+  return `<details data-k="autoq" open style="margin-top:8px"><summary class="small"><b>🤖 AI 已自动定</b>（${xs.length}）<span class="mut">　明确的事不等你拍板；不对就改回，AI 会按你的意见重做</span></summary>${xs.map(q=>`<div class="q" data-aq="${esc(q['编号'])}" style="border-color:var(--soft)">
+    <div class="small">AI 已自动定：<b>${esc(q['回答']||'')}</b> <span class="mut">（${esc(q['自动']?(q['自动理由']||'问题明确、有把握、不扩大范围、可回退'):'免打扰开着，按 AI 建议定')}）</span></div>
+    <div class="small mut" style="margin-top:2px">${esc(q['编号'])}${q['阶段']?' · '+esc(q['阶段']):''} · ${esc(q['回答时间']||q['时间'])} · ${esc(q['问题'])}</div>
+    <details class="small" style="margin-top:4px"><summary>↩ 改回重做</summary><textarea rows="2" placeholder="写你的意见（如：不要改接口，改成在客户端兜底）；提交后发给 AI 按它改过来"></textarea>
+      <div class="row" style="margin-top:4px"><button class="pri" data-aqgo="1">改回并让 AI 重做</button></div></details></div>`).join('')}</details>`}
+function autoQsBind(box,name,refresh){
+  box.querySelectorAll('[data-aq]').forEach(el=>{const b=el.querySelector('[data-aqgo]');if(!b)return;
+    b.onclick=async()=>{const t=el.querySelector('textarea').value.trim();if(!t){toast('写一下要改成什么');return}
+      b.disabled=true;try{toast((await post('/api/answer',{period:name,id:el.dataset.aq,answer:t})).msg);refresh()}catch(e){toast(e.message)}finally{b.disabled=false}}});
 }

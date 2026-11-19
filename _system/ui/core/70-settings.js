@@ -109,11 +109,12 @@ async function settingsPage(){
     ${rp&&rp.items.length?`<h3 style="margin-top:14px">按工程</h3>
     <p class="small mut">每个工程是哪一端、默认用哪套开发流程，随时可改。「自动」：端按仓库里的文件识别；流程按识别文件匹配，匹配不上用上面的默认流程。
       某一期在开发面板单独选了流程以那一期为准；事项默认用轻量流程。在全栈「各端」里给某端选了认不出的工程，也会记到这里。</p>
-    <div class="tw"><table><tr><th>工程</th><th style="width:180px">端</th><th style="width:230px">默认流程</th><th style="width:150px" title="对这个工程所有可选的时机生效（锁定的不受影响）；跟随全局 = 按下面「⏱ 时机」表">代码更新</th></tr>
+    <div class="tw"><table><tr><th>工程</th><th style="width:180px">端</th><th style="width:230px">默认流程</th><th style="width:150px" title="对这个工程所有可选的时机生效（锁定的不受影响）；跟随全局 = 按下面「⏱ 时机」表">代码更新</th><th style="width:200px" title="「▶ 运行到手机」（Android）：./gradlew <模块>:install<变体>。空 = 自动识别 application 模块、变体 debug">运行到手机</th></tr>
       ${rp.items.map(r=>`<tr><td><b>${esc(r['名称'])}</b>${r['分支']?` <span class="small mut">${esc(r['分支'])}</span>`:''}<div class="small mut mono">${esc(r['路径'].replace(/^\/Users\/[^/]+/,'~'))}</div></td>
         <td><select data-rpend="${esc(r['路径'])}"><option value="">自动${r['远程']?'':r['识别端'].length?'（'+esc(r['识别端'].join(' / '))+'）':'（认不出）'}</option>${(r['端']&&!rp.ends.includes(r['端'])?rp.ends.concat([r['端']]):rp.ends).map(e=>`<option ${e===r['端']?'selected':''}>${esc(e)}</option>`).join('')}</select></td>
         <td><select data-rpflow="${esc(r['路径'])}"><option value="">自动</option>${d.flows.map(f=>`<option value="${esc(f.id)}" ${f.id===r['默认流程']?'selected':''}>${esc(f['名称'])}</option>`).join('')}</select></td>
-        <td><select data-rpcode="${esc(r['路径'])}"><option value="">跟随全局</option>${['拉最新','只fetch','不动'].map(o=>`<option ${o===r['代码更新']?'selected':''}>${o}</option>`).join('')}</select></td></tr>`).join('')}</table></div>`:''}
+        <td><select data-rpcode="${esc(r['路径'])}"><option value="">跟随全局</option>${['拉最新','只fetch','不动'].map(o=>`<option ${o===r['代码更新']?'selected':''}>${o}</option>`).join('')}</select></td>
+        <td>${r['远程']?'<span class="mut small">远程工程不支持</span>':`<div class="row" style="gap:4px"><input type="text" class="mono" data-rprun="${esc(r['路径'])}" data-k="模块" value="${esc(r['运行模块']||'')}" placeholder="模块：自动" title="application 模块，如 :app" style="width:96px"><input type="text" class="mono" data-rprun="${esc(r['路径'])}" data-k="变体" value="${esc(r['运行变体']||'')}" placeholder="debug" title="变体，有渠道时写全，如 prodDebug" style="width:96px"></div>`}</td></tr>`).join('')}</table></div>`:''}
     ${(()=>{const mp=d.plugins.filter(p=>p['启用']&&!p['工具']&&!p['Bug平台']&&!p['错误']);
       return `<h2 style="margin-top:18px">⏱ 时机</h2>
     <p class="small mut">知识库在这些时候自动更新代码、跑插件：同一个时机里<b>先更新代码，再跑插件</b>。「代码更新」改的是全局，某个工程要不一样就在上面「按工程」里单独选（工程 &gt; 全局 &gt; 默认）。每次更新都会在那一期的记录里写一条「更新代码」：时机 · 仓库@分支 · 设置 · 实际结果 · 落后远端几个提交。</p>
@@ -127,7 +128,7 @@ async function settingsPage(){
     <div class="row"><button id="tmReset">恢复默认</button></div>`})()}
     ${teamCard(d.team)}
     ${sw?`<h2>🤖 管家</h2>
-    <p class="mut">管家每 5 分钟巡检一次：<b>明确又能重做的事自己做</b>（下面勾选的）；<b>你点了就等于批准的</b>（拍板、开工、验收、推动、修复、svn 提交）只提醒你，从不代点；<b>拿不准的</b>只问你一个问题。每天早上 8 点后出一份日报。</p>
+    <p class="mut">管家每 5 分钟巡检一次：<b>明确又能重做的事自己做</b>（下面勾选的）；<b>你点了就等于批准的</b>（验收、推动、修复、svn 提交）只提醒你，从不代点；拍板、开工在方案明确时按下面「明确的事自动拍板」由 AI 自动定（可撤回）；<b>拿不准的</b>只问你一个问题。每天早上 8 点后出一份日报。</p>
     <div class="bcard"><div class="row" style="gap:16px;flex-wrap:wrap">
       <label><input type="checkbox" id="swOn" ${sws['开启']?'checked':''}> 开启管家</label>
       <span>自主度 ${sw['自主度选项'].map(l=>`<label style="margin-right:8px"><input type="radio" name="swLv" value="${esc(l)}" ${l===sws['自主度']?'checked':''}> ${esc(l)}</label>`).join('')}</span>
@@ -138,12 +139,16 @@ async function settingsPage(){
       <div style="margin:8px 0 4px"><label><input type="checkbox" id="swRes" ${sws['中断续跑']!==false?'checked':''}> <b>中断后自动接着做</b></label>
         <span class="small mut">后台会话被用量限制、网络断开、引擎崩溃、机器重启打断时，到点（能读出恢复时间就按它，读不出按 5 → 15 → 60 分钟）用原会话接着做，先核对文档和 git 的实际进度；不受上面的开关和每日上限限制。</span>
         <label style="margin-left:8px">连续最多 <input type="number" id="swResMax" min="1" max="50" value="${sws['续跑上限']||5}" style="width:56px"> 次，超过就停下问你</label></div>
+      <div style="margin:4px 0"><label><input type="checkbox" id="swAuto" ${sws['自动拍板']!==false?'checked':''}> <b>明确的事自动拍板</b></label>
+        <span class="small mut">不管开没开免打扰，AI 自己判断要不要问你：需求清楚、有建议、不扩大范围、能回退的（如改法明确的修复、没有待确认的全栈方案），AI 直接定下来接着做，页面上显示「AI 已自动定：xx（理由）」，你可以一键改回重做；拿不准、扩大范围、影响线上或不可回退的才停下问你。验收推送、svn 提交仍由你点。</span></div>
       <div style="margin:4px 0"><label><input type="checkbox" id="swLearn" ${sws['学习']!==false?'checked':''}> <b>从我的操作里学习</b></label>
         <span class="small mut">在本机记下你亲手做的操作（回答 AI、归档、推动、Bug 审核 / 修复…），按类别统计后只出提议卡片（如「以后完成 7 天自动归档」「接着推动」「这类问题你几次里几次照建议」），你点了才生效；开始开发、拍板、Bug 审核、修复、推动永远只由你点。</span></div>
       <div class="row" style="margin-top:8px"><button class="pri" id="swSave">保存</button></div></div>
-    <div class="bcard" style="margin-top:10px"><b>管家规矩</b> <span class="small mut">你定的长期要求，附在每个后台 AI 会话（方案、开发、审查、Bug 分析、问管家）的提示词后面。在「🤖 问管家」里说「以后……」也会记到这里。</span>
-      ${(sw['规矩']||[]).map(r=>`<div class="row" style="margin:4px 0;gap:8px"><span style="flex:1">${esc(r['内容'])}</span><span class="small mut">${esc((r['时间']||'').slice(5))}</span><a class="small" data-rdel="${esc(r['编号'])}">删除</a></div>`).join('')||'<div class="small mut" style="margin:6px 0">还没有规矩。</div>'}
-      <div class="row" style="margin-top:6px;gap:8px"><input type="text" id="rlIn" style="flex:1" placeholder="如：Bug 分析结论先写复现步骤／审查不要因为代码风格打回／接口字段一律用小驼峰"><button id="rlAdd">记下</button></div></div>`:''}
+    <div class="bcard" style="margin-top:10px"><div class="row" style="justify-content:space-between;flex-wrap:nowrap;gap:8px;align-items:flex-start"><span><b>管家规矩</b> <span class="small mut">你定的长期要求，附在每个后台 AI 会话（方案、开发、审查、Bug 分析、问管家）的提示词后面。在「🤖 问管家」里说「以后……」也会记到这里。标「团队默认」的来自程序里的 团队默认.json，同事新装就有。</span></span>
+        <button id="rlTeam" style="flex-shrink:0" title="把本机的规矩和上面的管家设置写进 _system/团队默认.json；提交推送后同事 git pull 即生效">⬆ 设为团队默认</button></div>
+      ${(sw['规矩']||[]).map(r=>`<div class="row" style="margin:4px 0;gap:8px;align-items:flex-start;flex-wrap:nowrap"><span class="small mut mono" style="flex-shrink:0" title="规矩编号（管家回答里提到的就是它）">${esc(r['编号']||'')}</span><span style="flex:1;min-width:0;overflow-wrap:anywhere;word-break:break-word">${esc(r['内容'])}${r['来自']==='团队默认'?' <span class="chip small">团队默认</span>':''}</span><span class="small mut" style="flex-shrink:0;white-space:nowrap">${esc((r['时间']||'').slice(5))}</span><a class="small" style="flex-shrink:0;white-space:nowrap" data-rdel="${esc(r['编号'])}">删除</a></div>`).join('')||'<div class="small mut" style="margin:6px 0">还没有规矩。</div>'}
+      <div class="row" style="margin-top:6px;gap:8px"><input type="text" id="rlIn" style="flex:1" placeholder="如：Bug 分析结论先写复现步骤／审查不要因为代码风格打回／接口字段一律用小驼峰"><button id="rlAdd">记下</button></div></div>
+    <div class="bcard" style="margin-top:10px" id="docBox"><b>🩺 体检</b> <span class="small mut">和团队默认对比中…</span></div>`:''}
     ${up?`<h2>⬆ 更新</h2><div class="bcard">
       <div class="small">当前版本 <b class="mono">${esc(up['当前']||'未知')}</b>${up['分支']?' · 分支 '+esc(up['分支']):''}${up['检查时间']?' · 上次检查 '+esc(up['检查时间']):' · 还没检查过'}
         ${up['落后']?` · <b style="color:var(--s2)">有 ${up['落后']} 项更新（到 ${esc(up['远端'])}）</b>`:up['检查时间']&&!up['错误']?' · ✓ 已是最新':''}${up['错误']?` · <span style="color:var(--warn)">${esc(up['错误'])}</span>`:''}</div>
@@ -179,11 +184,23 @@ async function settingsPage(){
     <div class="bgrid">${d.plugins.map(pcard).join('')||'<div class="mut">还没有插件</div>'}</div>`;
   const byId=id=>d.flows.find(f=>f.id===id),eById=id=>d.engines.find(e=>e.id===id),pById=id=>d.plugins.find(p=>p.id===id);
   if($('#rtSave'))$('#rtSave').onclick=async()=>{
-    const lim=$('#rtLim').value.trim();
-    if(!/^\d+$/.test(lim)||+lim>200)return toast('每期上限要是 0 到 200 之间的整数');
-    try{toast((await post('/api/team',{on:$('#rtOn').checked,tier:(app.querySelector('[name=rtTier]:checked')||{}).value,limit:+lim})).msg)}catch(e){return toast(e.message)}
+    try{toast((await post('/api/team',{on:$('#rtOn').checked,tier:(app.querySelector('[name=rtTier]:checked')||{}).value})).msg)}catch(e){return toast(e.message)}
     settingsPage()};
+  const rtSuite=async(b,btn)=>{if(btn){btn.disabled=true;btn.textContent='处理中…'}
+    try{toast((await post('/api/team/suite',b)).msg.split('\n')[0])}catch(e){toast(e.message)}settingsPage()};
+  if($('#rtInstall'))$('#rtInstall').onclick=e=>rtSuite({action:'install',home:($('#rtHome')||{}).value||''},e.target);
+  const rtRm=async(b,btn)=>{btn.disabled=true;btn.textContent='处理中…';let m;
+    try{m=(await post('/api/team/suite',b)).msg}catch(e){toast(e.message);return settingsPage()}
+    await kbAsk(m,{title:'移除结果',ok:'知道了',cancel:'关闭',danger:false});settingsPage()};   // 已删 / 仍残留 / 在跑会话提示，整段给用户看
+  if($('#rtRemove'))$('#rtRemove').onclick=async e=>{const pj=(e.target.dataset.pj||'').split('\n').filter(Boolean);
+    if(await kbConfirm('移除角色套件？会清掉：套件装进 ~/.claude 的文件（按安装清单：agents、skills、role-agents）和套件加的 hook、套件留下的 .bak 备份、自动学习定时任务'
+      +(pj.length?`，以及 ${pj.length} 个项目级安装（${pj.join('、')}）`:'')+'；你自己的 agent / skill 不动。删完逐项自检，全部先备份，可以一键恢复。角色团会关掉。'))rtRm({action:'remove'},e.target)};
+  if($('#rtClean'))$('#rtClean').onclick=e=>rtRm({action:'remove'},e.target);
+  if($('#rtRestore'))$('#rtRestore').onclick=e=>rtSuite({action:'restore',backup:e.target.dataset.b||''},e.target);
   const rl=async b=>{try{toast((await post('/api/chat/rule',b)).msg.split('\n')[0])}catch(e){toast(e.message)}settingsPage()};
+  if($('#rlTeam'))$('#rlTeam').onclick=async()=>{if(!await kbConfirm('把本机的管家规矩和管家设置（自主度、每日上限等）设为团队默认？会写进程序目录的 _system/团队默认.json，提交推送后同事 git pull 就带过去。'))return;
+    try{toast((await post('/api/doctor/team-default',{})).msg)}catch(e){toast(e.message)}settingsPage()};
+  if($('#docBox'))docLoad();
   if($('#rlAdd'))$('#rlAdd').onclick=()=>{const v=$('#rlIn').value.trim();if(v)rl({text:v})};
   app.querySelectorAll('[data-rdel]').forEach(a=>a.onclick=async()=>{if(await kbConfirm('删掉这条规矩？'))rl({delete:a.dataset.rdel})});
   app.querySelectorAll('[data-uit]').forEach(b=>b.onclick=()=>{setPrevTpl=b.dataset.uit;settingsPage()});
@@ -197,6 +214,7 @@ async function settingsPage(){
   app.querySelectorAll('[data-rpend]').forEach(s=>s.onchange=()=>rpSet({path:s.dataset.rpend,end:s.value}));
   app.querySelectorAll('[data-rpflow]').forEach(s=>s.onchange=()=>rpSet({path:s.dataset.rpflow,flow:s.value}));
   app.querySelectorAll('[data-rpcode]').forEach(s=>s.onchange=()=>rpSet({path:s.dataset.rpcode,code:s.value}));
+  app.querySelectorAll('[data-rprun]').forEach(s=>s.onchange=()=>rpSet({path:s.dataset.rprun,run:{[s.dataset.k]:s.value.trim()}}));
   const tmSet=async b=>{try{toast((await post('/api/timing',b)).msg)}catch(e){toast(e.message)}settingsPage()};
   app.querySelectorAll('[data-tmc]').forEach(s=>s.onchange=()=>tmSet({id:s.dataset.tmc,policy:s.value}));
   if($('#tmReset'))$('#tmReset').onclick=async()=>{if(await kbConfirm('时机的代码更新都恢复默认？（按工程单独选的不变，插件勾选不变）'))tmSet({reset:true})};
@@ -208,7 +226,7 @@ async function settingsPage(){
   $('#smTerm').onchange=async e=>{try{toast((await post('/api/term/enable',{on:e.target.checked})).msg)}catch(err){toast(err.message)}settingsPage()};
   $('#smFlow').onchange=async e=>{try{toast((await post('/api/settings/default',{id:e.target.value})).msg)}catch(err){toast(err.message)}settingsPage()};
   if($('#swSave'))$('#swSave').onclick=async()=>{const acts={};app.querySelectorAll('[data-swa]').forEach(x=>acts[x.dataset.swa]=x.checked);
-    try{toast((await post('/api/steward/settings',{on:$('#swOn').checked,level:(app.querySelector('[name=swLv]:checked')||{}).value,limit:$('#swLim').value,new_days:$('#swNd').value,resume:$('#swRes').checked,learn:$('#swLearn').checked,resume_max:$('#swResMax').value,actions:acts})).msg)}catch(e){toast(e.message)}};
+    try{toast((await post('/api/steward/settings',{on:$('#swOn').checked,level:(app.querySelector('[name=swLv]:checked')||{}).value,limit:$('#swLim').value,new_days:$('#swNd').value,resume:$('#swRes').checked,learn:$('#swLearn').checked,auto:$('#swAuto').checked,resume_max:$('#swResMax').value,actions:acts})).msg)}catch(e){toast(e.message)}};
   const plSave=async(p,enabled,events,config)=>{try{toast((await post('/api/plugin',{id:p.id,enabled,events,config})).msg);render()}catch(e){toast(e.message)}};
   app.querySelectorAll('[data-pmount]').forEach(b=>b.onclick=()=>{const p=pById(b.dataset.pmount);
     if(p['启用'])return plSave(p,false,p['时机'],p['配置']);plDlg(d,p,true)});
@@ -250,22 +268,37 @@ async function settingsPage(){
     $('#fiGo').onclick=async()=>{let f;try{f=JSON.parse($('#fiT').value)}catch(_){return toast('不是有效的 JSON')}
       delete f.id;try{const r=await post('/api/settings/flow',{flow:f});dlg.close();toast(r.msg);render()}catch(e){toast(e.message)}}};
 }
-function teamCard(t){   // 「⚙ 设置」角色团卡片（REQ-002）：安装状态、开关、档位、每期上限
+function teamCard(t){   // 「⚙ 设置」角色团卡片：安装 / 移除 / 恢复、开关、档位、全部 agent（只协助、不设卡：没有每期次数上限）
   if(!t)return'';
-  const S=t['状态']||{},ok=S['套件已装'],miss=S['缺']||[],df=S['场景表差异']||[];
-  const inst=!ok?`<span style="color:var(--s4)">⚪ 未安装套件</span> <span class="small mut">安装：<code>${esc(S['安装命令']||'')}</code></span>`
+  const S=t['状态']||{},ok=S['套件已装'],miss=S['缺']||[],df=S['场景表差异']||[],bk=(S['备份']||[]).filter(b=>!b['已恢复']),R=t['角色']||[];
+  const inst=!ok?`<span style="color:var(--s4)">⚪ 未安装角色套件</span>`
     :miss.length?`<span style="color:var(--warn)">⚠ 已安装 ${S['已安装']}/${S['应有']}，缺：${esc(miss.join('、'))}</span> <span class="small mut">（缺的角色不会被派）</span>`
     :`✅ 已安装 ${S['已安装']}/${S['应有']} · 套件 ${esc(S['套件版本']||'')}`;
+  const sc=xs=>xs.map(x=>x.endsWith('（主导）')?`<b>${esc(x.replace('（主导）',''))}</b>`:esc(x)).join('、');
+  const rows=R.map(r=>`<tr><td><b>${esc(r['中文名'])}</b><div class="small mut mono">${esc(r['名称'])}</div></td>
+    <td class="small">${esc(r['负责'])}${r['说明']?`<div class="mut">${esc(r['说明'])}</div>`:''}</td>
+    <td style="text-align:center">${r['已安装']?'✅':'<span class="mut">—</span>'}</td>
+    <td class="small">${r['场景'].length?sc(r['场景']):'<span class="mut">本档不派</span>'}${r['其他档场景'].length?`<div class="mut">${esc(r['其他档'])}档还会派：${sc(r['其他档场景'])}</div>`:''}</td></tr>`).join('');
   return `<h2>🧑‍🤝‍🧑 角色团</h2><div class="bcard" id="rtCard">
-    <div class="small mut" style="margin-bottom:6px">后台会话（问管家、完善需求、出方案、Bug 分析 / 修复、开发确认点、审查、跟进、发布清单）按场景用 Agent 请角色套件里的专家子 agent 出意见：流程命令照旧，专家只出意见，产物照样交回知识库，拍板还是你在网页上点。只对 Claude 引擎生效；每一期可以在开发面板单独关。</div>
-    <div class="small">${inst} · ${S['kb接入']?'✅ kb MCP 已接入':'⚠ kb MCP 未接入（子 agent 查不了知识库）'} · 场景表：${esc(S['场景表']||'')}${df.length?` · <span style="color:var(--warn)" title="${esc(df.join('、'))}">⚠ 套件场景表与内置兜底不同（以套件为准）：${esc(df.slice(0,6).join('、'))}${df.length>6?'…':''}</span>`:''}</div>
-    ${S['默认引擎支持']?'':'<div class="small" style="color:var(--warn);margin-top:4px">当前默认引擎不支持角色团，只在 Claude 引擎的会话生效</div>'}
+    <div class="small mut" style="margin-bottom:6px">角色套件（worker-agent）只协助、不设卡：后台会话（问管家、完善需求、出方案、Bug 分析 / 修复、开发确认点、审查、跟进、发布清单）按场景用 Agent 请专家子 agent 出意见，流程命令照旧，产物照样交回知识库，拍板还是你在网页上点。只对 Claude 引擎生效；每一期可以在开发面板单独关。默认不装、默认关。</div>
+    <div class="small">${inst}${ok?` · ${S['kb接入']?'✅ kb MCP 已接入':'⚠ kb MCP 未接入（子 agent 查不了知识库）'} · 场景表：${esc(S['场景表']||'')}${df.length?` · <span style="color:var(--warn)" title="${esc(df.join('、'))}">⚠ 套件场景表与内置兜底不同（以套件为准）：${esc(df.slice(0,6).join('、'))}${df.length>6?'…':''}</span>`:''}`:''}</div>
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px;align-items:center">
+      <label class="small">套件目录 <input type="text" class="mono" id="rtHome" value="${esc(S['套件目录']||'')}" placeholder="worker-agent 仓库目录" style="width:280px"></label>
+      <button id="rtInstall" title="运行 &lt;套件目录&gt;/scripts/install_helper.py --user，装到 ~/.claude（已装时按 --update 更新）">${ok?'⬆ 更新':'📦 安装'}</button>
+      ${ok?`<button id="rtRemove" data-pj="${esc((S['项目级安装']||[]).join('\n'))}" title="按安装清单删套件的文件和 hook，连同 .bak、自动学习定时任务、项目级安装；删前备份，删完自检">🗑 移除</button>`:''}
+      ${!ok&&(S['残留']||[]).length?`<button id="rtClean" title="${esc(S['残留'].join('\n'))}">🧹 清理残留（${S['残留'].length} 项）</button>`:''}
+      ${bk.length?`<button id="rtRestore" data-b="${esc(bk[0]['名称'])}" title="把移除前的备份放回 ~/.claude">↩ 恢复（${esc(bk[0]['名称'])}，${bk[0]['文件数']} 个文件）</button>`:''}
+      ${S['套件目录可用']||ok?'':'<span class="small" style="color:var(--warn)">这个目录下没有 scripts/install_helper.py</span>'}</div>
+    ${ok&&(S['项目级安装']||[]).length?`<div class="small mut" style="margin-top:4px">项目级安装（移除时一并清掉）：${esc(S['项目级安装'].join('、'))}</div>`:''}
+    ${!ok&&(S['残留']||[]).length?`<div class="small" style="color:var(--warn);margin-top:4px">⚠ 套件已移除，但还有残留：${esc(S['残留'].join('；'))}</div>`:''}
+    ${ok&&!S['默认引擎支持']?'<div class="small" style="color:var(--warn);margin-top:4px">当前默认引擎不支持角色团，只在 Claude 引擎的会话生效</div>':''}
     <div class="row" style="gap:16px;flex-wrap:wrap;margin-top:8px">
       <label title="${ok?'':'先安装角色套件'}"><input type="checkbox" id="rtOn" ${t['开启']?'checked':''} ${ok?'':'disabled'}> 开启</label>
       <span>档位 ${['精简','标准'].map(x=>`<label style="margin-right:8px" title="${x==='精简'?'每个场景只派少数核心角色（设计由产品经理兼、发布由架构师兼），省钱':'按场景表派全部相关专家'}"><input type="radio" name="rtTier" value="${x}" ${t['档位']===x?'checked':''}> ${x}</label>`).join('')}</span>
-      <label>每期最多调用 <input type="number" id="rtLim" min="0" max="200" step="1" value="${t['每期上限']}" style="width:70px"> 次</label>
       <button class="pri" id="rtSave">保存</button></div>
-    <div class="small mut" style="margin-top:4px">用完不卡住：不再派角色、原流程照常推进，并记一条记录；调大上限后已用完的期恢复可派。管家自动发起的会话派单用 sonnet。</div></div>`;
+    <div class="small mut" style="margin-top:4px">不限每期次数；单次会话里每个场景最多派几次（避免反复派同一个专家）。管家自动发起的会话派单用 sonnet。</div>
+    <h3 style="margin-top:10px">套件里的全部 agent（${R.length} 个）</h3>
+    <div class="tw"><table><tr><th style="width:150px">agent</th><th>负责什么</th><th style="width:60px;text-align:center">已安装</th><th style="width:260px" title="按当前档位的场景表；加粗 = 这个场景的主导">会在哪些场景被派（${esc(t['档位'])}档）</th></tr>${rows}</table></div></div>`;
 }
 function engineDlg(d,e){
   const fld=([k,lab,typ,help])=>{const v=e[k]??'';let inp;
@@ -317,4 +350,20 @@ function flowDlg(d,f){
   const go=async()=>{const o={id:f.id||''};$('#dlgB').querySelectorAll('[data-k]').forEach(x=>o[x.dataset.k]=x.value);
     try{const r=await post('/api/settings/flow',{flow:o});dlg.close();toast(r.msg);render()}catch(e){toast(e.message)}};
   $('#flGo').onclick=go;$('#dlgB').onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey))go()};
+}
+
+// 体检（kb doctor 同一份）：规矩、管家设置、kb 工具放行、auto 权限模式、角色套件残留、MCP 接入，和团队默认对比；不一致标红、可一键修复
+async function docLoad(){
+  const box=$('#docBox');if(!box)return;let r;
+  try{r=await api('/api/doctor')}catch(e){box.innerHTML=`<b>🩺 体检</b> <span class="small" style="color:var(--warn)">${esc(e.message)}</span>`;return}
+  const col={ok:'var(--ok, #2a8)',warn:'var(--warn)',bad:'#d33'},mk={ok:'✓',warn:'!',bad:'✗'};
+  box.innerHTML=`<div class="row" style="justify-content:space-between"><span><b>🩺 体检</b> <span class="small mut">本机和团队默认（同事新装就是这样）对比；终端 <code>kb doctor</code> 是同一份。</span></span>
+      ${r.items.some(x=>x['修复'])?'<button class="pri" id="docAll">一键修复全部</button>':''}</div>
+    <div class="tw"><table><tr><th style="width:120px">项目</th><th>本机</th><th>团队默认</th><th>说明</th><th style="width:120px"></th></tr>
+    ${r.items.map(x=>`<tr><td style="color:${col[x['状态']]};white-space:nowrap"><b>${mk[x['状态']]} ${esc(x['项目'])}</b></td><td class="small" style="color:${x['状态']==='bad'?col.bad:''};overflow-wrap:anywhere">${esc(x['本机'])}</td>
+      <td class="small mut">${esc(x['团队默认'])}</td><td class="small" style="overflow-wrap:anywhere">${esc(x['说明'])}</td>
+      <td>${x['修复']?`<button data-dfx="${esc(x.id)}">${esc(x['修复'])}</button>`:''}</td></tr>`).join('')}</table></div>`;
+  const fix=async(id,b)=>{b.disabled=true;b.textContent='修复中…';try{toast((await post('/api/doctor/fix',{id})).msg.split('\n').join('；'))}catch(e){toast(e.message)}settingsPage()};
+  box.querySelectorAll('[data-dfx]').forEach(b=>b.onclick=()=>fix(b.dataset.dfx,b));
+  if($('#docAll'))$('#docAll').onclick=e=>fix('all',e.target);
 }

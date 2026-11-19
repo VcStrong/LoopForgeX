@@ -26,7 +26,7 @@
 @media (prefers-reduced-motion:reduce){.kbt *{animation:none!important;transition:none!important}}
 .kbt .jd{display:grid;gap:7px;min-width:0}.kbt .jd[data-href]{cursor:pointer}.kbt .jd .h{display:flex;justify-content:space-between;gap:4px 8px;align-items:center;flex-wrap:wrap}.kbt .jd .why{font-size:12px;color:var(--mut)}
 .kbt .jd .acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.kbt .jd select,.kbt .jd input{font:inherit;font-size:12px;padding:4px 8px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--fg);min-width:0;max-width:100%}
-.kbt .jd .fields{display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;font-size:12px}
+.kbt .jd .fields{display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;font-size:12px}.kbt .jd [hidden]{display:none!important}
 .kbt .other{display:grid;gap:6px;margin-top:10px}.kbt .other a{display:block;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--fg);text-decoration:none}
 .kbt .strip{display:flex;gap:6px;flex-wrap:wrap}
 /* 指挥台 */
@@ -101,8 +101,9 @@
     const p = j['提议'];
     let main = '';
     if (j['主动作'] === 'confirm' && p) {
-      const rs = p['仓库'] || [];
-      main = `<div class="fields"><span class="mt">工程</span>${rs.length ? `<select data-f="repo">${rs.map(r => `<option value="${esc(r['路径'])}" data-br="${esc(r['分支'] || '')}" ${r['路径'] === p['默认仓库'] ? 'selected' : ''}>${esc(r['名称'])} · ${esc(home(r['路径']))}</option>`).join('')}<option value="__pick">📁 选择本地路径…</option></select>`
+      const rs = p['仓库'] || [], sure = p['有把握'] && p['默认仓库'];
+      const nm = (rs.find(r => r['路径'] === p['默认仓库']) || {})['名称'] || (p['默认仓库'] || '').split('/').pop();
+      main = `${sure ? `<div data-jsum>工程：<b title="${esc(home(p['默认仓库']))}">${esc(nm)}${p['默认分支'] ? '@' + esc(p['默认分支']) : ''}</b> <button class="alt" data-jchg>换一个</button></div>` : ''}<div class="fields"${sure ? ' hidden' : ''}><span class="mt">工程</span>${rs.length ? `<select data-f="repo">${rs.map(r => `<option value="${esc(r['路径'])}" data-br="${esc(r['分支'] || '')}" ${r['路径'] === p['默认仓库'] ? 'selected' : ''}>${esc(r['名称'])} · ${esc(home(r['路径']))}</option>`).join('')}<option value="__pick">📁 选择本地路径…</option></select>`
         : `<input data-f="repo" placeholder="工程目录" value="${esc(p['默认仓库'] || '')}">`}
         ${p['类型'] === 'Bug分析' ? '' : `<span class="mt">分支</span><input data-f="branch" value="${esc(p['默认分支'] || '')}" placeholder="不填 = 工程现在的分支">`}</div>
         <div class="acts"><button class="yes" data-jact="confirm">${p['类型'] === 'Bug分析' ? '▶ 分析' : '▶ 推动'}${(p['条目'] || []).length > 1 ? `（${p['条目'].length} 条）` : ''}</button>${alts(j)}</div>`;
@@ -193,6 +194,8 @@
     root.querySelectorAll('[data-j]').forEach(box => {
       const sel = box.querySelector('select[data-f="repo"]'), br = box.querySelector('[data-f="branch"]');
       if (sel && br) sel.onchange = () => { br.value = sel.selectedOptions[0].dataset.br || '' };
+      const chg = box.querySelector('[data-jchg]');
+      if (chg) chg.onclick = e => { e.preventDefault(); box.querySelector('.fields').hidden = false; box.querySelector('[data-jsum]').hidden = true };
       if (box.dataset.href) box.onclick = e => {      // 点卡片文字 / 空白处：有链接就跳过去（按钮、链接、输入框照旧）
         if (e.defaultPrevented || e.target.closest('a,button,select,input,textarea,label,option')) return;
         if (String(getSelection && getSelection() || '').trim()) return;

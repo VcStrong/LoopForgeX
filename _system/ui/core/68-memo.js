@@ -25,7 +25,7 @@ async function memoPage(name){
     </div></div>
     <div class="card2" style="margin-bottom:12px"><div class="bd"><b>补充</b>
       <ul class="memo" style="margin:6px 0 8px;padding-left:18px">
-        <li><span class="mut small">工程</span> <select id="mmRepo"><option value="">${v['工程']?esc(v['工程']):'— 未选 —'}</option>${PICK_OPT}</select></li>${sup}</ul>
+        <li><span class="mut small">工程</span> <select id="mmRepo"><option value="">${v['工程']?esc(v['工程']):'— 未选 —'}</option>${PICK_OPT}</select>${v['工程']?` <button class="small" data-devrun="${esc(name)}" data-repo="${esc(v['工程'])}" title="用这个工程当前工作区的代码编译、装到手机并拉起（现在支持 Android）">▶ 运行到手机</button>`:''}</li>${sup}</ul>
       <div class="row" style="gap:6px"><input type="text" id="mmSup" placeholder="补充一条：分支、工程路径、账号、注意事项…（回车）" style="flex:1"></div></div></div>
     <div class="card2"><div class="bd"><div class="row" style="justify-content:space-between"><b>条目 <span class="mut small">${its.length} 条${done?`，已解决 ${done}`:''}</span></b></div>
       <div class="row" style="gap:6px;margin:8px 0"><input type="text" id="mmAdd" placeholder="记一条…（回车）" style="flex:1"></div>
@@ -104,9 +104,11 @@ async function pushBox(name){
     +pend.map(q=>`<div class="q" data-q="${esc(q['编号'])}"><div style="font-weight:600">🔔 ${esc(q['问题'])}</div>${q['背景']?`<div class="ctx md">${md(q['背景']).html}</div>`:''}
       ${q['AI建议']?`<div class="small">AI 建议：<b>${esc(q['AI建议'])}</b></div>`:''}<div class="opts">${q['选项'].map((o,i)=>`<button data-opt="${i}">${esc(o)}</button>`).join('')}${q['AI建议']?'<button data-ai="1">采用 AI 建议</button>':''}</div>
       <textarea rows="2" placeholder="你的回答（Cmd+Enter 提交）">${esc(drafts[q['编号']]||'')}</textarea><div class="row" style="margin-top:6px"><button class="pri" data-ans="1">提交回答</button></div></div>`).join('')
+    +autoQsHtml(v['待确认'])
     +(v['动作'].length&&!$('#tkMsg')?`<details style="margin-top:8px" ${run?'open':''}><summary class="small mut">最近动作</summary><div class="act">${v['动作'].slice(-8).reverse().map(actLine).join('')}</div></details>`:'');
   box.dataset.sig=sig;
   apBind(name,'puPush',v,()=>{box.dataset.sig='';pushBox(name)});
+  autoQsBind(box,name,()=>{box.dataset.sig='';pushBox(name)});
   const st=$('#puStop');if(st)st.onclick=async()=>{if(!await kbConfirm('停止正在推动的后台 AI？'))return;try{toast((await post('/api/dev/stop',{period:name})).msg);pushBox(name)}catch(e){toast(e.message)}};
   box.querySelectorAll('.q').forEach(el=>{const id=el.dataset.q,ta=el.querySelector('textarea'),q=pend.find(x=>x['编号']===id);
     ta.oninput=()=>drafts[id]=ta.value;

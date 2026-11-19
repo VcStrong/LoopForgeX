@@ -101,7 +101,7 @@ def _post_api_chat_rule(self, u, n, body):
 
 @post('/api/steward/settings', page_only=True)
 def _post_api_steward_settings(self, u, n, body):
-    return self._guard(lambda: {'msg': kb.steward_set(body.get('on'), body.get('level'), body.get('limit'), body.get('actions'), body.get('new_days'), body.get('resume'), body.get('resume_max'), body.get('learn'))})
+    return self._guard(lambda: {'msg': kb.steward_set(body.get('on'), body.get('level'), body.get('limit'), body.get('actions'), body.get('new_days'), body.get('resume'), body.get('resume_max'), body.get('learn'), body.get('auto'))})
 
 
 @post('/api/steward/dismiss', page_only=True)
@@ -117,3 +117,18 @@ def _post_api_steward_answer(self, u, n, body):
 @post('/api/steward/tick', page_only=True)
 def _post_api_steward_tick(self, u, n, body):
     return self._guard(lambda: {'msg': kb.steward_tick('用户（网页）')})
+
+
+@get('/api/doctor')
+def _get_api_doctor(self, u, q):
+    return self._guard(lambda: {'items': kb.doctor()})
+
+
+@post('/api/doctor/fix', page_only=True)
+def _post_api_doctor_fix(self, u, n, body):
+    return self._guard(lambda: {'msg': '\n'.join(kb.doctor_fix(body.get('id') or 'all'))})
+
+
+@post('/api/doctor/team-default', page_only=True)
+def _post_api_doctor_team_default(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.save_team_defaults(by='用户（网页）')})

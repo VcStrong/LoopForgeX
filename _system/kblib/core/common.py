@@ -124,11 +124,50 @@ def html_text(s):
 SETTINGS_FILE = ROOT / '设置.json'
 
 
+# 团队默认：进 git 的程序文件（_system/团队默认.json），同事 git pull / 新装就带过去。
+# 本机 设置.json 没有的项用它补：管家规矩按编号合并（本机删过的记在「已删团队规矩」，不再补回），管家设置缺的键用团队值。
+# 网页设置「管家规矩」的「⬆ 设为团队默认」把本机规矩和管家设置写回这个文件（kblib.steward.doctor.save_team_defaults）。
+TEAM_FILE = PROG / '团队默认.json'
+TEAM_STEWARD_KEYS = ('开启', '自主度', '每日上限', '新Bug天数', '中断续跑', '续跑上限', '学习', '自动拍板')
+
+
+def team_defaults():
+    try:
+        t = json.loads(read_text(TEAM_FILE)) if TEAM_FILE.exists() else {}
+    except (OSError, ValueError):
+        t = {}
+    return t if isinstance(t, dict) else {}
+
+
+def _merge_team(s, t):
+    rules = [r for r in s.get('管家规矩') or [] if isinstance(r, dict)]
+    gone = set(s.get('已删团队规矩') or [])
+    have = {r.get('编号'): r for r in rules}
+    for r in t.get('管家规矩') or []:
+        if not isinstance(r, dict) or not r.get('编号') or not r.get('内容') or r['编号'] in gone:
+            continue
+        mine = have.get(r['编号'])
+        if mine is None:
+            rules.append(dict(r, 来自='团队默认'))
+        elif mine.get('来自') == '团队默认' and mine.get('内容') != r['内容']:      # 团队默认里改了措辞：跟着改（本机自己记的同编号不动）
+            mine['内容'] = r['内容']
+    if rules or '管家规矩' in s:
+        s['管家规矩'] = rules
+    tm = {k: v for k, v in (t.get('管家') or {}).items() if k in TEAM_STEWARD_KEYS}
+    if tm:
+        mine = s.get('管家') if isinstance(s.get('管家'), dict) else {}
+        s['管家'] = dict(tm, **mine)
+    return s
+
+
 def load_settings():
     try:
         s = json.loads(read_text(SETTINGS_FILE)) if SETTINGS_FILE.exists() else {}
     except ValueError:
         s = {}
+    if not isinstance(s, dict):
+        s = {}
+    _merge_team(s, team_defaults())
     s.setdefault('默认流程', _flows.DEFAULT_FLOW)
     s.setdefault('流程', {})       # id → 自定义流程，或对内置流程的修改
     return s

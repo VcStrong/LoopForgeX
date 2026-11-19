@@ -68,8 +68,23 @@ def _post_api_engine_test(self, u, n, body):
 
 @post('/api/team', page_only=True)
 def _post_api_team(self, u, n, body):
-    """角色团全局设置（REQ-002）：只传要改的字段 on / tier / limit。"""
-    return self._guard(lambda: {'msg': kb.set_team(body.get('on'), body.get('tier'), body.get('limit'))})
+    """角色团全局设置：只传要改的字段 on / tier（旧版的每期上限 limit 已去掉，传了也忽略）。"""
+    return self._guard(lambda: {'msg': kb.set_team(body.get('on'), body.get('tier'))})
+
+
+@post('/api/team/suite', page_only=True)
+def _post_api_team_suite(self, u, n, body):
+    """角色套件安装 / 移除 / 恢复：action=install（home=套件目录，可空）/ remove（projects=false 不动项目级安装）/ restore（backup=备份名，空 = 最近一次）。"""
+    def run():
+        act = body.get('action')
+        if act == 'install':
+            return kb.team_install(body.get('home') or '')
+        if act == 'remove':
+            return kb.team_remove(projects=body.get('projects', True) is not False)
+        if act == 'restore':
+            return kb.team_restore(body.get('backup') or '')
+        raise kb.KBError('action 只能是 install / remove / restore')
+    return self._guard(lambda: {'msg': run()})
 
 
 @post('/api/period/team', page_only=True)
@@ -110,7 +125,8 @@ def _get_api_repos_settings(self, u, q):
 
 @post('/api/repos/settings', page_only=True)
 def _post_api_repos_settings(self, u, n, body):
-    return self._guard(lambda: {'msg': kb.repo_set(body.get('path', ''), body.get('end'), body.get('flow'), code=body.get('code'))})
+    return self._guard(lambda: {'msg': kb.repo_set(body.get('path', ''), body.get('end'), body.get('flow'), code=body.get('code'),
+                                                    run=body.get('run'))})
 
 
 @get('/api/timings')

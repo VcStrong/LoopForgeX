@@ -1,4 +1,5 @@
-"""改完代码自动推送：开关默认开、总开关 / 本期关掉不推、Gerrit 走 refs/for、有冲突 / 工作区脏 / HEAD 游离不推。
+"""改完代码自动推送：开关默认开、总开关 / 本期关掉不推、Gerrit 走 refs/for、有冲突 / HEAD 游离不推；
+工作区脏（另一会话没提交的改动）不挡推送，只有要 rebase 时才拒；失败后巡检 / 同仓库会话结束补推。
 
     cd _system && .venv/bin/python -m unittest tests.test_autopush -v     （没有 .venv 用 python3）
 
@@ -164,20 +165,73 @@ class AutoPush(unittest.TestCase):
         self.assertEqual(r['结果'], '已推送')
         self.assertEqual(git(remote, 'rev-parse', 'main'), git(repo, 'rev-parse', 'HEAD'))
 
-    def test_dirty_and_detached_not_pushed(self):
+    def test_dirty_pushed_detached_not(self):
         repo, remote = make_repo('s7')
-        d = period('脏工作区不推')
+        d = period('脏工作区照推')
         before = git(remote, 'rev-parse', 'main')
-        commit(repo)
-        (repo / 'a.txt').write_text('dirty\n')
+        sha = commit(repo)
+        (repo / 'a.txt').write_text('dirty\n')        # 另一会话还没提交的改动
         r = ap.autopush(d, str(repo), 'main', '测试', before)
-        self.assertEqual(r['结果'], '失败')
-        self.assertIn('没提交的改动', r['原因'])
+        self.assertEqual(r['结果'], '已推送')
+        self.assertEqual(git(remote, 'rev-parse', 'main'), sha)          # 只推已提交的
+        self.assertEqual((repo / 'a.txt').read_text(), 'dirty\n')       # 工作区原样
         git(repo, 'checkout', '-q', '--', 'a.txt')
         git(repo, 'checkout', '-q', '--detach')
         r = ap.autopush(d, str(repo), '', '测试', before)
         self.assertIn('游离', r['原因'])
+
+    def _behind_dirty(self, name):
+        """远端有别人的新提交 + 本地有自己的提交 + 工作区脏。→ (仓库, 远端, 别人的克隆)。"""
+        repo, remote = make_repo(name)
+        other = TMP / f'{name}-other'
+        subprocess.run(['git', 'clone', '-q', str(remote), str(other)], check=True)
+        git(other, 'config', 'user.email', 'o@o')
+        git(other, 'config', 'user.name', 'o')
+        commit(other, 'b.txt')
+        git(other, 'push', '-q', 'origin', 'main')
+        commit(repo, 'c.txt')
+        (repo / 'a.txt').write_text('dirty\n')
+        return repo, remote, other
+
+    def test_dirty_and_behind_fails_with_files(self):
+        repo, remote, _ = self._behind_dirty('s9')
+        d = period('脏且落后不推')
+        before = git(remote, 'rev-parse', 'main')
+        r = ap.autopush(d, str(repo), 'main', '测试')
+        self.assertEqual(r['结果'], '失败')
+        self.assertIn('未提交的改动', r['原因'])
+        self.assertIn('a.txt', r['原因'])                                   # 写清是哪些文件
         self.assertEqual(git(remote, 'rev-parse', 'main'), before)
+
+    def test_retry_after_failure(self):
+        repo, remote, _ = self._behind_dirty('s10')
+        d = period('失败后补推')
+        r = ap.autopush(d, str(repo), 'main', '会话结束')
+        self.assertEqual(r['结果'], '失败')
+        self.assertTrue([c for c in ap.fail_cards() if c['id'].startswith(f'push-fail:{d.name}:')])
+        self.assertEqual(ap.retry_failed(root=str(repo)), [])                # 刚失败：退避中不重推
+        res = dict(ap.retry_failed(root=str(repo), force=True))             # 还脏：再失败，只更新原记录
+        self.assertIn('补推失败', res[d.name])
+        xs = kb.load_meta(d)['推送记录']
+        self.assertEqual((len(xs), xs[-1]['重试']), (1, 1))
+        git(repo, 'checkout', '-q', '--', 'a.txt')                          # 另一会话收尾了
+        res = dict(ap.retry_failed(force=True))
+        self.assertIn('补推成功', res[d.name])
+        self.assertEqual(git(remote, 'rev-parse', 'main'), git(repo, 'rev-parse', 'HEAD'))
+        self.assertEqual(kb.load_meta(d)['推送记录'][-1]['结果'], '已推送')
+        self.assertFalse([c for c in ap.fail_cards() if c['id'].startswith(f'push-fail:{d.name}:')])
+        self.assertEqual(dict(ap.retry_failed(force=True)).get(d.name), None)   # 成功后不再重推
+
+    def test_session_end_retries_same_repo(self):
+        repo, remote, _ = self._behind_dirty('s11')
+        a = period('同仓库A')
+        self.assertEqual(ap.autopush(a, str(repo), 'main', '会话结束')['结果'], '失败')
+        git(repo, 'checkout', '-q', '--', 'a.txt')
+        b = period('同仓库B')
+        start = git(repo, 'rev-parse', 'HEAD')
+        devsession._session_push(b, {'仓库': str(repo), '分支': 'main', '起点': start}, 0, '开发会话结束')   # B 没新提交，但会顺带补推 A
+        self.assertEqual(kb.load_meta(a)['推送记录'][-1]['结果'], '已推送')
+        self.assertEqual(git(remote, 'rev-parse', 'main'), git(repo, 'rev-parse', 'HEAD'))
 
     def test_no_remote_and_svn_skip(self):
         repo = TMP / 's8'

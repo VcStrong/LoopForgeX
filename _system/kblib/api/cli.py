@@ -155,6 +155,8 @@ def main(argv=None):
     x = sp.add_parser('web', help='启动网页（默认 http://127.0.0.1:11555 只给本机；部署在远端：kb web --host 0.0.0.0，要先 kb passwd）')
     x.add_argument('--port', type=int, default=int(os.environ.get('KB_PORT') or 11555))
     x.add_argument('--host', default='', help='监听地址，默认 127.0.0.1（或环境变量 KB_HOST）')
+    x = sp.add_parser('doctor', help='体检：规矩、管家设置、kb 工具放行、auto 权限模式、角色套件残留、MCP 接入，和团队默认对比；--fix [项,…] 一键修复')
+    x.add_argument('--fix', nargs='?', const='all', default='', help='all（默认）或 rules,steward,allow,auto,mcp')
     sp.add_parser('passwd', help='设置 / 取消网页访问密码（部署在远端、或网页经反向代理开放时必须设）')
     x = sp.add_parser('token', help='远处的 Claude Code 连知识库用的访问令牌：kb token add <名称> | list | del <名称>')
     x.add_argument('op', choices=['add', 'list', 'del'])
@@ -165,6 +167,17 @@ def main(argv=None):
     if a.cmd == 'web':
         import web
         return web.main(a.port, a.host)
+    if a.cmd == 'doctor':
+        from kblib.steward.doctor import doctor, doctor_fix, doctor_text
+        try:
+            if a.fix:
+                print('\n'.join(doctor_fix(a.fix)) + '\n')
+            items = doctor()
+        except KBError as x:
+            print(x, file=sys.stderr)
+            return 1
+        print(doctor_text(items))
+        return 0
     if a.cmd == 'passwd':
         import getpass
         from kblib.infra.deploy import set_password

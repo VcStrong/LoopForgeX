@@ -26,12 +26,18 @@ _devices = lazy('kblib.ai.devices')      # 上层模块：用到时才 import（
 
 
 # 网页「开始开发」= 用户本人批准 + 在目标仓库后台启动 Claude Code（claude -p，auto 权限）跑 /sdd* 流程。
-# 需要人确认的地方走 kb_ask → 网页回答 → kb_wait_answer；开启免打扰后由 AI 按自己的建议决策。
+# 需要人确认的地方走 kb_ask：明确的事 AI 自动定（不管开没开免打扰），拿不准的才 → 网页回答 → kb_wait_answer；
+# 开启免打扰后连拿不准的也由 AI 按自己的建议决策。
 DEV_DIR = '开发会话'
 _PROCS = {}  # 期名 → Popen（只在启动它的网页进程里有）
 _TRACK = {}              # 期名 → {pid: 启动时间}：后台会话派生过的所有进程（含已脱离进程组的后台命令）
 MAX_RESUME = 30          # 会话没做完就退出时，最多自动续跑几次
-_NO_BG = """
+ASK_RULE = """
+【要不要问用户：你自己判断，不管开没开免打扰】事情明确（需求清楚、有建议、不扩大范围、能回退）就按你的建议直接做，做完在回复 / 结论里写做了什么、按什么假设；
+流程要求停下确认（拍板方案、确认改法等）而你有把握的，也调 kb_ask，带 sure=true、recommend 和一句 reason：知识库会记成「AI 已自动定」直接返回，用户可在网页一键改回。
+只有真拿不准（sure=false）、要扩大范围（expands=true）、会影响线上或不可回退（irreversible=true）时才会挂到网页等回答，只问一次并给 recommend。
+验收推送、svn 提交等对外不可撤回的操作仍由用户点，不要自己做。"""
+_NO_BG = ASK_RULE + """
 【重要】你运行在无人值守的单次运行模式（如 claude -p / codex exec）：你一结束回复，进程就退出，后台运行的子 agent 和后台命令会被一起终止。
 所以不要用 run_in_background 启动子 agent 或命令后就结束回复；开发流程要求后台运行的，也改为前台运行并等它完成，
 或启动后持续等待（查看输出、sleep 轮询）直到完成再继续。只有全部完成、或在 kb_wait_answer 里等待用户时才可以停。"""
@@ -63,7 +69,46 @@ def set_dnd(period, on, by='用户'):
     return f'{d.name} 免打扰已{"开启：后续需要确认的地方由 AI 自行决策" if on else "关闭：需要确认时会在网页等你回答"}'
 
 
-def ask(period, question, context='', options=None, recommend='', files=None, stage=''):
+def auto_decide_on():
+    """「⚙ 设置 → 管家 → 明确的事自动定」：默认开。开着时明确的事（有建议、不扩大范围、可回退）AI 自己定，不等拍板。"""
+    from kblib.core.common import load_settings
+    return (load_settings().get('管家') or {}).get('自动拍板', True) is not False
+
+
+# 不能自动定的：对外不可撤回 / 影响线上（验收推送、svn 提交等仍由用户点）。只认「要做」的动作：
+# 「提交不推送」「不影响线上」这类否定说法先去掉；权限 / 账号这类话题词不算（是不是不可回退由 AI 用 irreversible 如实报）
+_RED_KW = r'推送|push|svn|上线|放量|发布|线上|生产环境|删库|删除数据|不可回退|不可逆'
+_RED = re.compile(_RED_KW, re.I)
+_NEG = re.compile(r'(?:不|别|勿|无需|不用|不要|暂不|先不|不会|不再|没有|未)\s*(?:要|会|需要|用|去)?\s*(?:影响|做|执行|动|碰|改)?\s*(?:到)?\s*(?:' + _RED_KW + ')', re.I)
+
+
+def _red_hit(text):
+    text = re.sub(r'(\w)不\1', r'\1', text or '')         # 「要不要 / 是不是 / 会不会」是在问，不是否定
+    return bool(_RED.search(_NEG.sub(' ', text)))
+
+
+def need_user(question, recommend='', sure=None, expands=False, irreversible=False, stage=''):
+    """kb_ask 自判断：返回「要问用户的理由」，空 = 明确的事，AI 按建议直接定。
+    sure：调用方自评（True 有把握 / False 拿不准 / None 没说 → 按拿不准算，旧会话行为不变）。"""
+    yes = lambda v: v is True or str(v).strip().lower() in ('true', '1', 'yes', '是')
+    sure, expands, irreversible = (True if yes(sure) else None), yes(expands), yes(irreversible)
+    if not (recommend or '').strip():
+        return '没给建议'
+    if sure is not True:
+        return '拿不准'
+    if expands:
+        return '要扩大范围'
+    if irreversible:
+        return '影响线上或不可回退'
+    if (stage or '').strip() in ('上线放量', '立项'):
+        return f'{stage} 是红线节点'
+    if _red_hit(f'{question} {recommend}'):
+        return '涉及对外 / 线上 / 不可撤回的操作'
+    return ''
+
+
+def ask(period, question, context='', options=None, recommend='', files=None, stage='', sure=None, expands=False,
+        irreversible=False, reason=''):
     d = period_dir(period)
     m = load_meta(d)
     if not (question or '').strip():
@@ -83,11 +128,23 @@ def ask(period, question, context='', options=None, recommend='', files=None, st
     except Exception:                     # noqa: BLE001
         pass
     dnd = bool(m.get('免打扰'))
+    why = need_user(q['问题'], q['AI建议'], sure, expands, irreversible, q['阶段'])
+    auto = not dnd and not why and auto_decide_on()      # 明确的事：不管开没开免打扰都自己定
     tip = i18n_issue_tip(d.name, f'{question} {context} {recommend}')      # 问的是「要人在 AS 拉多语言」：插件能用就提示直接调
     if dnd:
         q.update(状态='AI决策', 回答=q['AI建议'] or '（AI 自行决策）', 回答人='AI（免打扰）', 回答时间=now())
+    elif auto:
+        q.update(状态='AI决策', 回答=q['AI建议'], 回答人='AI（自动判断）', 回答时间=now(), 自动=True,
+                 自动理由=(reason or '').strip() or '问题明确、有把握、不扩大范围、可回退')
+    elif why and why != '拿不准' and why != '没给建议':
+        q['要问理由'] = why
     qs.append(q)
     save_meta(d, m)
+    if auto:
+        log(d, 'AI决策（自动判断）', f'{qid} {q["问题"][:80]} → {q["回答"][:60]}（{q["自动理由"][:60]}）')
+        return (f'{qid}：这是明确的事（有建议、有把握、不扩大范围、可回退），不用等用户。按你的建议执行：{q["AI建议"]}；'
+                '用 kb_log 记下「AI决策（自动判断）」采用了什么、按什么假设，做完在结论里汇报。'
+                '网页上会显示「AI 已自动定」，用户可以一键改回，改回时会把新意见发给你重做。' + tip)
     log(d, '待确认' if not dnd else '免打扰决策', f'{qid} {q["问题"][:80]}' + (f' → {q["回答"][:60]}' if dnd else ''))
     if dnd:
         return (f'{qid}：免打扰已开启，不用等待。按你的建议执行：{q["AI建议"] or "（未给建议，自行选最稳妥的方案）"}；'
@@ -132,11 +189,22 @@ def answer(period, qid, text, by='用户'):
         raise KBError(f'没有这个待确认问题：{qid}')
     if not (text or '').strip():
         raise KBError('回答不能为空')
-    q.update(状态='已回答', 回答=text.strip(), 回答人=by, 回答时间=now())
+    redo = q.get('状态') == 'AI决策'           # 改回 AI 已自动定（或免打扰定）的：记下原决定，把新意见发给会话重做
+    if redo:
+        q['AI原决定'] = q.get('回答', '')
+    q.update(状态='已回答', 回答=text.strip(), 回答人=by + ('（改回）' if redo else ''), 回答时间=now())
     save_meta(d, m)
     _beh.ask_event(d.name, q)
-    log(d, '确认', f'{qid} {q["问题"][:40]} → {text.strip()[:80]}')
-    return f'已回答 {qid}'
+    log(d, '改回' if redo else '确认', f'{qid} {q["问题"][:40]} → {text.strip()[:80]}' + (f'（AI 原来定的：{q["AI原决定"][:60]}）' if redo else ''))
+    if not redo:
+        return f'已回答 {qid}'
+    msg = (f'【改回重做】{qid}「{q["问题"][:80]}」AI 原来自动定的是：{q["AI原决定"][:200]}。用户改成：{text.strip()}。'
+           '按用户的意见把已按原决定做的部分改过来（已提交的用新提交改，不要改写历史），做完用 kb_log 记下改了什么。')
+    try:
+        r = _talk.period_say(d.name, msg, target='all' if len(_talk.period_sessions(d.name)) > 1 else '', by=by)
+    except KBError as e:
+        r = f'没能发给 AI：{e}'
+    return f'已改回 {qid}；{r}'
 
 
 def _alive(pid):
@@ -378,6 +446,12 @@ def _session_push(d, s, code, when):
         _ap.autopush(d, root, s.get('分支', ''), '事项推动' if m.get('类型') == '事项' else when, s.get('起点', ''))
     except Exception as e:          # noqa: BLE001  推送出问题不影响会话收尾
         log(d, '自动推送', f'出错：{e}')
+    finally:
+        try:                        # 同仓库别的期挂着推送失败（常是被这个会话没提交的改动挡住）：顺带补推
+            if s.get('仓库'):
+                _ap.retry_failed(root=s['仓库'], force=True, skip=d.name)
+        except Exception as e:      # noqa: BLE001
+            log(d, '自动推送', f'补推出错：{e}')
 
 
 def _deliver_now(d, xs, proc=None):
@@ -580,8 +654,8 @@ kb_set_status 改为「开发中」（已是开发中则跳过）。工具结果
 {steps}
 
 【需要人确认时】{flow_text(f, '确认点', **v) or '方案取舍、与需求不一致、缺少账号或环境、操作被权限拦截等'}：
-调用 kb_ask（问题、背景、选项、你的建议 recommend、相关文件绝对路径），再反复调用 kb_wait_answer 直到拿到回答；
-需要时把回答写回对应的流程文档，然后继续。kb_ask 若提示免打扰，直接按你的建议执行。
+调用 kb_ask（问题、背景、选项、你的建议 recommend、相关文件绝对路径；有把握带 sure=true 和 reason）。返回「AI 已自动定」或提示免打扰时按你的建议执行；
+挂到网页的再反复调用 kb_wait_answer 直到拿到回答。需要时把回答 / 决定写回对应的流程文档，然后继续。
 【基础信息】测试账号、Wi-Fi / 代理 / VPN、环境配置等先查基础知识库（kb_base）；密码等机密在真正要用时才 kb_base_secret 读取，
 不要写进代码、文档、提交、日志或回复。缺少需要的账号或配置时用 kb_ask 向用户要。
 【手机】要在手机上装包、测试前先 kb_devices 看、kb_device_claim 申请（要几台申请几台，只填 count，不要照历史记录点名序列号），只在申请到的手机上操作

@@ -91,7 +91,7 @@ def _judgments(view):
         if c.get('提议'):
             p = c['提议']
             j.update(主动作='confirm', 建议=f'在 {Path(p["默认仓库"]).name if p.get("默认仓库") else "（选一个工程）"}' + (f' 的 {p["默认分支"]}' if p.get('默认分支') else '') + ' 上处理',
-                     提议=p, 把握=80 if p.get('默认仓库') else 40)
+                     提议=p, 把握=95 if p.get('有把握') else 80 if p.get('默认仓库') else 40)
         elif c.get('选项'):
             j.update(主动作='choose', 选项=c['选项'], 建议=c['选项'][0]['标签'] if c['选项'] else '', 把握=50)
         elif c.get('动作') in ('run', 'ignore', 'upgrade'):
@@ -104,8 +104,8 @@ def _judgments(view):
         p = x.get('提议')
         if p and not p.get('已确认') and not (p.get('事项') and p['事项'] in have):
             tgt = p.get('事项') or '、'.join(p.get('Bug', []))
-            out.insert(0, {'id': 'chat:' + x['编号'], '类型': '问你', '问题': f'「{tgt}」确认工程就开始' + ('处理' if p.get('类型') != 'Bug分析' else '只读分析'),
-                           '说明': x['问'][:60], '理由': p.get('说明', ''), '链接': '#/p/' + p['事项'] if p.get('事项') else '#/bugs', '把握': 80 if p.get('默认仓库') else 40,
+            out.insert(0, {'id': 'chat:' + x['编号'], '类型': '问你', '问题': f'「{tgt}」' + ('' if p.get('有把握') else '确认工程') + '就开始' + ('处理' if p.get('类型') != 'Bug分析' else '只读分析'),
+                           '说明': x['问'][:60], '理由': p.get('说明', ''), '链接': '#/p/' + p['事项'] if p.get('事项') else '#/bugs', '把握': 95 if p.get('有把握') else 80 if p.get('默认仓库') else 40,
                            '建议': f'在 {Path(p["默认仓库"]).name}' + (f' 的 {p["默认分支"]}' if p.get('默认分支') else '') + ' 上处理' if p.get('默认仓库') else '选一个工程',
                            '主动作': 'confirm', '提议': p, '备选': []})
     return out

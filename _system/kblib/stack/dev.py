@@ -108,7 +108,8 @@ def stack_dev_start(name, only='', by='用户（网页）'):
     m['全栈'] = st
     save_meta(d, m)
     if m.get('状态') not in ('开发中',):
-        set_status(d.name, '开发中', f'各端开工：{"、".join(out)}（本人批准）', by_human=True)
+        set_status(d.name, '开发中', f'各端开工：{"、".join(out)}' + ('（方案明确，AI 自动拍板后接着开工：出方案是你点的、设置「明确的事自动定」开着；可在网页撤回）'
+                                                              if str(by).startswith('AI') else '（本人批准）'), by_human=True)
     log(d, '各端开发', f'开工：{"、".join(out)}' + (f'；跳过 {"、".join(skip)}' if skip else '') + f'（{by}）')
     stack_tick(d.name)
     return f'已开工：{"、".join(out)}（同时最多 {MAX_PAR} 个端在跑，其余排队）' + (f'；跳过 {"、".join(skip)}' if skip else '')
@@ -193,7 +194,7 @@ def _dev_prompt(d, m, end, x, plan, issues=None, todo=''):
                 + '\n'.join(f'- [{i.get("严重度", "")}] {i.get("需求", "")} {i.get("问题", "")}（{i.get("位置", "")}）' for i in issues)
                 + ('\n有不同意见的，在汇报的 summary 里说明理由，不要硬改。' ) + _NO_BG)
     return f"""你是由知识库网页启动的【后台无人值守】{end} 开发会话：期「{d.name}」。终端里没有人，不要在回复里提问，也不要用 AskUserQuestion；
-要问用户用 kb_ask（iteration=「{d.name}」），再 kb_wait_answer 等回答（提示免打扰就按你的建议做）。
+要问用户用 kb_ask（iteration=「{d.name}」），再 kb_wait_answer 等回答（返回「AI 已自动定」或免打扰就按你的建议做）；明确的事自己定，不用问。
 
 用户一个人做全栈，各端由不同的 AI 会话并行开发，你只负责 {end}。方案已经由用户拍板：
 - 需求规格：{_sdir(d) / 'spec.md'}（需求编号 REQ-xxx，验收标准逐条要满足）
@@ -681,7 +682,7 @@ def _git_push_end(d, e, x, m=None):
     """git 的端：把开发分支推到远端（只推这一个分支；Gerrit 推去送审）。→ 一句结果；推不上抛错。"""
     root = x['仓库']
     try:
-        r = _ap.push_git(root, x.get('分支') or '', _since(x), allow_dirty=True)
+        r = _ap.push_git(root, x.get('分支') or '', _since(x), me=d.name)
     except _ap.PushError as ex:
         if m is not None:
             _ap._record(d, m, {'时间': now(), '时机': '验收', '仓库': str(root), '分支': x.get('分支') or '', '结果': '失败', '原因': str(ex)[:500]})

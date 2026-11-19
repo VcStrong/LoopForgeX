@@ -10,7 +10,8 @@ const phoneRows=(items,period)=>items.length?items.map(x=>{const c=x['占用'],c
   const st=x['空闲']?'空闲':!c?esc(x['状态']):(c['方式']==='本人'?'本人在用':x['本期']?'本期占用':`「${esc(c['期'])}」占用${c['分支']?' · 分支 <span class="mono">'+esc(c['分支'])+'</span>':''}`)+` · 最后使用 ${esc(c['最后使用'])}${x['状态']!=='在线'?' · '+esc(x['状态']):''}`;
   return `<div class="phone ${cls}"><span class="pi"></span><div style="min-width:0"><div><b>${esc(x['型号']||'未知型号')}</b> <span class="mono mut">${esc(x['序列号'])}</span></div>
     <div class="small mut">${st}${x['agent-device']?` · agent-device 会话 ${esc(x['agent-device']['会话'])}${x['agent-device']['期']?'（'+esc(x['agent-device']['期'])+'）':''}`:''}</div></div>
-    ${c?`<button class="small" data-dm="release" data-sn="${esc(x['序列号'])}" title="解除占用（后台会话还在用的话，它下次操作会重新占用）">释放</button>`:x['空闲']?`<button class="small" data-dm="mine" data-sn="${esc(x['序列号'])}" title="你自己要用这台手机：4 小时内后台会话不会往它装包、操作">我在用</button>`:'<span></span>'}</div>`}).join(''):'<div class="small mut">没有连着的手机</div>';
+    <span class="row" style="gap:6px">${period&&x['状态']==='在线'&&(x['空闲']||x['本期'])?`<button class="small" data-devrun="${esc(period)}" data-serial="${esc(x['序列号'])}" title="用这一期工程当前工作区的代码编译、装到这台手机并拉起（现在支持 Android）">▶ 运行到手机</button>`:''}
+    ${c?`<button class="small" data-dm="release" data-sn="${esc(x['序列号'])}" title="解除占用（后台会话还在用的话，它下次操作会重新占用）">释放</button>`:x['空闲']?`<button class="small" data-dm="mine" data-sn="${esc(x['序列号'])}" title="你自己要用这台手机：4 小时内后台会话不会往它装包、操作">我在用</button>`:''}</span></div>`}).join(''):'<div class="small mut">没有连着的手机</div>';
 function bindPhones(root,after){root.querySelectorAll('[data-dm]').forEach(b=>b.onclick=async()=>{
   if(b.dataset.dm==='release'&&!await kbConfirm(`解除 ${b.dataset.sn} 的占用？`))return;
   try{const r=await post('/api/device',{serial:b.dataset.sn,action:b.dataset.dm});toast(r.msg);after()}catch(e){toast(e.message)}})}

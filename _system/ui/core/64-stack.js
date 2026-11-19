@@ -28,6 +28,10 @@ async function stackBox(name){
     <span id="stAddRw" hidden><select id="stAddR" style="max-width:340px"></select> <button id="stAddGo">添加</button> <a class="small mut" id="stAddX">取消</a></span></div></td></tr>`;
   const W={小:'st-已完成',中:'st-收集中',大:'st-已暂停2'};
   const plan=P?`<div style="margin-top:14px"><div><b>方案</b> <span class="mut small">${esc(P['时间']||'')}</span>　${badge(st==='已拍板'?'已拍板':st==='待拍板'?'待拍板':st||'')}${v['全栈']['契约版本']?` <span class="badge st-开发中">契约 ${esc(v['全栈']['契约版本'])}</span>`:''}</div>
+    ${(A=>A&&['已拍板','开发中','各端完成'].includes(st)?`<div class="bcard" style="margin:6px 0;border-color:var(--acc)"><div class="small">🤖 <b>AI 已自动定：拍板方案 ${esc(A['方案版本']||'')}${A['开工']?'，并接着各端开工':''}</b> <span class="mut">（${esc(A['理由']||'')}；${esc(A['时间']||'')}）</span></div>
+      ${(A['假设']||[]).length?`<details class="small"><summary class="mut">按这些假设定的（${A['假设'].length}）</summary><ul style="margin:2px 0;padding-left:18px">${A['假设'].map(x=>`<li>${esc(x)}</li>`).join('')}</ul></details>`:''}
+      <div class="row" style="margin-top:4px;gap:8px"><button id="stAutoRev">↩ 撤回，我来拍板</button><span class="small mut">方案回到「待拍板」${A['开工']?'，停掉自动开工的端（已写的代码留在仓库里、没推送）':''}；之后可写意见重出方案</span></div></div>`:'')(v['全栈']['自动拍板'])}
+    ${st==='待拍板'&&v['全栈']['等拍板理由']?`<div class="small mut" style="margin:4px 0">等你拍板的原因：${esc(v['全栈']['等拍板理由'])}</div>`:''}
     <p>${esc(P['摘要']||'')}</p>
     ${(P['需求']||[]).length?`<details ${st==='待拍板'?'open':''} style="margin-bottom:10px"><summary class="small"><b>需求 ${P['需求'].length} 条</b> <span class="mut">验收标准 ${P['需求'].reduce((a,r)=>a+(r['验收']||[]).length,0)} 条${v['规格路径']?' · '+esc(v['规格路径']):''}</span></summary>
       <div class="tw"><table><tr><th style="width:80px">编号</th><th>需求与验收</th><th style="width:120px">端</th><th style="width:160px">设计</th></tr>
@@ -76,6 +80,7 @@ async function stackBox(name){
         ${(rv['问题']||[]).length?`<details><summary class="mut">问题 ${rv['问题'].length} 个</summary><ul style="margin:2px 0;padding-left:16px">${rv['问题'].map(i=>`<li>[${esc(i['严重度']||'')}] ${esc(i['需求']||'')} ${esc(i['问题']||'')} <span class="mut mono">${esc(i['位置']||'')}</span></li>`).join('')}</ul></details>`:''}`:'<span class="mut">—</span>'}</td>
       <td>${x['在跑']||x['状态']==='排队中'?`<button class="small" data-stop="${esc(x['端'])}">停止</button>`:`<button class="small" data-redev="${esc(x['端'])}">重新开工</button>`}</td></tr>
       ${(()=>{const meta=[x['参与']?`<span title="这一端的开发 / 审查会话派过的角色团专家">${esc(x['参与'])}</span>`:'',
+          x['仓库']&&/android|安卓/i.test(x['端'])?`<a data-devrun="${esc(name)}" data-repo="${esc(x['仓库'])}" title="用这一端当前工作区的代码编译、装到手机并拉起">▶ 运行到手机</a>`:'',
           x['代码基线']?`<span class="mono" title="${esc('开工前更新代码后的代码基线（分支 @提交 · 时间 · 哪个时机 · 落后远端）')}">📍 代码：${esc(x['代码基线'])}</span>`:'',
           x['版本库']==='本地'?'本地目录：改动留在目录里':x['版本库']==='svn'?(x['已提交']?(x['已提交']==='无改动'?'svn 无改动':'svn 已提交 r'+esc(x['已提交'])):'svn：验收时提交')
             :`${x['已推送']?(x['已推送'].includes('@')?'已推送 '+esc(x['已推送'].split('@')[0]):esc(x['已推送'])):((v['自动推送']||{})['生效']?'审查通过时推送':'验收时推送')}${(v['各端推送状态']||{})[x['端']]?' · '+esc(v['各端推送状态'][x['端']]):''}`].filter(Boolean);
@@ -199,5 +204,7 @@ async function stackBox(name){
   if($('#stOk'))$('#stOk').onclick=async()=>{if(!await kbConfirm('拍板这份方案？接口契约会锁成一个版本，之后各端按它开发。'+(qLeft?`\n\n还有 ${qLeft} 个问题没确认，将按 AI 建议处理。`:'')+(qMine?`\n\n你写了意见的 ${qMine} 个问题按你的意见执行，但方案正文不会按它改；想让 AI 先改方案就点「按我的回答重出方案」。`:'')))return;
     try{toast((await post('/api/stack/approve',{period:name})).msg)}catch(e){toast(e.message)}stackBox(name)}};
   bindAct();
+  if($('#stAutoRev'))$('#stAutoRev').onclick=async()=>{if(!await kbConfirm('撤回 AI 的自动拍板？方案回到「待拍板」'+(((v['全栈']||{})['自动拍板']||{})['开工']?'，自动开工的端会停下（已写的代码留在仓库里，不会推送）':'')+'。'))return;
+    try{toast((await post('/api/stack/auto-revert',{period:name})).msg)}catch(e){toast(e.message)}stackBox(name)};
   if(run||QS['在跑']||RS['在跑']||Object.values(BLD).some(b=>b['在跑'])||D.some(x=>x['在跑']||['排队中','待审查','打回修改'].includes(x['状态'])))setTimeout(()=>{if(curPeriod()===name)stackBox(name)},6000);
 }

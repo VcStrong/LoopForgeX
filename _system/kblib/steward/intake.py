@@ -4,6 +4,7 @@
   → 只问一个问题：在哪个工程、哪个分支（默认值已经选好）→ 你点「▶ 推动」= 你本人批准 → AI 分析、修改、自测、写结论。
 提议（推动卡片）格式：{类型: 推动, 事项, 条目: [anr:编号…], 仓库: [{路径, 名称, 分支, 端}], 默认仓库, 默认分支, 说明}
 """
+import re
 from pathlib import Path
 
 from kblib.core.common import KBError, PERIODS
@@ -74,38 +75,80 @@ def _branch(path):
         return ''
 
 
-def push_repo_choices(task, kind='Android'):
-    """候选工程和默认值：事项自己的 > 最近处理同类问题的事项用过的 > 认出是这一端的本机仓库。"""
+KB_HOME = Path(__file__).resolve().parents[3]          # 知识库自己的仓库
+_KB_WORDS = re.compile(r'knowledge-base|知识库|(?<![A-Za-z])kb(?![A-Za-z])|管家|角色团|角色套件|自动推送', re.I)
+
+
+def _is_kb_task(task, m):
+    """事项名 / 说明里提到知识库自己（knowledge-base、kb、管家、角色团、自动推送…）。"""
+    return bool(_KB_WORDS.search(f'{task}\n{m.get("说明") or ""}'))
+
+
+def _repo_pick(task, kind='Android'):
+    """候选工程和默认值，返回 (候选, 默认工程, 默认分支, 有把握)。
+    事项自己登记的 > （非 ANR）说明提到知识库 → 知识库仓库@main > （ANR/崩溃）最近 ANR 事项用过的、这一端的仓库 > 其他登记的仓库。
+    没有事项名（Bug 分析、ANR 预览）按 ANR/崩溃 处理；优化、调研等别的类型不套用 ANR 的历史。"""
     m = load_meta(PERIODS / task) if task and (PERIODS / task).is_dir() else {}
+    anr = not task or m.get('事项类型') == 'ANR/崩溃'
     used = []
-    for n in sorted(period_names(), key=lambda n: load_meta(PERIODS / n).get('更新时间', ''), reverse=True):
-        mm = load_meta(PERIODS / n)
-        if is_task(mm) and mm.get('事项类型') == 'ANR/崩溃' and mm.get('开发仓库'):
-            used.append(mm['开发仓库'])
+    if anr:
+        for n in sorted(period_names(), key=lambda n: load_meta(PERIODS / n).get('更新时间', ''), reverse=True):
+            mm = load_meta(PERIODS / n)
+            if is_task(mm) and mm.get('事项类型') == 'ANR/崩溃' and mm.get('开发仓库'):
+                used.append(mm['开发仓库'])
+    kb = str(KB_HOME) if not anr and (KB_HOME / '.git').exists() and _is_kb_task(task, m) else ''
     try:
         rs = stack_repos()
     except Exception:
         rs = []
+    side = [r['路径'] for r in rs if kind in (r.get('端') or [])] if anr else []
     cands = []
-    for p in [m.get('开发仓库')] + used + [r['路径'] for r in rs if kind in (r.get('端') or [])] + [r['路径'] for r in rs]:
+    for p in [m.get('开发仓库'), kb] + used + side + [r['路径'] for r in rs]:
         if p and p not in cands and not hosts.is_remote(p) and Path(p).is_dir():
             cands.append(p)
     out = [{'路径': p, '名称': Path(p).name, '分支': _branch(p)} for p in cands[:12]]
-    return out, (out[0]['路径'] if out else ''), (out[0]['分支'] if out else '')
+    if not out:
+        return out, '', '', False
+    repo, branch = out[0]['路径'], out[0]['分支']
+    if kb and repo == kb and not m.get('开发仓库'):
+        branch = 'main'
+    return out, repo, branch, repo in (m.get('开发仓库'), kb)
+
+
+def push_repo_choices(task, kind='Android'):
+    """候选工程和默认值：(候选, 默认工程, 默认分支)。"""
+    return _repo_pick(task, kind)[:3]
 
 
 def _task_branch(task, m):
     return next((note_title(n) for n in notes_of(PERIODS / task, m=m) if n.get('类型') == '分支'), '')
 
 
-def push_proposal(task, keys=None, kind='Android'):
-    """推动卡片：事项里还没处理的 ANR / 崩溃条目 + 候选工程、默认工程和分支。"""
+def push_proposal(task, keys=None, kind='Android', repo='', branch=''):
+    """推动卡片：事项里还没处理的条目 + 候选工程、默认工程和分支。
+    repo / branch：管家认出的工程和分支（传了就用它当默认值，并且算「有把握」）。"""
     items = [x for x in task_items(task) if not x['键'].startswith('bug:') and x.get('状态') in (None, '', '待处理', '没解决')]  # Bug 走分析→修复
     keys = keys or [x['键'] for x in items]
-    repos, repo, branch = push_repo_choices(task, kind)
+    repos, drepo, dbranch, sure = _repo_pick(task, kind)
     m = load_meta(PERIODS / task)
-    return {'类型': '推动', '事项': task, '条目': keys, '仓库': repos, '默认仓库': m.get('开发仓库') or repo,
-            '默认分支': _task_branch(task, m) or branch, '说明': '确认工程和分支，点「▶ 推动」就开始：定位原因 → 改代码 → 自测 → 写结论（你点了才算批准）'}
+    repo, branch = (str(Path(repo).expanduser()) if (repo or '').strip() else ''), (branch or '').strip()
+    if repo:
+        hit = next((r for r in repos if r['路径'] == repo), None)
+        if not hit:
+            repos.insert(0, {'路径': repo, '名称': Path(repo).name, '分支': _branch(repo)})
+        sure = True
+    own = m.get('开发仓库') or ''
+    pick = drepo
+    drepo = repo or own or drepo
+    if branch:
+        dbranch = branch
+    elif drepo == own and _task_branch(task, m):
+        dbranch = _task_branch(task, m)
+    elif drepo != pick:
+        dbranch = next((r['分支'] for r in repos if r['路径'] == drepo), '')
+    return {'类型': '推动', '事项': task, '条目': keys, '仓库': repos, '默认仓库': drepo, '默认分支': dbranch, '有把握': bool(sure and drepo),
+            '说明': '点「▶ 推动」就开始：定位原因 → 改代码 → 自测 → 写结论（你点了才算批准）' if sure and drepo else
+                    '确认工程和分支，点「▶ 推动」就开始：定位原因 → 改代码 → 自测 → 写结论（你点了才算批准）'}
 
 
 def confirm_proposal(p, repo, branch, by='用户（网页）'):

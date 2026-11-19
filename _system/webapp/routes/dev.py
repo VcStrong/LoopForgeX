@@ -85,3 +85,25 @@ def _get_api_period_branch_swap(self, u, q):
 def _post_api_period_branch_swap(self, u, n, body):
     return self._guard(lambda: {'msg': kb.branch_swap(body.get('period', ''), body.get('branch', ''), body.get('base', ''),
                                                       body.get('reason', ''), body.get('end', ''), carry=bool(body.get('carry')))})
+
+
+# ---------------- ▶ 运行到手机（kblib/plugins/devrun.py）
+@get('/api/devrun/options')
+def _get_api_devrun_options(self, u, q):
+    return self._guard(lambda: kb.devrun_options(q.get('name', ''), q.get('repo', '')))
+
+
+@get('/api/devrun/job')
+def _get_api_devrun_job(self, u, q):
+    return self._guard(lambda: kb.devrun_job(q.get('id', '')))
+
+
+@post('/api/devrun', page_only=True)
+def _post_api_devrun(self, u, n, body):
+    return self._guard(lambda: {'job': kb.devrun_start(body.get('period', ''), body.get('repo', ''), body.get('serial', ''),
+                                                       body.get('module', ''), body.get('variant', ''), bool(body.get('remember')))})
+
+
+@post('/api/devrun/cancel', page_only=True)
+def _post_api_devrun_cancel(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.devrun_cancel(body.get('id', ''))})

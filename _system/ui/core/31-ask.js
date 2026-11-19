@@ -14,16 +14,20 @@ async function askLoad(){
 // 推动卡片：只问工程和分支（默认值选好了），点「▶ 推动」= 你本人批准
 function propHtml(p,id){
   if(p['已确认'])return `<div class="prop">✓ 已推动「${esc(p['事项'])}」· 工程 <span class="mono">${esc((p['工程']||'').replace(/^\/Users\/[^/]+/,'~'))}</span>${p['分支']?' · 分支 '+esc(p['分支']):''}<div class="small mut">${esc((p['结果']||'').split('\n')[0])}</div><a href="#/p/${enc(p['事项'])}">看进展</a></div>`;
-  const rs=p['仓库']||[];
+  const rs=p['仓库']||[],sure=p['有把握']&&p['默认仓库'],home=x=>x.replace(/^\/Users\/[^/]+/,'~');
+  const nm=(rs.find(r=>r['路径']===p['默认仓库'])||{})['名称']||(p['默认仓库']||'').split('/').pop();
   return `<div class="prop" data-prop="${esc(id)}"><div class="small mut">${esc(p['说明']||'')}</div>
-    <label class="small">工程${rs.length?`<select data-prepo>${rs.map(r=>`<option value="${esc(r['路径'])}" data-br="${esc(r['分支']||'')}" ${r['路径']===p['默认仓库']?'selected':''}>${esc(r['名称'])} · ${esc(r['路径'].replace(/^\/Users\/[^/]+/,'~'))}</option>`).join('')}${PICK_OPT}</select>`
+    ${sure?`<div data-psum>工程：<b class="mono" title="${esc(home(p['默认仓库']))}">${esc(nm)}${p['默认分支']?'@'+esc(p['默认分支']):''}</b> <a href="#" data-pchg class="small">换一个</a></div>`:''}
+    <div data-pmore${sure?' hidden':''}>
+    <label class="small">工程${rs.length?`<select data-prepo>${rs.map(r=>`<option value="${esc(r['路径'])}" data-br="${esc(r['分支']||'')}" ${r['路径']===p['默认仓库']?'selected':''}>${esc(r['名称'])} · ${esc(home(r['路径']))}</option>`).join('')}${PICK_OPT}</select>`
       :`<input data-prepo placeholder="工程目录，如 ~/AndroidStudioProjects/app" value="${esc(p['默认仓库']||'')}">`}</label>
-    <label class="small">分支<input data-pbr value="${esc(p['默认分支']||'')}" placeholder="不填 = 用工程现在的分支"></label>
+    <label class="small">分支<input data-pbr value="${esc(p['默认分支']||'')}" placeholder="不填 = 用工程现在的分支"></label></div>
     <button class="pri" data-pgo="${esc(id)}">▶ 推动（${(p['条目']||[]).length} 条）</button></div>`;
 }
 function bindProp(root,url,extra){
   root.querySelectorAll('[data-prop]').forEach(box=>{const sel=box.querySelector('select[data-prepo]'),br=box.querySelector('[data-pbr]');
     if(sel)sel.onchange=()=>{br.value=sel.selectedOptions[0].dataset.br||''};
+    const chg=box.querySelector('[data-pchg]');if(chg)chg.onclick=e=>{e.preventDefault();box.querySelector('[data-pmore]').hidden=false;box.querySelector('[data-psum]').hidden=true};
     box.querySelector('[data-pgo]').onclick=async e=>{const b=e.target;b.disabled=true;b.textContent='推动中…';
       try{toast((await post(url,{id:box.dataset.prop,repo:box.querySelector('[data-prepo]').value.trim(),branch:br.value.trim(),...(extra||{})})).msg.split('\n')[0])}catch(err){toast(err.message);b.disabled=false;b.textContent='▶ 推动'}
       askLoad();if(typeof loadStw==='function')loadStw()}})}

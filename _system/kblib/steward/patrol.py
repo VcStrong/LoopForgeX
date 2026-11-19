@@ -54,10 +54,11 @@ def steward_settings():
     sup = _sup.settings()
     return {'开启': s.get('开启', True), '自主度': s.get('自主度') if s.get('自主度') in LEVELS else '标准',
             '每日上限': int(s.get('每日上限') or 20), '新Bug天数': int(s.get('新Bug天数') or 3), '关闭动作': [a for a in s.get('关闭动作') or [] if a in ACTIONS],
-            '中断续跑': sup['开启'], '续跑上限': sup['上限'], '学习': s.get('学习', True) is not False}
+            '中断续跑': sup['开启'], '续跑上限': sup['上限'], '学习': s.get('学习', True) is not False,
+            '自动拍板': s.get('自动拍板', True) is not False}
 
 
-def steward_set(on=None, level=None, limit=None, actions=None, new_days=None, resume=None, resume_max=None, learn=None):
+def steward_set(on=None, level=None, limit=None, actions=None, new_days=None, resume=None, resume_max=None, learn=None, auto=None):
     s = load_settings()
     cur = steward_settings()
     if on is not None:
@@ -78,6 +79,8 @@ def steward_set(on=None, level=None, limit=None, actions=None, new_days=None, re
         cur['新Bug天数'] = n
     if learn is not None:
         cur['学习'] = bool(learn)
+    if auto is not None:
+        cur['自动拍板'] = bool(auto)
     if resume is not None:
         cur['中断续跑'] = bool(resume)
     if resume_max not in (None, ''):
@@ -94,7 +97,8 @@ def steward_set(on=None, level=None, limit=None, actions=None, new_days=None, re
     s['管家'] = cur
     save_settings(s)
     return ('管家' + ('已关闭' if not cur['开启'] else f'已开启（{cur["自主度"]}，每天最多自动做 {cur["每日上限"]} 件）')
-            + ('；中断后自动接着做（连续最多 ' + str(cur['续跑上限']) + ' 次）' if cur['中断续跑'] else '；中断后不自动接着做'))
+            + ('；中断后自动接着做（连续最多 ' + str(cur['续跑上限']) + ' 次）' if cur['中断续跑'] else '；中断后不自动接着做')
+            + ('；明确的事 AI 自动定' if cur['自动拍板'] else '；明确的事也等你拍板（开了免打扰的期除外）'))
 
 
 def _state():
@@ -510,10 +514,15 @@ def steward_tick(by='定时'):
         if len(done) > 3000:                  # 只留最近的
             st['已做'] = dict(sorted(done.items(), key=lambda kv: kv[1])[-2000:])
         try:
+            from kblib.infra.autopush import retry_failed
+            pushed = retry_failed()               # 自动推送失败的期：退避着重推（有自己的开关），推成功失败卡片就消失
+        except Exception as e:                    # noqa: BLE001
+            pushed = [('', f'出错：{e}')]
+        try:
             upd = _upd.update_tick()              # 程序更新：满 1 小时检查一次；排队的 / 设成自动的空闲时更新（有自己的开关）
         except Exception as e:                    # noqa: BLE001
             upd = f'出错：{e}'
-        res = [f'{ACTIONS[r["动作"]][0]}：{r["结果"]}' for r in did] + [f'中断续跑：{r[:60]}' for _, r in resumed]
+        res = [f'{ACTIONS[r["动作"]][0]}：{r["结果"]}' for r in did] + [f'中断续跑：{r[:60]}' for _, r in resumed] + [f'自动推送{r[:60]}' for _, r in pushed]
         if upd:
             res.append(f'程序更新：{upd[:80]}')
         for _, r in resumed:

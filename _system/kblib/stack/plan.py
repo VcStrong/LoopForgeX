@@ -18,7 +18,7 @@ from kblib.core.common import PERIODS, KBError, now
 from kblib.infra import hosts, timing
 from kblib.core.periods import design_previews, load_meta, log, period_dir, period_names, save_meta
 from kblib.core.repos import REPO_ENDS, load_repos, repo_pref, save_repo_pref
-from kblib.ai.devsession import _alive, _dev_result, _notify
+from kblib.ai.devsession import _alive, _dev_result, _notify, auto_decide_on
 from kblib.ai.engines import engine_popen, role_engine
 from kblib.ai import team
 from kblib.ai.flows import flow_for, flows, get_flow
@@ -298,12 +298,14 @@ def repo_settings():
         p = repo_pref(r['路径'])
         out.append({'路径': r['路径'], '名称': r['名称'], '分支': r.get('分支', ''), '远程': bool(r.get('远程')),
                     '识别端': [] if r.get('远程') else _detect_ends_files(r['路径']),
-                    '端': p.get('端', ''), '默认流程': p.get('默认流程', ''), '代码更新': p.get('代码更新', '')})
+                    '端': p.get('端', ''), '默认流程': p.get('默认流程', ''), '代码更新': p.get('代码更新', ''),
+                    '运行模块': p.get('运行模块', ''), '运行变体': p.get('运行变体', ''), '运行参数': p.get('运行参数', '')})
     return out
 
 
-def repo_set(path, end=None, flow=None, by='用户（网页）', code=None):
-    """改某个工程的端 / 默认流程 / 代码更新；None = 不改，'' = 回到自动（端按文件识别，流程按识别文件 / 全局默认，代码更新跟随全局「时机」）。"""
+def repo_set(path, end=None, flow=None, by='用户（网页）', code=None, run=None):
+    """改某个工程的端 / 默认流程 / 代码更新 / 运行到手机（run={模块, 变体, 参数}）；None = 不改，'' = 回到自动
+    （端按文件识别，流程按识别文件 / 全局默认，代码更新跟随全局「时机」，运行模块自动识别、变体 debug）。"""
     path = (path or '').strip()
     if not path:
         raise KBError('没有工程路径')
@@ -321,6 +323,16 @@ def repo_set(path, end=None, flow=None, by='用户（网页）', code=None):
             raise KBError(f'代码更新只能选 {timing.PULL} / {timing.FETCH} / {timing.KEEP}，或留空跟随全局')
         kv['代码更新'] = code
         said.append(f'代码更新：{code or "跟随全局"}' + ('（对所有可选的时机生效，锁定的时机不受影响）' if code else ''))
+    for k, name in (('模块', '运行模块'), ('变体', '运行变体'), ('参数', '运行参数')):
+        if run is None or run.get(k) is None:
+            continue
+        v = str(run[k]).strip()
+        if k == '模块' and v and not v.startswith(':'):
+            v = ':' + v
+        if k == '变体' and v and not re.fullmatch(r'[A-Za-z0-9_]+', v):
+            raise KBError(f'变体只能是字母数字，如 debug、prodDebug：{v}')
+        kv[name] = '' if (k == '变体' and v == 'debug') else v
+        said.append(f'{name}：{v or ("自动识别" if k == "模块" else "debug" if k == "变体" else "无")}')
     if not kv:
         return '没有变化'
     save_repo_pref(path, **kv)
@@ -379,7 +391,7 @@ def _plan_prompt(d, ends, note, new=False):
 {_NEW_RULE if new else ''}{f'用户的意见 / 这次要处理的变更：{note}' if note else ''}
 {_incr_rule(d)}
 
-要做的事（一次做完，用户只拍板一次）：
+要做的事（一次做完；方案明确时知识库会自动拍板、接着开工，所以能自己定的就定下来）：
 1. 需求规格化：把资料里的需求拆成一条条可验收的需求，编号 REQ-001 起；每条写清验收标准（「当…时，应…」，可测、不含糊），标出涉及哪些端。
    资料里没写、但做的时候必须定的（空态、加载、报错、无网、权限、上限、时区、多语言…）也补成需求或放进待确认。
 2. 设计稿对照：看这一期「设计图」里的图（kb_period 里有路径，图片直接读；PSD 已转成同名 .png 预览；蓝湖只有链接的看不到，记进「无法核对」）。
@@ -389,7 +401,10 @@ def _plan_prompt(d, ends, note, new=False):
    （需要的话在「各端」里加一项、涉及 true，并在待确认里提出来；端名用上面的名字，常用的还有 {common}，别的平台直接写名字，如 Unity）。
 4. 接口契约：需要新增或修改服务端接口时，先在服务端仓库里找现有接口的写法（路由、鉴权、返回包装、错误码、分页），按同样的约定写 OpenAPI 3 YAML。
    客户端已有接口复用的也列出来（标「复用」）。不需要接口就不写 openapi。接口的说明里写上对应的需求编号。
-5. 待确认：需求说不清、设计和需求对不上、要用户拍板的点，每条给出你的建议（用户开了免打扰时会直接按建议走）。
+5. 待确认：只放真拿不准的点（需求互相矛盾、设计和需求对不上又看不出该按哪个、要不要多做一个端 / 用不用付费服务这类要用户定的取舍），每条给出你的建议。
+   能按资料、现有代码约定或常识定下来的（空态文案、分页大小、错误提示、字段命名…）直接定在方案里，并把按什么假设定的写进「假设」，不要放进待确认。
+   方案没有待确认、也不扩大范围（"扩大范围": false：只做资料要求的事）时，知识库会自动拍板并接着各端开工，网页上显示「AI 已自动定」，用户可一键撤回；
+   有待确认或扩大范围时停下等用户拍板（用户开了免打扰时一律按建议走）。
 
 最后调用一次 kb_stack_plan 交回（只交一次，交完就结束）：
 - iteration=「{d.name}」
@@ -401,6 +416,8 @@ def _plan_prompt(d, ends, note, new=False):
    "各端": [{{"端": "{names}（这一期加了的端；没加仓库但需要的端也可以写，如 {others}）", "涉及": true, "原因": "…", "改动": ["模块或文件：改什么（REQ-001）", …], "工作量": "小/中/大", "风险": "…"{', "技术栈": "…", "目录": "…", "脚手架": "…"（新产品模式：没有仓库的端要写）' if new else ''}}}],
    "接口": [{{"方法": "GET", "路径": "/api/…", "说明": "…（REQ-001）", "类型": "新增/修改/复用", "调用端": ["iOS", "Android"]}}],
    "数据": ["表 / 字段 / 缓存 / 配置的变化"],
+   "假设": ["自己定下来的点：按什么依据 / 假设定的"],
+   "扩大范围": false,
    "待确认": [{{"问题": "…", "建议": "…"}}]}}
 - openapi：OpenAPI 3 YAML 全文（只含新增和修改的接口；没有就留空）。
 """
@@ -528,7 +545,7 @@ def stack_plan_start(name, note='', by='用户（网页）', auto=False):
     _PROCS[d.name] = proc
     m = load_meta(d)
     m['全栈会话'] = {'状态': '运行中', 'pid': proc.pid, '开始时间': now(), '日志': str(logf), '引擎': eng['名称'], '意见': (note or '').strip(),
-                   '场景': '方案', 'git前': git0}
+                   '场景': '方案', 'git前': git0, '发起': by, '自动发起': bool(auto)}
     st = m.setdefault('全栈', {})
     st['状态'] = '出方案中'
     save_meta(d, m)
@@ -561,7 +578,9 @@ def _plan_finish(name, code=None):
         log(d, '全栈', f'方案会话结束但没有交回方案（退出码 {code}）：{s["结果"][:300]}')
     m['全栈会话'] = s
     save_meta(d, m)
-    _notify('知识库 · 全栈方案', f'「{d.name}」' + ('方案出好了，等你拍板' if st.get('状态') == '待拍板' else '方案没出来，看记录'))
+    _notify('知识库 · 全栈方案', f'「{d.name}」' + ('方案出好了，等你拍板' if st.get('状态') == '待拍板' else
+                                              'AI 已自动拍板' + ('并开工' if (st.get('自动拍板') or {}).get('开工') else '') + '，可在网页撤回'
+                                              if st.get('自动拍板') else '方案没出来，看记录'))
 
 
 def stack_plan_submit(name, plan, openapi='', by='Claude'):
@@ -614,7 +633,117 @@ def stack_plan_submit(name, plan, openapi='', by='Claude'):
     dc = plan.get('设计对照') or {}
     gaps = sum(len(dc.get(k) or []) for k in ('缺设计', '设计多出', '缺状态', '端不一致'))
     log(d, '全栈', f'方案交回：需求 {len(reqs)} 条，设计问题 {gaps} 处，涉及 {"、".join(ends) or "（无）"}，接口 {len(plan.get("接口") or [])} 个，待确认 {len(plan.get("待确认") or [])} 条（{by}）')
+    try:
+        auto = _auto_approve(d, plan)
+    except KBError as e:                             # 自动拍板没成：照旧等用户拍板
+        log(d, '全栈', f'自动拍板没成，等你拍板：{e}')
+        auto = ''
+    if auto:
+        return f'已收到方案：涉及 {"、".join(ends)}；{auto}。方案会话到这里结束。'
     return f'已收到方案：涉及 {"、".join(ends)}；等用户在网页上拍板'
+
+
+def plan_needs_user(m, plan):
+    """方案要不要用户拍板：返回理由，空 = 明确，AI 自动拍板。免打扰开着时一律不问（连拿不准的也按建议定）。"""
+    if m.get('免打扰'):
+        return ''
+    if not auto_decide_on():
+        return '设置里关了「明确的事自动定」'
+    qs = [q for q in plan.get('待确认') or [] if isinstance(q, dict) and not q.get('回答')]
+    if qs:
+        return f'有 {len(qs)} 条待确认'
+    if plan.get('扩大范围') is True or str(plan.get('扩大范围')).strip() in ('是', 'true', 'True'):
+        return '方案扩大了范围'
+    crs = [x['编号'] for x in m.get('全栈变更') or [] if x['状态'] == '待拍板' and not str(x.get('来源', '')).startswith('用户')]
+    if crs:
+        return f'有 AI 会话提的变更 {"、".join(crs)}（可能扩大范围）'
+    if m.get('新产品') and not period_ends(None, m):
+        return '新产品还没建工程（要不要做哪些端、技术栈由你定）'
+    return ''
+
+
+def _auto_approve(d, plan):
+    """方案明确（没有待确认、不扩大范围）就自动拍板；第一次拍板、且是你点的「出方案」或已批准开发的，接着各端开工。"""
+    m = load_meta(d)
+    st = m.get('全栈') or {}
+    why = plan_needs_user(m, plan)
+    if why:
+        st['等拍板理由'] = why
+        m['全栈'] = st
+        save_meta(d, m)
+        log(d, '全栈', f'方案等你拍板：{why}')
+        return ''
+    reason = '免打扰已开启，按 AI 建议定' if m.get('免打扰') else '没有待确认、不扩大范围、可撤回'
+    sess = m.get('全栈会话') or {}
+    first = not m.get('各端开发')
+    old_ver, old_status = st.get('契约版本', ''), m.get('状态', '')
+    out = stack_approve(d.name, by='AI（自动判断）')
+    m = load_meta(d)
+    st = m.get('全栈') or {}
+    pv = st.get('方案版本', '')
+    rec = {'时间': now(), '理由': reason, '方案版本': pv, '假设': [str(x) for x in plan.get('假设') or []][:20],
+           '旧契约版本': old_ver, '新契约': st.get('契约版本', '') if st.get('契约版本') != old_ver else '', '原状态': old_status}
+    st.pop('等拍板理由', None)
+    st['自动拍板'] = rec
+    m['全栈'] = st
+    save_meta(d, m)
+    log(d, 'AI决策（自动判断）', f'自动拍板方案 {pv}：{reason}' + (f'；假设：{"；".join(rec["假设"])[:300]}' if rec['假设'] else '') + '（网页可撤回）')
+    by = str(sess.get('发起') or '')
+    if first and (m.get('状态') in ('已批准开发', '开发中') or not (sess.get('自动发起') or by.startswith(('自动', '管家')))):
+        try:
+            out += '；' + _stackdev.stack_dev_start(d.name, by='AI（自动拍板后接着开工）')
+            m = load_meta(d)
+            m['全栈']['自动拍板']['开工'] = True
+            save_meta(d, m)
+        except KBError as e:
+            out += f'；没能自动开工（{e}），等你在网页点「▶ 各端开工」'
+    elif first:
+        out += '；这次方案是管家自动出的，开工等你点「▶ 各端开工」'
+    return 'AI 已自动拍板（' + reason + '）：' + out
+
+
+def stack_auto_revert(name, by='用户（网页）'):
+    """撤回 AI 自动拍板：停掉自动开工的端，方案回到「待拍板」，自动锁的契约版本和方案版本删掉；已写的代码留在仓库里（没推送，按需自己回退）。"""
+    d = period_dir(name)
+    m = load_meta(d)
+    st = m.get('全栈') or {}
+    rec = st.get('自动拍板')
+    if not rec:
+        raise KBError('这一期的方案不是 AI 自动拍板的')
+    stopped = []
+    if rec.get('开工'):
+        for e, x in list((m.get('各端开发') or {}).items()):
+            if x.get('状态') in _stackdev.RUNNING or x.get('状态') == '排队中':
+                try:
+                    _stackdev.stack_dev_stop(d.name, e, by=by)
+                    stopped.append(e)
+                except KBError:
+                    pass
+        m = load_meta(d)
+        m.pop('各端开发', None)
+        if rec.get('原状态') and m.get('状态') != rec['原状态']:
+            m['状态'] = rec['原状态']
+            m.setdefault('状态历史', []).append({'时间': now(), '状态': rec['原状态'], '备注': '撤回 AI 自动拍板', '操作人': '用户'})
+    st = m.get('全栈') or {}
+    sd = _sdir(d)
+    pv = rec.get('方案版本') or ''
+    if pv and (sd / f'方案.{pv}.json').exists():
+        (sd / f'方案.{pv}.json').unlink()
+    if rec.get('新契约') and (sd / 'api' / f'openapi.{rec["新契约"]}.yaml').exists():
+        (sd / 'api' / f'openapi.{rec["新契约"]}.yaml').unlink()
+    for x in m.get('全栈变更') or []:
+        if x.get('状态') == '已纳入' and x.get('纳入方案') == pv:
+            x['状态'] = '待拍板'
+            x.pop('纳入方案', None)
+            x.pop('纳入时间', None)
+    for k in ('自动拍板', '拍板时间', '拍板人', '方案版本', '涉及'):
+        st.pop(k, None)
+    st.update(状态='待拍板', 契约版本=rec.get('旧契约版本', ''), 撤回自动拍板=now())
+    m['全栈'] = st
+    save_meta(d, m)
+    log(d, '全栈', f'撤回 AI 自动拍板（方案 {pv}）' + (f'，停掉 {"、".join(stopped)}' if stopped else '') + f'：方案回到「待拍板」（{by}）')
+    return ('已撤回自动拍板，方案回到「待拍板」：确认问题后点「✓ 拍板」，或写意见「重出方案」'
+            + (f'；已停掉 {"、".join(stopped)}（已经写的代码还在仓库里，没推送，需要的话自己回退）' if stopped else ''))
 
 
 def stack_approve(name, by='用户（网页）'):
@@ -649,6 +778,8 @@ def stack_approve(name, by='用户（网页）'):
     crs = [x for x in m.get('全栈变更') or [] if x['状态'] == '待拍板']
     for x in crs:
         x.update(状态='已纳入', 纳入方案=f'v{pn}', 纳入时间=now())
+    st.pop('自动拍板', None)                       # 重新拍板：旧的「AI 已自动定」不再显示（自动拍板时由 _auto_approve 重新记）
+    st.pop('等拍板理由', None)
     st.update(状态='已拍板', 拍板时间=now(), 拍板人=by, 契约版本=ver, 方案版本=f'v{pn}',
               涉及=[x['端'] for x in plan['各端'] if x.get('涉及')])
     m['全栈'] = st

@@ -73,6 +73,11 @@ def _post_api_stack_approve(self, u, n, body):
     return self._guard(lambda: {'msg': kb.stack_approve(body.get('period', ''))})
 
 
+@post('/api/stack/auto-revert', page_only=True)
+def _post_api_stack_auto_revert(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.stack_auto_revert(body.get('period', ''))})
+
+
 # ---------------- 新产品：完善需求、建工程、发布（kblib/stack/launch.py）
 @post('/api/stack/newproduct', page_only=True)
 def _post_api_stack_newproduct(self, u, n, body):

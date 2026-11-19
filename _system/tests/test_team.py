@@ -33,6 +33,11 @@ AGENTS = TMP / 'home' / '.claude' / 'agents'
 SUITE = TMP / 'home' / '.claude' / 'role-agents'
 team.AGENTS_DIR, team.SUITE, team.MANIFEST = AGENTS, SUITE, SUITE / 'manifest.json'
 team.SCENES_FILE = SUITE / 'config' / 'kb_scenes.json'
+CRON = {'text': ''}                                          # 假 crontab：测试不碰真实 launchd / crontab
+LAUNCHCTL = []
+team._crontab_read = lambda: CRON['text']
+team._crontab_write = lambda t: CRON.__setitem__('text', t)
+team._launchctl = lambda *a: LAUNCHCTL.append(a)
 P = '角色团测试期'
 CLAUDE = dict(engines.BUILTIN_ENGINES['claude'], id='claude', 名称='Claude Code', 命令='/bin/echo')
 CODEX = dict(engines.BUILTIN_ENGINES['codex'], id='codex', 名称='Codex CLI', 命令='/bin/echo')
@@ -126,7 +131,7 @@ class TestInject(Base):
         self.assertEqual(engines.engine_cmd(CLAUDE, '自检', 'kb·自检'), old_engine_cmd(CLAUDE, '自检', 'kb·自检'))
 
     def test_global_off_identical(self):
-        set_settings(开启=False, 档位='精简', 每期上限=30)
+        set_settings(开启=False, 档位='精简')
         for sc in ('管家', '方案', '需求', 'Bug分析·Android', '开发', '开发·iOS', '审查·Web', '跟进', '发布', '流程设计', 'Bug修复·Android'):
             self.assertEqual(engines.engine_cmd(CLAUDE, '任务', 't', '', sc, self.meta()), old_engine_cmd(CLAUDE, '任务', 't'), sc)
 
@@ -175,8 +180,9 @@ class TestScenes(Base):
         self.assertIn('本会话最多派 4 次', t)
         self.assertIn('不要 run_in_background', t)
         self.assertIn('建议来自：架构师', t)
-        self.assertIn('本期还能派 30 次', t)
-        set_settings(开启=True, 档位='标准', 每期上限=30)
+        self.assertNotIn('本期还能派', t)
+        self.assertNotIn('上限', t)
+        set_settings(开启=True, 档位='标准')
         self.assertIn('- ux-designer（', team.team_text('方案', self.meta(), eng=CLAUDE))
 
     def test_every_scene_has_required_phrases(self):
@@ -186,14 +192,16 @@ class TestScenes(Base):
             self.assertIn('流程命令照旧', t, sc)
             self.assertIn('不要 run_in_background', t, sc)
 
-    def test_exhausted(self):
+    def test_no_period_cap(self):
+        """只协助、不设卡：本期派了再多次也照常挂角色团，不提「用完」。"""
         d = kb.period_dir(P)
         m = self.meta()
-        m['角色调用'] = {'合计': 30, '按角色': {'architect': 30}}
+        m['角色调用'] = {'合计': 999, '按角色': {'architect': 999}, '超限已记': True}
         kb.save_meta(d, m)
-        self.assertEqual(team.team_text('方案', self.meta(), eng=CLAUDE).strip(), '【角色团】本期角色调用已用完，不要再派角色，按原流程继续。')
-        set_settings(开启=True, 档位='精简', 每期上限=40)          # 调大上限：恢复可派
-        self.assertIn('本期还能派 10 次', team.team_text('方案', self.meta(), eng=CLAUDE))
+        t = team.team_text('方案', self.meta(), eng=CLAUDE)
+        self.assertIn('- architect（', t)
+        self.assertNotIn('用完', t)
+        self.assertIn('本会话最多派 4 次', t)
 
     def test_release_lite_architect(self):
         self.assertEqual([r for r, *_ in team.scene_roles('发布', tier='精简')[1]], ['architect'])
@@ -337,7 +345,7 @@ class TestReviewRound1(Base):
         m2['角色调用'] = {'合计': 25}
         kb.save_meta(d2, m2)
         bugs = [{'归属': {'类型': '期', '名称': P}}, {'归属': {'类型': '期', '名称': '角色团测试期二'}}]
-        self.assertIn('本期还能派 5 次', team.team_text('Bug分析', analysis._owner_meta(bugs), 'Android', eng=CLAUDE))
+        self.assertIn('- client-engineer（', team.team_text('Bug分析', analysis._owner_meta(bugs), 'Android', eng=CLAUDE))
         kb.set_period_team('角色团测试期二', '关')
         self.assertEqual(team.team_text('Bug分析', analysis._owner_meta(bugs), 'Android', eng=CLAUDE), '')
         self.assertEqual(analysis._owner_meta([bugs[0]])['名称'], P)
@@ -390,7 +398,7 @@ class TestReviewRound1(Base):
 class TestFlowDraft(Base):
     """REQ-016 / REQ-017：flow_draft 提示词、超时、KB_SESSION；engine_run 的 env_extra。"""
     def run_draft(self, on):
-        set_settings(开启=on, 档位='精简', 每期上限=30)
+        set_settings(开启=on, 档位='精简')
         seen = {}
 
         def fake_run(e, prompt, cwd, timeout=300, extra_args=None, title='kb·单次', scene='', period=None, env_extra=None, auto=False):
@@ -457,8 +465,8 @@ class TestTally(Base):
             self.skipTest('没有 P0 日志')
         self.assertEqual(team.team_count(p0), {'product-manager': 1})
 
-    def test_tally_dedupe_and_limit(self):
-        set_settings(开启=True, 档位='精简', 每期上限=3)
+    def test_tally_dedupe_no_limit(self):
+        set_settings(开启=True, 档位='精简')
         d = kb.period_dir(P)
         m = self.meta()
         rec = {}
@@ -468,16 +476,15 @@ class TestTally(Base):
         kb.save_meta(d, m)
         self.assertEqual(rec['角色'], {'architect': 3})
         self.assertEqual(rec['参与'], '👤 参与：架构师（3 次）')
-        u = team.team_usage(self.meta())
-        self.assertEqual((u['合计'], u['上限'], u['超限已记']), (3, 3, True))
+        self.assertEqual(team.team_usage(self.meta()), {'合计': 3, '按角色': {'architect': 3}})
         f2 = self.logf([assistant('Agent', 'product-manager')])
         m = self.meta()
+        m['角色调用']['超限已记'] = True                     # 旧版字段：累加时清掉
         team.tally({}, f2, m, d, '管家')
         kb.save_meta(d, m)
-        logs = (d / '记录.md').read_text('utf-8')
-        self.assertEqual(logs.count('本期已用'), 1, '同一期只记一次')
-        self.assertIn('角色团：本期已用 3/3，之后不再派角色'.split('：')[1].split('，')[0], logs)
-        self.assertIn('【角色团】本期角色调用已用完', team.team_text('方案', self.meta(), eng=CLAUDE))
+        self.assertNotIn('超限已记', self.meta()['角色调用'])
+        self.assertNotIn('本期已用', (d / '记录.md').read_text('utf-8'))
+        self.assertIn('- architect（', team.team_text('方案', self.meta(), eng=CLAUDE))
 
     def test_over_scene_cap(self):
         d = kb.period_dir(P)
@@ -525,7 +532,17 @@ class TestApi(Base):
         h, _ = call('GET', '/api/settings')
         self.assertEqual(h.code, 200)
         t = h.body['team']
-        self.assertEqual((t['开启'], t['档位'], t['每期上限']), (True, '精简', 30))
+        self.assertEqual((t['开启'], t['档位']), (True, '精简'))           # 没存过设置、已装套件：老用户保持开
+        self.assertNotIn('每期上限', t)
+        self.assertEqual(len(t['角色']), 16)
+        pm = next(r for r in t['角色'] if r['名称'] == 'product-manager')
+        self.assertEqual((pm['中文名'], pm['已安装']), ('产品经理', True))
+        self.assertIn('方案', pm['场景'])
+        self.assertIn('需求（主导）', pm['场景'])
+        ux = next(r for r in t['角色'] if r['名称'] == 'ux-designer')
+        self.assertEqual((ux['场景'], ux['其他档']), ([], '标准'))
+        self.assertIn('方案', ux['其他档场景'])
+        self.assertTrue(all(r['负责'] for r in t['角色']))
         s = t['状态']
         self.assertEqual((s['已安装'], s['应有'], s['缺'], s['套件版本'], s['场景表']), (16, 16, [], '1.0.0', '内置兜底'))
         for k in ('kb接入', '默认引擎支持'):
@@ -536,20 +553,20 @@ class TestApi(Base):
         self.assertFalse(call('GET', '/api/settings')[0].body['team']['状态']['套件已装'])
 
     def test_post_team(self):
-        h, r = call('POST', '/api/team', {'on': True, 'tier': '标准', 'limit': 50})
+        h, r = call('POST', '/api/team', {'on': True, 'tier': '标准', 'limit': 50})       # limit 是旧版字段：忽略
         self.assertTrue(r.page_only)
-        self.assertEqual((h.code, h.body), (200, {'msg': '角色团已开启（标准档，每期最多调用 50 次）'}))
-        self.assertEqual(kb.team_settings(), {'开启': True, '档位': '标准', '每期上限': 50})
+        self.assertEqual((h.code, h.body), (200, {'msg': '角色团已开启（标准档）'}))
+        self.assertEqual(kb.team_settings(), {'开启': True, '档位': '标准'})
+        self.assertNotIn('每期上限', kb.load_settings()['角色团'])
         h, _ = call('POST', '/api/team', {'on': False})
         self.assertEqual(h.code, 200)
-        self.assertEqual(kb.team_settings()['每期上限'], 50, '只改传了的字段')
-        for bad in ({'limit': 201}, {'limit': -1}, {'limit': 1.5}, {'limit': 'abc'}, {'limit': True}, {'tier': '豪华'}):
-            h, _ = call('POST', '/api/team', bad)
-            self.assertEqual(h.code, 400, bad)
-            self.assertIn('error', h.body)
-        self.assertEqual(kb.team_settings()['每期上限'], 50, '出错不保存')
-        h, _ = call('POST', '/api/team', {'limit': 0})
-        self.assertEqual((h.code, kb.team_settings()['每期上限']), (200, 0))
+        self.assertEqual(kb.team_settings(), {'开启': False, '档位': '标准'}, '只改传了的字段')
+        h, _ = call('POST', '/api/team', {'tier': '豪华'})
+        self.assertEqual(h.code, 400)
+        self.assertEqual(kb.team_settings()['档位'], '标准', '出错不保存')
+        set_settings(开启=True, 档位='精简', 每期上限=30)                           # 旧版设置文件：保存时去掉每期上限
+        call('POST', '/api/team', {'tier': '标准'})
+        self.assertNotIn('每期上限', kb.load_settings()['角色团'])
 
     def test_post_period_team(self):
         h, r = call('POST', '/api/period/team', {'period': P, 'mode': '关'})
@@ -569,7 +586,7 @@ class TestApi(Base):
     def test_get_period(self):
         v = api_period(P)
         self.assertEqual(v['角色团'], '跟随')
-        self.assertEqual(v['角色调用'], {'合计': 0, '上限': 30, '按角色': {}, '超限已记': False})
+        self.assertEqual(v['角色调用'], {'合计': 0, '按角色': {}})
         h, _ = call('GET', '/api/period', q={'name': '没有这一期'})
         self.assertEqual(h.code, 400)
 
@@ -623,6 +640,201 @@ class TestSuiteSync(unittest.TestCase):
             if k in a:
                 diff += [f'{k}.{x}：套件 {a[k].get(x)!r} ≠ 兜底 {b[k].get(x)!r}' for x in team._DIFF_KEYS if a[k].get(x) != b[k].get(x)]
         self.assertFalse(diff, '\n'.join(diff))
+
+
+class TestSuiteManage(Base):
+    """默认不装、默认关；安装（调套件 install_helper.py）/ 移除（按清单删、先备份、不碰用户自己的）/ 恢复。"""
+    def suite_install(self):
+        """装一份带 files 清单的套件 + 用户自己的 agent / skill + settings.json 里一条用户 hook 和一条套件 hook。"""
+        install()
+        base = TMP / 'home' / '.claude'
+        files = {f'agents/{a}.md': {'sha': 'x'} for a in team.ALL_AGENTS}
+        for r in ('skills/who/SKILL.md', 'role-agents/config/kb_scenes.json', 'role-agents/rules/arbitration.md'):
+            (base / r).parent.mkdir(parents=True, exist_ok=True)
+            (base / r).write_text('suite', 'utf-8')
+            files[r] = {'sha': 'x'}
+        (base / 'role-agents' / 'config' / 'kb_scenes.json').write_text('{}', 'utf-8')
+        team.MANIFEST.write_text(json.dumps({'suite_version': '1.0.0', 'home': str(TMP / 'nosuite'), 'files': files}), 'utf-8')
+        (base / 'agents' / 'my-own.md').write_text('mine', 'utf-8')
+        (base / 'skills' / 'mine').mkdir(parents=True)
+        (base / 'skills' / 'mine' / 'SKILL.md').write_text('mine', 'utf-8')
+        user_hook = {'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': 'echo me'}]}
+        suite_hook = {'matcher': 'Task|Agent', 'hooks': [{'type': 'command', 'command': 'python3 x.py # role-agents-suite'}]}
+        (base / 'settings.json').write_text(json.dumps({'model': 'opus', 'hooks': {'PreToolUse': [user_hook, suite_hook]}}), 'utf-8')
+        return base, user_hook, suite_hook
+
+    def test_default_off(self):
+        install(manifest=False)
+        self.assertFalse(kb.team_settings()['开启'], '新装（没装套件、没存设置）默认关')
+        install()
+        self.assertTrue(kb.team_settings()['开启'], '已装套件的老用户保持开')
+        set_settings(开启=False, 档位='精简')
+        self.assertFalse(kb.team_settings()['开启'])
+
+    def test_remove_and_restore(self):
+        base, user_hook, suite_hook = self.suite_install()
+        shutil.rmtree(team._backup_root(), ignore_errors=True)
+        h, r = call('POST', '/api/team/suite', {'action': 'remove'})
+        self.assertTrue(r.page_only)
+        self.assertEqual(h.code, 200, h.body)
+        self.assertIn('已删：19 个套件文件', h.body['msg'])
+        self.assertIn('仍残留：无', h.body['msg'])
+        self.assertEqual(team.installed_agents(), [])
+        self.assertFalse(team.MANIFEST.exists())
+        self.assertFalse((base / 'skills' / 'who').exists())
+        self.assertFalse((base / 'role-agents').exists())
+        self.assertEqual((base / 'agents' / 'my-own.md').read_text('utf-8'), 'mine', '用户自己的 agent 不动')
+        self.assertTrue((base / 'skills' / 'mine' / 'SKILL.md').is_file(), '用户自己的 skill 不动')
+        st = json.loads((base / 'settings.json').read_text('utf-8'))
+        self.assertEqual((st['model'], st['hooks']), ('opus', {'PreToolUse': [user_hook]}))
+        self.assertFalse(kb.team_settings()['开启'], '移除后关')
+        bk = team.team_status()['状态']['备份']
+        self.assertEqual((len(bk), bk[0]['文件数']), (1, 19))
+        h, _ = call('POST', '/api/team/suite', {'action': 'remove'})
+        self.assertEqual(h.code, 400, '没装时移除报错')
+        st['theme'] = 'dark'                                    # 移除后用户又改了 settings.json：恢复不覆盖
+        (base / 'settings.json').write_text(json.dumps(st), 'utf-8')
+        h, _ = call('POST', '/api/team/suite', {'action': 'restore'})
+        self.assertEqual(h.code, 200, h.body)
+        self.assertEqual(len(team.installed_agents()), 16)
+        self.assertTrue(team.MANIFEST.is_file())
+        self.assertEqual((base / 'skills' / 'who' / 'SKILL.md').read_text('utf-8'), 'suite')
+        st = json.loads((base / 'settings.json').read_text('utf-8'))
+        self.assertEqual((st['theme'], st['hooks']['PreToolUse']), ('dark', [user_hook, suite_hook]))
+        call('POST', '/api/team/suite', {'action': 'restore'})
+        st = json.loads((base / 'settings.json').read_text('utf-8'))
+        self.assertEqual(st['hooks']['PreToolUse'], [user_hook, suite_hook], '重复恢复 hook 不叠加')
+        self.assertTrue(team.team_status()['状态']['备份'][0]['已恢复'])
+
+    def test_remove_cleans_leftovers_and_restores(self):
+        """移除连带清掉：带套件 hook 的 settings.json.bak-<时间>、套件文件的 .bak-<时间>、清单外套件生成的同名 agent、
+        自动学习定时任务（launchd / crontab）、项目级安装；自检报干净，提示在跑会话；恢复全部放回。用户自己的 .bak 不碰。"""
+        base, user_hook, suite_hook = self.suite_install()
+        shutil.rmtree(team._backup_root(), ignore_errors=True)
+        man = json.loads(team.MANIFEST.read_text('utf-8'))
+        man['files'].pop('agents/tech-scout.md')              # 清单外、但由套件 build.py 生成的同名 agent
+        (base / 'agents' / 'tech-scout.md').write_text('---\nname: tech-scout\n---\n<!-- 由 scripts/build.py 生成 -->', 'utf-8')
+        team.MANIFEST.write_text(json.dumps(man), 'utf-8')
+        (base / 'settings.json.bak-20261119102729870414').write_text('{"x": "python3 a.py # role-agents-suite"}', 'utf-8')
+        (base / 'settings.json.bak').write_text('{"mine": 1}', 'utf-8')
+        (base / 'settings.json.bak-figma').write_text('{"x": "# role-agents-suite"}', 'utf-8')
+        (base / 'settings.json.bak-20261001000000').write_text('{"mine": 2}', 'utf-8')
+        (base / 'agents' / 'architect.md.bak-20261119103108').write_text('old', 'utf-8')
+        (base / 'agents' / 'my-own.md.bak-20261119103108').write_text('mine', 'utf-8')
+        pl = team._plist()
+        pl.parent.mkdir(parents=True, exist_ok=True)
+        pl.write_text('<plist/>', 'utf-8')
+        CRON['text'] = '0 9 * * * echo me\n0 10 * * * python3 auto_refresh.py --run # worker-agent skills-refresh\n'
+        home = TMP / 'nosuite'
+        proj = TMP / 'proj'
+        pb = proj / '.claude'
+        (pb / 'agents').mkdir(parents=True)
+        (pb / 'role-agents').mkdir(parents=True)
+        (pb / 'agents' / 'qa-expert.md').write_text('p', 'utf-8')
+        (pb / 'role-agents' / 'manifest.json').write_text(json.dumps({'home': str(home), 'files': {'agents/qa-expert.md': {}}}), 'utf-8')
+        (pb / 'settings.json').write_text(json.dumps({'hooks': {'Stop': [suite_hook]}}), 'utf-8')
+        (home / 'state').mkdir(parents=True, exist_ok=True)
+        (home / 'state' / 'projects.json').write_text(json.dumps({'projects': [str(proj), str(TMP / 'gone')]}), 'utf-8')
+        self.assertEqual(team.team_status()['状态']['项目级安装'], [str(proj)])
+        real, team._running_sessions = team._running_sessions, lambda: ['开发 · 某期（开发中）']
+        try:
+            h, _ = call('POST', '/api/team/suite', {'action': 'remove'})
+        finally:
+            team._running_sessions = real
+        self.assertEqual(h.code, 200, h.body)
+        msg = h.body['msg']
+        self.assertIn('仍残留：无', msg)
+        self.assertIn('2 个套件留下的 .bak', msg)
+        self.assertIn('自动学习定时任务（launchd、crontab）', msg)
+        self.assertIn(f'项目级安装 {proj}/.claude', msg)
+        self.assertIn('开发 · 某期（开发中）', msg)
+        self.assertIn('到会话结束前仍能调用', msg)
+        self.assertFalse((base / 'agents' / 'tech-scout.md').exists(), '清单外套件生成的同名 agent 也删')
+        self.assertFalse((base / 'settings.json.bak-20261119102729870414').exists())
+        self.assertFalse((base / 'agents' / 'architect.md.bak-20261119103108').exists())
+        for f in ('settings.json.bak', 'settings.json.bak-figma', 'settings.json.bak-20261001000000', 'agents/my-own.md.bak-20261119103108'):
+            self.assertTrue((base / f).is_file(), f'用户自己的 {f} 不碰')
+        self.assertFalse(pl.exists())
+        self.assertIn(('unload', str(pl)), LAUNCHCTL)
+        self.assertEqual(CRON['text'].strip(), '0 9 * * * echo me', 'crontab 只删套件那一行')
+        self.assertFalse((pb / 'agents' / 'qa-expert.md').exists())
+        self.assertFalse((pb / 'role-agents').exists())
+        self.assertNotIn('role-agents-suite', (pb / 'settings.json').read_text('utf-8'))
+        self.assertEqual(team.suite_residue(), [])
+        self.assertEqual(team.team_status()['状态']['残留'], [])
+        h, _ = call('POST', '/api/team/suite', {'action': 'remove'})
+        self.assertEqual(h.code, 400, '清干净后再移除报没什么可移除的')
+        # 恢复：全部放回
+        h, _ = call('POST', '/api/team/suite', {'action': 'restore'})
+        self.assertEqual(h.code, 200, h.body)
+        self.assertIn('自动学习定时任务（launchd）', h.body['msg'])
+        self.assertEqual(len(team.installed_agents()), 16)
+        self.assertTrue((base / 'settings.json.bak-20261119102729870414').is_file())
+        self.assertTrue((base / 'agents' / 'architect.md.bak-20261119103108').is_file())
+        self.assertTrue(pl.is_file())
+        self.assertIn(('load', str(pl)), LAUNCHCTL)
+        self.assertIn('# worker-agent skills-refresh', CRON['text'])
+        self.assertIn('echo me', CRON['text'])
+        self.assertTrue((pb / 'agents' / 'qa-expert.md').is_file())
+        self.assertTrue((pb / 'role-agents' / 'manifest.json').is_file())
+        self.assertIn('role-agents-suite', (pb / 'settings.json').read_text('utf-8'))
+        CRON['text'] = ''
+
+    def test_remove_keep_projects_and_residue_reported(self):
+        """projects=false 不动项目级安装，仍残留里列出来；套件已删但有残留时，设置卡片报残留、可再点「清理残留」。"""
+        base, _, _ = self.suite_install()
+        home = TMP / 'nosuite'
+        proj = TMP / 'proj2'
+        (proj / '.claude' / 'role-agents').mkdir(parents=True)
+        (proj / '.claude' / 'role-agents' / 'manifest.json').write_text(json.dumps({'files': {}}), 'utf-8')
+        (home / 'state').mkdir(parents=True, exist_ok=True)
+        (home / 'state' / 'projects.json').write_text(json.dumps({'projects': [str(proj)]}), 'utf-8')
+        h, _ = call('POST', '/api/team/suite', {'action': 'remove', 'projects': False})
+        self.assertEqual(h.code, 200, h.body)
+        self.assertIn(f'仍残留：项目级安装：{proj}/.claude', h.body['msg'])
+        (base / 'agents').mkdir(parents=True, exist_ok=True)
+        (base / 'agents' / 'architect.md').write_text('mine', 'utf-8')     # 用户自己写的同名 agent：报残留，不删
+        left = team.team_status()['状态']['残留']
+        self.assertTrue(any('architect' in x for x in left), left)
+        self.assertTrue(any(str(proj) in x for x in left), left)
+        h, _ = call('POST', '/api/team/suite', {'action': 'remove'})   # 「清理残留」
+        self.assertEqual(h.code, 200, h.body)
+        self.assertFalse((proj / '.claude' / 'role-agents').exists())
+        self.assertEqual((base / 'agents' / 'architect.md').read_text('utf-8'), 'mine')
+        self.assertIn('仍残留：~/.claude/agents 里还有角色 agent：architect', h.body['msg'])
+        (home / 'state' / 'projects.json').unlink()
+
+    def test_remove_rejects_unsafe_manifest(self):
+        install()
+        team.MANIFEST.write_text(json.dumps({'files': {'../evil.txt': {}}}), 'utf-8')
+        h, _ = call('POST', '/api/team/suite', {'action': 'remove'})
+        self.assertEqual(h.code, 400)
+        self.assertTrue(team.MANIFEST.is_file())
+
+    def test_install(self):
+        install(manifest=False)
+        shutil.rmtree(TMP / 'home' / '.claude' / 'agents')
+        set_settings()
+        home = TMP / 'suite'
+        (home / 'scripts').mkdir(parents=True, exist_ok=True)
+        (home / 'scripts' / 'install_helper.py').write_text(
+            'import json, os, sys\n'
+            'assert "--user" in sys.argv\n'
+            'b = os.path.expanduser("~/.claude")\n'
+            'os.makedirs(b + "/agents", exist_ok=True); os.makedirs(b + "/role-agents", exist_ok=True)\n'
+            'for a in %r: open(b + "/agents/" + a + ".md", "w").write("---\\nname: " + a + "\\n---\\n")\n'
+            'json.dump({"suite_version": "9", "home": %r, "files": {}}, open(b + "/role-agents/manifest.json", "w"))\n'
+            'print("ok")\n' % (team.ALL_AGENTS, str(home)), 'utf-8')
+        h, _ = call('POST', '/api/team/suite', {'action': 'install', 'home': str(TMP / 'nope')})
+        self.assertEqual(h.code, 400)
+        h, _ = call('POST', '/api/team/suite', {'action': 'install', 'home': str(home)})
+        self.assertEqual(h.code, 200, h.body)
+        self.assertEqual(len(team.installed_agents()), 16)
+        self.assertFalse(kb.team_settings()['开启'], '新装后开关仍是关')
+        self.assertEqual(kb.load_settings()['角色团']['套件目录'], str(home))
+        self.assertEqual(team.team_status()['状态']['套件目录'], str(home))
+        h, _ = call('POST', '/api/team/suite', {'action': 'nope'})
+        self.assertEqual(h.code, 400)
 
 
 if __name__ == '__main__':

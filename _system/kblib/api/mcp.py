@@ -33,6 +33,7 @@ from kblib.bugs.analysis import bug_analysis
 from kblib.bugs.fix import bug_fixed
 from kblib.ai.talk import take_session_msgs
 from kblib.plugins.builds import builds_text
+from kblib.plugins.devrun import devrun_mcp
 from kblib.tasks.memo import task_item_set, task_items
 from kblib.stack.plan import stack_change_add, stack_plan_submit
 from kblib.stack.dev import stack_report, stack_review
@@ -58,9 +59,11 @@ INSTRUCTIONS = """本地知识库（按「期」管理需求 / 设计图 / 接�
 5. 开发按这一期的「开发流程」执行（用户在知识库网页「⚙ 设置」里配置，默认是「通用模板」），不要自行换用别的流程，除非这一期选的就是它。
    具体命令写在 kb_dev_package 的「开发约定」里。开发开始时先调用 kb_dev_prepare：它按流程定位文档目录、把本期资料拷过去并列出候选链接
    （SDD 流程：随即按 sdd-start.md 各栏注释把链接、负责范围、接口说明填进空栏，不覆盖已填内容，不用问用户，再用 /sdd-next 推进）。
-   开发中需要用户确认时（等人审阅方案 / 接口、待确认问题、方案取舍、操作被拦截等），
-   用 kb_ask 发到网页（写清问题、背景、选项、你的建议 recommend），再用 kb_wait_answer 等回答并照做，拿到回答前不要自行决定。
-   这一期开了「免打扰」时 kb_ask 会直接返回：按你的建议执行，并用 kb_log 记录理由。免打扰由用户在网页随时开关。
+   要不要问用户由你自己判断（不管开没开免打扰）：事情明确（需求清楚、有建议、不扩大范围、能回退）就直接做，做完汇报做了什么、按什么假设；
+   需要拍板的地方也照样调 kb_ask 并带 sure=true（再写 reason），知识库会判成「AI 已自动定」直接返回，网页上留痕、用户可一键改回。
+   只有真拿不准（sure=false）、要扩大范围（expands=true）、影响线上或不可回退（irreversible=true）时才会挂到网页，
+   这时用 kb_wait_answer 等回答并照做，拿到回答前不要自行决定；只问一次并给建议 recommend。验收推送、svn 提交仍由用户点。
+   这一期开了「免打扰」时连拿不准的也直接返回：按你的建议执行，并用 kb_log 记录理由。免打扰由用户在网页随时开关。
    角色团开启时，用 Agent 调专家子 agent 不算换流程；专家不替代流程命令。
 8. 基础知识库（所有期共用的基础上下文）：用户给出网站账号密码、测试某功能用的账号、Wi-Fi / 代理 / VPN、环境配置等通用信息时，
    用 kb_base_save 存进去（密码、令牌、密钥等字段标记 机密=true，只存钥匙串）；回答问题、开发、测试前先用 kb_base 查。
@@ -167,11 +170,16 @@ TOOLS = [
     ('kb_base_secret', '读取基础知识库里某个机密字段的明文（会记录读取）。只在真正执行时用（如测试时登录），'
                        '读到的值不要写进代码、文档、提交、日志或回复。',
      S(id=STR('编号，如 B001'), field=STR('字段名，如「密码」'), purpose=STR('用途，如「设备测试登录」')), ['id', 'field']),
-    ('kb_ask', '开发中向用户提一个待确认问题（显示在知识库网页并弹系统通知）。之后用 kb_wait_answer 等回答；'
-               '本期开了免打扰时直接返回，按你的建议执行。',
+    ('kb_ask', '开发中需要确认的点交给知识库判断要不要问用户。明确的事（sure=true、有 recommend、不扩大范围、可回退）直接返回'
+               '「AI 已自动定」，按建议做并 kb_log；拿不准 / 扩大范围 / 影响线上或不可回退的才显示在网页并弹通知，之后用 kb_wait_answer 等回答；'
+               '本期开了免打扰时一律直接返回，按你的建议执行。',
      S(iteration=STR('期名'), question=STR('要确认的问题，一句话说清'), context=STR('背景：为什么要问、影响什么（Markdown）'),
        options={'type': 'array', 'items': {'type': 'string'}, 'description': '可选方案（用户可点选，也可自己写）'},
-       recommend=STR('你的建议方案（免打扰时按它执行）'), stage=STR('阶段，如 需求分析 / 技术规划 / TASK-3'),
+       recommend=STR('你的建议方案（自动定 / 免打扰时按它执行）'), stage=STR('阶段，如 需求分析 / 技术规划 / TASK-3'),
+       sure={'type': 'boolean', 'description': '你对建议有没有把握：问题明确、有依据、换个人也会这么定 = true；拿不准 = false（不填按拿不准）'},
+       expands={'type': 'boolean', 'description': '建议会不会扩大范围（做原来没要求的事、改别的模块 / 端）'},
+       irreversible={'type': 'boolean', 'description': '会不会影响线上或不可回退（推送、提交 svn、发版、删数据、改线上配置）'},
+       reason=STR('自动定时网页上显示的理由，一句话：按什么依据 / 假设定的'),
        files={'type': 'array', 'items': {'type': 'string'}, 'description': '相关文件绝对路径（如 prd.md），网页上可点开'}),
      ['iteration', 'question']),
     ('kb_wait_answer', '等待用户在网页回答 kb_ask 提的问题（每次最多等几分钟，没回答就再调一次）。',
@@ -186,6 +194,15 @@ TOOLS = [
        serials={'type': 'array', 'items': {'type': 'string'}, 'description': '一般不填。点名的不可用时自动换成空闲手机'},
        strict={'type': 'boolean', 'description': '确实要特定那台（如 case 要求特定机型）才设 true：严格按 serials，不换'},
        reason=STR('用途，如「TASK-5 多人送礼：主持 + 2 个麦上用户」')), ['iteration']),
+    ('kb_run_on_device', '把某一期 / 事项的工程（当前工作区代码，不切分支、不拉代码）编译、装到手机并拉起启动页：用户说「把 xx 跑到手机上」'
+                         '「装到手机上看看」时用。现在只支持 Android（./gradlew <模块>:install<变体> → adb 拉起）；手机走占用机制，'
+                         '没点名自动挑本期占着的或空闲的，别的期占着的不装；工程被别的会话占着时排队。默认等它结束并返回结果和错误摘要；'
+                         'wait=false 只启动（任务是独立后台进程，网页开发面板「📱 手机」看实时日志）。',
+     S(iteration=STR('期名或事项名'), repo=STR('工程路径，空 = 这一期的开发仓库（有多个时优先 Android 工程）'),
+       serial=STR('手机序列号，一般不填（自动分配）'), module=STR('application 模块，如 :app；空 = 设置里记住的或自动识别'),
+       variant=STR('变体，如 debug、prodDebug；空 = 设置里记住的或 debug'),
+       wait={'type': 'boolean', 'description': '是否等编译安装结束，默认 true'},
+       job=STR('已有任务号：查它的结果 / 接着等，不新开任务')), ['iteration']),
     ('kb_device_release', '释放这一期占着的手机（测完就释放，别的期才能用）。',
      S(iteration=STR('期名'), serials={'type': 'array', 'items': {'type': 'string'}, 'description': '只释放这些；空 = 全部'}),
      ['iteration']),
@@ -294,8 +311,10 @@ TOOLS = [
        how=STR('用法，如：java -jar decode.jar <日志> 或 python decode.py -k key.bin <日志>'),
        kind={'type': 'string', 'enum': ['程序', '文件', '工程'], 'description': '不传按路径判断'}, source=STR('来自谁')), ['iteration']),
     ('kb_propose_push', '在网页「问管家」对话里放一个「▶ 推动」确认按钮（带默认工程和分支），用户点了就开始分析、修改、自测。'
-                        '推动 / 修复要动代码，必须这样让用户点，不要自己推动，也不要让用户自己去页面找。',
-     S(iteration=STR('事项名')), ['iteration']),
+                        '推动 / 修复要动代码，必须这样让用户点，不要自己推动，也不要让用户自己去页面找。'
+                        '认出了该用哪个工程和分支（如改知识库自己 → 知识库仓库、main）就必须带上 repo / branch：卡片直接用它，并记进事项，下次推动不用再选。',
+     S(iteration=STR('事项名'), repo=STR('工程目录（本机路径，如 /Users/me/app）；认出了就必填'),
+       branch=STR('分支，如 main；认出了就必填')), ['iteration']),
     ('kb_steward', '管家现在的情况：待你处理 / 问你 / 建议的卡片、今天自动做了什么、日报。用户问「我现在该干嘛」「有什么要我处理」时用。', S(), []),
     ('kb_anr_link', '把 ANR / 崩溃问题关联到事项：task 写已有事项名，或「＋新建」自动建一个「ANR/崩溃」事项；空字符串 = 取消关联。'
                     '也可以设 version 给版本不明的样本补版本号。用户说了才改。',
@@ -392,13 +411,17 @@ def _call_tool(name, a):
         return base_secret(g('id'), g('field'), purpose=g('purpose') or '')
     if name == 'kb_ask':
         return ask(g('iteration'), g('question'), g('context') or '', g('options'), g('recommend') or '',
-                   g('files'), g('stage') or '')
+                   g('files'), g('stage') or '', sure=g('sure'), expands=g('expands'),
+                   irreversible=g('irreversible'), reason=g('reason') or '')
     if name == 'kb_wait_answer':
         return wait_answer(g('iteration'), g('id'), g('timeout') or 240) + take_notices(g('iteration'))
     if name == 'kb_devices':
         return devices_text(g('iteration'))
     if name == 'kb_device_claim':
         return device_claim(g('iteration'), g('count') or 1, g('serials'), g('reason') or '', bool(g('strict')))
+    if name == 'kb_run_on_device':
+        return devrun_mcp(g('iteration'), g('repo') or '', g('serial') or '', g('module') or '', g('variant') or '',
+                          g('wait') is not False, g('job') or '')
     if name == 'kb_device_release':
         return device_release(g('iteration'), g('serials'))
     if name == 'kb_issue':
@@ -460,7 +483,7 @@ def _call_tool(name, a):
         from kblib.steward.logpack import decrypt_add
         return decrypt_add(g('iteration'), g('path') or '', g('url') or '', g('how') or '', g('kind') or '', g('source') or '')
     if name == 'kb_propose_push':
-        return propose_push(g('iteration'))
+        return propose_push(g('iteration'), g('repo') or '', g('branch') or '')
     if name == 'kb_steward':
         return steward_text()
     if name == 'kb_anr_link':

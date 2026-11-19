@@ -190,6 +190,7 @@ button.danger{border-color:var(--warn);color:var(--warn)}
 #askPanel .aa{align-self:flex-start;background:var(--soft);border-radius:12px 12px 12px 2px;padding:7px 11px;max-width:92%;overflow-wrap:anywhere}#askPanel .aa p{margin:4px 0}#askPanel .aa.err{color:var(--s4)}
 #askPanel .prop,.stc .prop{margin-top:8px;padding:8px 10px;border:1px solid var(--acc);border-radius:10px;background:var(--card);display:grid;gap:6px;font-size:13px}
 #askPanel .prop select,#askPanel .prop input,.stc .prop select,.stc .prop input{width:100%;min-width:0}
+#askPanel .prop [data-pmore],.stc .prop [data-pmore]{display:grid;gap:6px}#askPanel .prop [hidden],.stc .prop [hidden]{display:none!important}
 #askPanel .files{padding:0 12px}#askPanel .files span{display:inline-block;background:var(--soft);border-radius:6px;padding:2px 8px;margin:6px 6px 0 0}
 #askPanel.drop{outline:3px dashed var(--acc);outline-offset:-6px}
 #askPanel .ft{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--line)}#askPanel .ft textarea{flex:1;resize:none}

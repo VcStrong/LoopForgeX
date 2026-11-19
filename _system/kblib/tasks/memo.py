@@ -16,6 +16,7 @@ from kblib.core.notes import note_title, notes_of
 from kblib.ai.devsession import _NO_BG, _dev_spawn, _session_id, dev_chat, dev_session
 from kblib.bugs.index import zt_load
 from kblib.anr.store import anr_problems
+from kblib.infra.autopush import push_tip
 
 ITEM_STATES = ('待处理', '推动中', '已解决', '没解决', '待确认')
 
@@ -144,7 +145,7 @@ def _item_prompt(d, m, x, note, fresh):
             + ('\n\n事项的补充信息：\n' + '\n'.join(sup) if sup else '')
             + '\n\n不走开发流程（不用 SDD、不用 kb_dev_package / kb_dev_prepare），怎么查、怎么改你自己判断：'
               '仓库不在补充里的分支上时，自己看有没有未提交的改动、能不能安全切换（不能就 kb_ask）；'
-              '要改代码先用 kb_ask 说清根因和改法、等确认（kb_ask 提示免打扰就按你的建议做）；改完自测，按仓库惯例提交，不 push（推送由知识库在会话结束后按事项的「自动推送」开关做）。'
+              '要改代码先用 kb_ask 说清根因和改法：根因清楚、改法明确、不扩大范围的带 sure=true，知识库会直接自动定、不用等；拿不准的才等确认（提示免打扰就按你的建议做）；改完自测，按仓库惯例提交，' + push_tip(m, '事项') + '。'
             + f'\n最后用 kb_task_item（iteration=「{d.name}」，item={x["键"]}）记下这一条的结论（状态：已解决 / 没解决 / 待确认；结论一两句：根因、改了什么、提交号）。'
               '这一组里别的条目不用管，和这一条同一个根因的在结论里写明。不要改事项的状态。')
 

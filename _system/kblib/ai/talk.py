@@ -24,6 +24,7 @@ from kblib.ai import supervise as _sup
 from kblib.ai.devsession import DEV_DIR, PUSH_RULE, _NO_BG, _alive, _deliver_now, _dev_env, _dev_spawn, _head, _notify, _session_id, _session_push, dev_chat, dev_session
 from kblib.bugs.index import zt_load
 from kblib.infra import timing
+from kblib.infra.autopush import push_tip
 from kblib.bugs.analysis import _an_load, _an_save, an_sessions
 from kblib import lazy
 _stackdev = lazy('kblib.stack.dev')      # 上层模块：用到时才 import
@@ -144,7 +145,7 @@ def _push_prompt(name, root, branch, text, resumed, stack=False):
 
 这一期没有会话在跑，这是后续发现的问题或要扩展的业务功能，请推动解决：
 1. 先 kb_dev_package 读开发包（开发约定、流程、分支、文档目录），判断这是：只需回答的问题 / 要改代码的缺陷或需求扩展 / 要补的资料。{rule}
-2. 要改代码的：按这一期的开发约定在分支 {branch or '（按开发包）'} 上改、自测、按约定提交；改法或范围有取舍时用 kb_ask 确认后再改（kb_ask 提示免打扰就按你的建议执行）。
+2. 要改代码的：按这一期的开发约定在分支 {branch or '（按开发包）'} 上改、自测、按约定提交；改法明确就直接改；真有取舍（拿不准、要扩大范围）时用 kb_ask 确认后再改（返回自动定或免打扰就按你的建议执行）。
 3. 和原需求 / 方案文档不一致的，同步更新这一期的流程文档；缺账号、环境等先查 kb_base，查不到再 kb_ask。
 4. 做完 kb_log 记一条：做了什么、改了哪些文件、提交号；回复里简短说明结果。
 {'' if stack else PUSH_RULE + '。' + chr(10)}不要改这一期的状态，不要做用户没提到的开发。""" + extra + _NO_BG
@@ -161,7 +162,7 @@ def _task_prompt(d, m, root, branch, text, resumed):
 {text}
 
 接着上面的上下文继续做（比如上次只改了代码，这次让你编译校验，就去编译、跑相关测试并说明结果）。不走开发流程，不用 SDD；
-要再改代码先用 kb_ask 说清改法（提示免打扰就按你的建议做）；提交按仓库惯例，不 push（推送由知识库在会话结束后按这一期的「自动推送」开关做）。和某一条的结果有关的，用 kb_task_item 更新那一条的结论。
+要再改代码时改法明确就直接改，拿不准才用 kb_ask 说清改法（返回自动定或免打扰就按你的建议做）；提交按仓库惯例，{push_tip(m)}。和某一条的结果有关的，用 kb_task_item 更新那一条的结论。
 回复里简短说明做了什么、结果如何。不要改事项的状态。""" + _NO_BG
 
 

@@ -103,6 +103,13 @@ if [ "${MCP}" = 1 ]; then
   fi
 fi
 
+# 5b. 和本机团队一致：管家规矩、管家设置随程序里的 _system/团队默认.json 自动补上；
+#     这里再放行 kb 工具（~/.claude/settings.json 的 permissions.allow 加 mcp__kb，合并不覆盖）、
+#     这台 claude 不支持 --permission-mode auto 时把后台会话改成 acceptEdits + 放行工具，并提示绕过知识库装的角色套件残留
+FIX=auto; [ "${MCP}" = 1 ] && FIX=allow,auto,mcp
+"${DIR}/kb" doctor --fix "${FIX}" 2>&1 | sed 's/^/    /' || warn "体检没跑完：装好后运行 kb doctor 看一下"
+ok "体检完成（随时可以 kb doctor 或网页「⚙ 设置 → 🩺 体检」再看；✗ 角色套件残留去「设置 → 角色团 → 🗑 移除」）"
+
 # 6. 网页访问密码（监听的不是本机地址时必须有）
 case "${HOST}" in 127.0.0.1|localhost|::1) ;; *)
   if ! "${VENV}/bin/python" -c "import sys; sys.path.insert(0, '${DIR}/_system'); import kb; sys.exit(0 if kb.auth_required() else 1)"; then

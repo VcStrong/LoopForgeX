@@ -65,3 +65,61 @@ async function installDlg(name,build){
       st.innerHTML=`<div style="color:var(--warn)">安装失败（占用状态没变）：</div><pre class="small" style="white-space:pre-wrap;max-height:240px;overflow:auto">${esc(j['输出'])}</pre>`;return}};
   $('#inGo').onclick=()=>go();
 }
+
+// ---------------- ▶ 运行到手机：用当前工作区代码编译、装到手机并拉起启动页（kblib/plugins/devrun.py）
+// 入口：开发面板「📱 手机」、全栈各端行、事项「补充」的工程旁；任何带 data-devrun="期名"（可带 data-repo）的元素点了都打开这个弹框
+document.addEventListener('click',e=>{const b=e.target.closest&&e.target.closest('[data-devrun]');if(!b)return;e.preventDefault();runDlg(b.dataset.devrun,b.dataset.repo||'',b.dataset.serial||'')});
+const drBusy=s=>!['成功','失败','已取消'].includes(s);
+async function runDlg(name,repo,serial){
+  openDlg('▶ 运行到手机','<span class="mut small">读取工程和手机…</span>');
+  let o;try{o=await api('/api/devrun/options?name='+enc(name)+'&repo='+enc(repo||''))}catch(e){$('#dlgB').innerHTML=`<div class="small" style="color:var(--warn)">${esc(e.message)}</div>`;return}
+  if(o['在跑'])return drWatch(name,o['在跑']['编号']);
+  const r=o['工程'].find(x=>x['路径']===o['当前'])||o['工程'][0],ph=o['手机'],ok=o['平台支持'].includes(r['平台']);
+  const pick=(ph.find(p=>p['可装']&&p['序列号']===serial)||ph.find(p=>p['可装'])||{})['序列号'];
+  const cands=r['模块候选']||[],mod=r['记住模块']||(cands[0]||{})['模块']||'',vr=r['记住变体']||'debug',last=o['上次'];
+  const plat=x=>x['平台']||'认不出';
+  $('#dlgB').innerHTML=`<div class="form">
+    <p class="small mut" style="margin:0">用工程<b>当前工作区</b>的代码编译（不切分支、不拉代码；代码更新按「⚙ 设置 → ⏱ 时机 → 运行到手机前」，现在：${esc(r['代码更新']||'不动')}），装到手机并拉起启动页。工程被别的会话占着时自动排队。</p>
+    <label>工程${o['工程'].length>1?'':' <span class="mut small">（'+esc(plat(r))+'）</span>'}${o['工程'].length>1?`<select id="drRepo">${o['工程'].map(x=>`<option value="${esc(x['路径'])}" ${x['路径']===r['路径']?'selected':''}>${esc(x['端']?x['端']+' · ':'')}${esc(x['名称'])}（${esc(plat(x))}）</option>`).join('')}</select>`:`<div class="mono small">${esc(r['路径'])}</div>`}</label>
+    ${r['分支']!==undefined?`<div class="small">📍 <span class="mono">${esc(r['分支']||'?')} @${esc(r['提交']||'?')}</span>${r['未提交']?` · <span style="color:var(--warn)">${r['未提交']} 个未提交改动（会一起编进去）</span>`:''}
+      ${o['期分支']&&r['分支']&&o['期分支']!==r['分支']?`<div style="color:var(--warn)">这一期的分支是 <span class="mono">${esc(o['期分支'])}</span>，工作区现在在 <span class="mono">${esc(r['分支'])}</span>：按工作区现在的代码编译（不切分支）</div>`:''}</div>`:''}
+    ${!ok?`<div class="small" style="color:var(--warn)">${r['平台']?esc(r['平台'])+' 工程的「运行到手机」还没做（现在只支持 Android），后续再加。':'认不出是什么工程（没有 gradlew + settings.gradle）：现在只支持 Android gradle 工程。'}</div>`:`
+    <div class="row" style="gap:8px;flex-wrap:wrap"><label style="flex:1;min-width:160px">模块 <span class="mut small">${cands.length?'（自动识别到 '+cands.length+' 个）':'（没识别到，手动填）'}</span><input type="text" id="drMod" class="mono" list="drModL" value="${esc(mod)}" placeholder=":app"><datalist id="drModL">${cands.map(c=>`<option value="${esc(c['模块'])}">${esc(c['目录'])}${c['有渠道']?' · 有渠道，变体要写全':''}</option>`).join('')}</datalist></label>
+      <label style="width:180px">变体 <input type="text" id="drVar" class="mono" value="${esc(vr)}" placeholder="debug"></label></div>
+    <label class="row small" style="gap:4px"><input type="checkbox" id="drRem" style="width:auto;margin:0"> 记住到这个工程（也可在「⚙ 设置 → 按工程」改）</label>
+    <div><div class="small" style="margin-bottom:4px">手机 <span class="mut">（只装到能用的：本期占着的或空闲的；别的期 / 本人在用的不装）</span></div>${!o['adb']?'<div class="small" style="color:var(--warn)">本机找不到 adb：装好 Android SDK platform-tools 后再试</div>':ph.length?ph.map((x,i)=>`<label class="row small" style="gap:6px;color:${x['可装']?'var(--fg)':'var(--mut)'}"><input type="radio" name="drS" value="${esc(x['序列号'])}" ${x['序列号']===pick?'checked':''} ${x['可装']?'':'disabled'}>
+      <b>${esc(x['型号']||'未知型号')}</b> <span class="mono">${esc(x['序列号'])}</span> · ${esc(x['说明'])}</label>`).join(''):'<div class="small mut">没有连着的手机</div>'}</div>
+    <div class="row"><button class="pri" id="drGo" ${ph.some(x=>x['可装'])?'':'disabled'}>▶ 编译并运行</button></div>`}
+    ${last?`<div class="small mut">上次（${esc(last['开始'])}）：${esc(last['状态'])} · ${esc(last['工程名'])}@${esc(last['分支']||'?')}@${esc(last['提交']||'?')} → ${esc(last['型号']||'')}（${esc(last['序列号'])}）　<a data-drlast="${esc(last['编号'])}">看日志</a></div>`:''}</div>`;
+  if($('#drRepo'))$('#drRepo').onchange=e=>runDlg(name,e.target.value,serial);
+  const lb=document.querySelector('[data-drlast]');if(lb)lb.onclick=()=>drWatch(name,lb.dataset.drlast);
+  if(!$('#drGo'))return;
+  $('#drGo').onclick=async()=>{const s=document.querySelector('input[name="drS"]:checked');if(!s)return toast('选一台手机');
+    const b=$('#drGo');b.disabled=true;
+    try{const j=(await post('/api/devrun',{period:name,repo:r['路径'],serial:s.value,module:$('#drMod').value.trim(),variant:$('#drVar').value.trim(),remember:$('#drRem').checked})).job;drWatch(name,j)}
+    catch(e){b.disabled=false;toast(e.message)}};
+}
+async function drWatch(name,jid){
+  $('#dlgT').textContent='▶ 运行到手机';
+  $('#dlgB').innerHTML=`<div class="form"><div id="drHd" class="small"></div><div id="drSt" class="small"></div>
+    <pre id="drLog" class="small mono" style="white-space:pre-wrap;max-height:320px;min-height:120px;overflow:auto;background:var(--soft);padding:6px;margin:0"></pre>
+    <div class="row" id="drAct"></div></div>`;
+  for(;;){if(!$('#drLog'))return;
+    let j;try{j=await api('/api/devrun/job?id='+enc(jid))}catch(e){$('#drSt').textContent=e.message;return}
+    if(!$('#drLog'))return;
+    $('#drHd').innerHTML=`<b>${esc(j['工程名'])}</b> <span class="mono">${esc(j['分支']||'')}${j['提交']?' @'+esc(j['提交']):''}</span> · <span class="mono">${esc(j['模块'])}:install${esc(j['变体'][0].toUpperCase()+j['变体'].slice(1))}</span> → <b>${esc(j['型号']||'')}</b> <span class="mono">${esc(j['序列号'])}</span>　<span class="mut">${esc(j['开始'])} · ${esc(j['发起'])}</span>`;
+    const L=$('#drLog'),atEnd=L.scrollTop+L.clientHeight>=L.scrollHeight-20;L.textContent=(j['日志']||[]).join('\n');if(atEnd)L.scrollTop=L.scrollHeight;
+    const busy=drBusy(j['状态']);
+    $('#drSt').innerHTML=busy?`<span class="badge st-开发中">● ${esc(j['状态'])}</span> ${esc(j['步骤']||'')}`
+      :j['状态']==='成功'?`<b style="color:var(--s3)">✓ 已装好并启动</b>　${esc(j['摘要']||'')}<div class="mut">已记到这一期的记录；手机记为本期占用（沿用超时释放）</div>`
+      :j['状态']==='已取消'?`<span class="mut">已取消</span>`
+      :`<b style="color:var(--s4)">✗ 失败</b><pre class="small" style="white-space:pre-wrap;color:var(--s4);margin:4px 0">${esc(j['摘要']||'')}</pre>${(j['可选变体']||[]).length?`<div>选一个变体重新运行：${j['可选变体'].slice(0,12).map(v=>`<button class="small" data-drv="${esc(v)}">${esc(v)}</button>`).join(' ')}</div>`:''}`;
+    $('#drAct').innerHTML=busy?'<button id="drStop" class="danger">■ 取消</button><span class="mut small">关掉弹框不影响后台编译；再点「▶ 运行到手机」能回到这里</span>':'<button id="drAgain">▶ 再运行一次</button>';
+    if($('#drStop'))$('#drStop').onclick=async()=>{if(!await kbConfirm('取消这次编译 / 安装？'))return;try{toast((await post('/api/devrun/cancel',{id:jid})).msg)}catch(e){toast(e.message)}};
+    if($('#drAgain'))$('#drAgain').onclick=()=>runDlg(name,j['工程']);
+    $('#dlgB').querySelectorAll('[data-drv]').forEach(b=>b.onclick=async()=>{b.disabled=true;
+      try{drWatch(name,(await post('/api/devrun',{period:name,repo:j['工程'],serial:j['序列号'],module:j['模块'],variant:b.dataset.drv,remember:true})).job)}catch(e){b.disabled=false;toast(e.message)}});
+    if(!busy)return;
+    await new Promise(f=>setTimeout(f,1200));
+  }
+}

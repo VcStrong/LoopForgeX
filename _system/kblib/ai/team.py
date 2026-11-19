@@ -4,7 +4,10 @@
   各会话入口只传 scene（管家 / 流程设计 / 需求 / 方案 / Bug分析·<端> / Bug修复·<端> / 开发 / 开发·<端> / 审查·<端> / 跟进 / 发布）。
   只对本机 Claude 引擎生效；全局关、期选「关」、scene 为空、续跑、远程主机会话都返回空串（命令行和现在逐字一致）。
 
-  设置.json「角色团」{开启, 档位: 精简 / 标准, 每期上限}；期信息「角色团」= 关（不存 = 跟随全局）、「角色调用」{合计, 按角色, 超限已记}。
+  设置.json「角色团」{开启, 档位: 精简 / 标准, 套件目录}；期信息「角色团」= 关（不存 = 跟随全局）、「角色调用」{合计, 按角色}（只统计，不设上限）。
+  角色套件只协助、不设卡：没有每期次数上限；新装知识库默认关（设置.json 没有「角色团」时：本机已装套件 = 老用户保持开，没装 = 关）。
+  套件可在设置页安装（调套件 scripts/install_helper.py --user）/ 移除 / 恢复。移除按 manifest 清单删，连同套件留下的 .bak、自动学习定时任务、
+  项目级安装一并清掉，删前全部备份到 _system/cache/角色套件备份/；删完逐项自检，结果列「已删 / 仍残留」，并提示已开会话到结束前仍能调用。
   场景表（契约，CR-001）：套件安装到 ~/.claude/role-agents/config/kb_scenes.json；文件缺失、解析失败、版本不是 1 时整表用内置兜底表，
   文件里缺某个场景（或缺当前档位名单）时该场景用兜底表的同名场景。不读 team.yaml：派单直接取当前档位的显式名单，再按已装 agent 过滤。
   统计：会话结束时从 stream-json 日志数主会话的 Agent / Task 调用（子 agent 自己的调用带 parent_tool_use_id，不算），
@@ -35,7 +38,7 @@ ROLE_CN = {'product-manager': '产品经理', 'ux-designer': '体验设计师', 
            'model-algorithm-engineer': '模型与算法工程师', 'ai-infra-mlops': 'AI Infra 工程师', 'ai-eval-compliance': 'AI 评测与合规专家',
            'orchestrator': '总控', 'tech-scout': '技术情报员'}
 TIERS = ('精简', '标准')
-DEFAULTS = {'开启': True, '档位': '精简', '每期上限': 30}       # 每期上限：设置.json 没有时用场景表「每期上限默认」，再没有用 30
+DEFAULTS = {'开启': False, '档位': '精简'}       # 默认关；设置.json 没有「角色团」但本机已装套件的老用户保持开（见 team_settings）
 # P0 验证（2026-11-16，记在期「角色团接入知识库」）：子 agent 继承 --disallowedTools（Write 不可用），Agent 可传 model。
 # 改成 False：只读场景只派场景表「只读安全角色」（主导被滤掉由 architect 顶）；自动场景不派「自动场景不派」里的角色（而不是指定 sonnet）。
 P0_INHERITS_DISALLOWED = True
@@ -51,7 +54,6 @@ _BUILTIN = {
     '只读安全角色': ['product-manager', 'ux-designer', 'qa-expert', 'architect'],
     '自动场景不派': ['product-manager', 'architect', 'ai-product-manager'],
     '自动场景模型': 'sonnet',
-    '每期上限默认': 30,
     '产物目录': '其他资料/角色产物',
     '场景': {
         '管家': {'触发': '问管家：涉及流程或需求设计时派产品经理，涉及技术时派架构师；只是问答不派', '上限': 1, '只读': True,
@@ -103,37 +105,29 @@ _BUILTIN = {
 
 # ---------------------------------------------------------------- 设置与状态
 def team_settings():
-    s = load_settings().get('角色团') or {}
+    raw = load_settings().get('角色团')
+    s = raw if isinstance(raw, dict) else {}
     out = dict(DEFAULTS)
-    try:
-        dft = load_scenes()[0].get('每期上限默认')
-        if isinstance(dft, int) and not isinstance(dft, bool) and 0 <= dft <= 200:
-            out['每期上限'] = dft
-    except Exception:          # noqa: BLE001 — 场景表坏了也不影响读设置
-        pass
+    if raw is None and _manifest() is not None:
+        out['开启'] = True          # 老用户：以前默认开、已装了套件，保持现状
     if isinstance(s.get('开启'), bool):
         out['开启'] = s['开启']
     if s.get('档位') in TIERS:
         out['档位'] = s['档位']
-    if isinstance(s.get('每期上限'), int) and not isinstance(s.get('每期上限'), bool) and 0 <= s['每期上限'] <= 200:
-        out['每期上限'] = s['每期上限']
     return out
 
 
-def _int_limit(v):
-    if isinstance(v, bool):
-        raise KBError('每期上限要是 0 到 200 之间的整数')
-    try:
-        n = int(v) if isinstance(v, int) or (isinstance(v, str) and re.fullmatch(r'\s*\d+\s*', v)) else None
-    except ValueError:
-        n = None
-    if n is None or isinstance(v, float) or not 0 <= n <= 200:
-        raise KBError('每期上限要是 0 到 200 之间的整数')
-    return n
+def _save_team(**kw):
+    """写设置.json「角色团」：先把当前生效值写全（老用户的隐式「开」落成显式），再改传了的字段；其他字段（套件目录）原样保留。"""
+    s = load_settings()
+    cur = s.get('角色团') if isinstance(s.get('角色团'), dict) else {}
+    cur.pop('每期上限', None)       # 旧版字段：已去掉
+    s['角色团'] = {**cur, **team_settings(), **kw}
+    save_settings(s)
 
 
 def set_team(on=None, tier=None, limit=None):
-    """网页「⚙ 设置 → AI 引擎 → 角色团」：只传要改的字段。"""
+    """网页「⚙ 设置 → 角色团」：只传要改的字段。limit 是旧版的每期上限，已去掉，传了也忽略。"""
     cur = team_settings()
     new = dict(cur)
     if on is not None:
@@ -142,14 +136,11 @@ def set_team(on=None, tier=None, limit=None):
         if tier not in TIERS:
             raise KBError(f'档位只能是：{"、".join(TIERS)}')
         new['档位'] = tier
-    if limit not in (None, ''):
-        new['每期上限'] = _int_limit(limit)
-    if new == cur and (load_settings().get('角色团') or None) is not None:
+    raw = load_settings().get('角色团')
+    if new == cur and isinstance(raw, dict) and '每期上限' not in raw:
         return '没有变化'
-    s = load_settings()
-    s['角色团'] = new
-    save_settings(s)
-    return '角色团' + ('已关闭：后台会话不再派角色' if not new['开启'] else f'已开启（{new["档位"]}档，每期最多调用 {new["每期上限"]} 次）')
+    _save_team(**new)
+    return '角色团' + ('已关闭：后台会话不再派角色' if not new['开启'] else f'已开启（{new["档位"]}档）')
 
 
 def set_period_team(period, mode='跟随', by='用户（网页）'):
@@ -269,8 +260,62 @@ def _kb_linked():
         return False
 
 
+ROLE_DUTY = {'product-manager': '需求、PRD、验收标准、范围取舍', 'ux-designer': '交互、视觉、设计稿走查', 'architect': '技术方案、选型、Code Review',
+             'frontend-engineer': 'Web / H5 / 管理后台实现', 'client-engineer': 'Android / iOS / 鸿蒙 / 小程序实现',
+             'backend-engineer': '服务端、数据库、数据链路', 'qa-expert': '测试策略、用例、复现与影响面', 'sre-security': '发布、灰度、监控、安全',
+             'data-growth': '埋点、数据分析、运营增长', 'ai-product-manager': 'AI 功能该不该做、怎么衡量', 'ai-app-engineer': '大模型应用、RAG、Agent',
+             'model-algorithm-engineer': '推荐 / 搜索 / 训练微调', 'ai-infra-mlops': '推理部署、MLOps', 'ai-eval-compliance': 'AI 评测与安全合规',
+             'orchestrator': '总控：拆阶段、选角、调度（/orchestrate 用）', 'tech-scout': '侦察技术变化、更新技能（/skills-refresh 用）'}
+
+
+def _agent_desc(path):
+    """agent .md 头部 description 里「什么时候用我：」那一句（没有就第一句）；读不到返回空串。"""
+    try:
+        head = read_text(path).split('\n---', 1)[0]
+    except OSError:
+        return ''
+    mm = re.search(r'^description:\s*(.+)$', head, re.M)
+    if not mm:
+        return ''
+    d = mm.group(1).strip().strip('"\'')
+    return (d.split('什么时候用我：', 1)[1] if '什么时候用我：' in d else d).split('。')[0]
+
+
+def _scene_map(tier):
+    """{agent: [场景（主导）…]}：按这一档的场景表反查，@端 算各端工程师。"""
+    t, _ = load_scenes(tier)
+    ends = set((t.get('端角色') or _BUILTIN['端角色']).values())
+    where = {}
+    for name, c in (t.get('场景') or {}).items():
+        pick = c.get(tier) or {}
+        for r in [pick.get('主导')] + list(pick.get('参与') or []):
+            for x in (sorted(ends) if r == '@端' else [r] if r else []):
+                lst = where.setdefault(x, [])
+                if name not in [y.split('（')[0] for y in lst]:
+                    lst.append(name + ('（主导）' if r == pick.get('主导') else ''))
+    return where
+
+
+def agent_list(tier=None):
+    """设置卡片：套件全部 agent → [{名称, 中文名, 负责, 说明, 已安装, 场景, 其他档场景}]。
+    场景 = 当前档位会被派的场景；其他档场景 = 换到另一档才会派的。"""
+    tier = tier or team_settings()['档位']
+    other = next(x for x in TIERS if x != tier)
+    cur, alt = _scene_map(tier), _scene_map(other)
+    home = (_manifest() or {}).get('home') or _suite_home()
+    have = set(installed_agents())
+    out = []
+    for a in ALL_AGENTS:
+        f = AGENTS_DIR / f'{a}.md' if a in have else (Path(home) / 'agents' / f'{a}.md' if home else None)
+        names = [x.split('（')[0] for x in cur.get(a, [])]
+        out.append({'名称': a, '中文名': role_cn(a), '负责': ROLE_DUTY.get(a, ''), '说明': _agent_desc(f) if f else '',
+                    '已安装': a in have, '场景': cur.get(a, []), '其他档': other,
+                    '其他档场景': [x for x in alt.get(a, []) if x.split('（')[0] not in names]})
+    return out
+
+
 def team_status():
-    """设置卡片用：开关 / 档位 / 每期上限 + 安装状态（契约 TeamSettings）。"""
+    """设置卡片用：开关 / 档位 + 安装状态 + 全部 agent + 备份（契约 TeamSettings）。"""
     from kblib.ai.engines import get_engine        # 同层；engines 也要 import 本模块，放到用时
     st = team_settings()
     man = _manifest()
@@ -281,10 +326,466 @@ def team_status():
         dft = False
     _, src = load_scenes()
     diff = scene_diff()
+    home = _suite_home()
     st['状态'] = {'已安装': len(have), '应有': len(ALL_AGENTS), '缺': [a for a in ALL_AGENTS if a not in have],
                  '套件版本': (man or {}).get('suite_version', '') if man else '', '套件已装': man is not None,
-                 'kb接入': _kb_linked(), '场景表': src, '场景表差异': diff or [], '默认引擎支持': dft, '安装命令': INSTALL_HINT}
+                 'kb接入': _kb_linked(), '场景表': src, '场景表差异': diff or [], '默认引擎支持': dft, '安装命令': INSTALL_HINT,
+                 '套件目录': home or '', '套件目录可用': bool(home and _helper(home).is_file()), '备份': _backups()[:5],
+                 '项目级安装': _projects(home), '残留': [] if man is not None else suite_residue()}
+    st['角色'] = agent_list(st['档位'])
     return st
+
+
+# ---------------------------------------------------------------- 安装 / 移除 / 恢复（只动套件 manifest 清单里的文件）
+SUITE_MARK = 'role-agents-suite'       # 套件 settings_merge.py 给自己的 hook 打的标记
+
+
+def _base():
+    return AGENTS_DIR.parent           # ~/.claude（测试里换成临时目录）
+
+
+def _backup_root():
+    from kblib.core.common import SYS
+    return SYS / 'cache' / '角色套件备份'
+
+
+def _helper(home):
+    return Path(home).expanduser() / 'scripts' / 'install_helper.py'
+
+
+def _suite_home():
+    """套件仓库目录：设置里记的 > manifest 的 home > 最近备份 manifest 的 home > ~/Documents/worker-agent、~/worker-agent。"""
+    cands = [(load_settings().get('角色团') or {}).get('套件目录') if isinstance(load_settings().get('角色团'), dict) else None,
+             (_manifest() or {}).get('home')]
+    for b in _backups()[:1]:
+        try:
+            cands.append(json.loads(read_text(_backup_root() / b['名称'] / 'manifest.json')).get('home'))
+        except (OSError, ValueError):
+            pass
+    cands += [str(Path.home() / 'Documents' / 'worker-agent'), str(Path.home() / 'worker-agent')]
+    for c in cands:
+        if c and _helper(c).is_file():
+            return str(Path(c).expanduser())
+    return next((str(c) for c in cands if c), '')
+
+
+def _backups():
+    root = _backup_root()
+    if not root.is_dir():
+        return []
+    out = []
+    for d in sorted(root.iterdir(), reverse=True):
+        if (d / 'manifest.json').is_file():
+            try:
+                info = json.loads(read_text(d / '备份说明.json'))
+            except (OSError, ValueError):
+                info = {}
+            out.append({'名称': d.name, '文件数': info.get('文件数', 0), '套件版本': info.get('套件版本', ''), '已恢复': bool(info.get('已恢复'))})
+    return out
+
+
+def _settings_json():
+    p = _base() / 'settings.json'
+    try:
+        return json.loads(read_text(p) or '{}'), p
+    except (OSError, ValueError):
+        return None, p
+
+
+def _split_hooks(settings):
+    """settings.json 的 hooks 拆成 (去掉套件标记 hook 后的 hooks, 套件的 hooks {事件: [组]})。"""
+    keep, ours = {}, {}
+    for ev, groups in ((settings or {}).get('hooks') or {}).items():
+        for g in groups if isinstance(groups, list) else []:
+            hs = (g or {}).get('hooks') or []
+            mine = [h for h in hs if SUITE_MARK in str((h or {}).get('command', ''))]
+            rest = [h for h in hs if h not in mine]
+            if mine:
+                ours.setdefault(ev, []).append(dict(g, hooks=mine))
+            if rest:
+                keep.setdefault(ev, []).append(dict(g, hooks=rest))
+    return keep, ours
+
+
+def team_install(home=''):
+    """「安装 / 更新」：前台跑 python3 <套件>/scripts/install_helper.py --user（--update 当已装）。装好开关不动（新用户仍是关）。"""
+    import subprocess
+    home = str(Path((home or '').strip() or _suite_home()).expanduser()) if (home or '').strip() or _suite_home() else ''
+    if not home or not _helper(home).is_file():
+        raise KBError(f'找不到角色套件：{home or "（没填套件目录）"} 下没有 scripts/install_helper.py。填 worker-agent 仓库目录后再装')
+    first = (load_settings().get('角色团') is None) and _manifest() is None
+    args = [sys.executable, str(_helper(home)), '--user'] + (['--update'] if _manifest() is not None else [])
+    try:
+        r = subprocess.run(args, cwd=home, capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise KBError(f'安装没跑起来：{e}')
+    if first:
+        _save_team(开启=False)        # 新装：落成显式「关」，不因为装了套件就被当成老用户自动打开
+    s = load_settings()
+    cur = s.get('角色团') if isinstance(s.get('角色团'), dict) else {}
+    s['角色团'] = {**cur, **team_settings(), '套件目录': home}
+    save_settings(s)
+    tail = '\n'.join(((r.stdout or '') + (r.stderr or '')).strip().splitlines()[-8:])
+    if r.returncode != 0:
+        raise KBError(f'安装失败（退出码 {r.returncode}）：{tail}')
+    return f'角色套件已安装（{len(installed_agents())}/{len(ALL_AGENTS)} 个 agent）' + ('；角色团开关没动，要用时在这里打开' if not team_settings()['开启'] else '') + f'\n{tail}'
+
+
+SCHED_LABEL = 'com.worker-agent.skills-refresh'       # 套件 auto_refresh.py --install-schedule 装的 launchd 任务
+CRON_MARK = '# worker-agent skills-refresh'            # 同上，非 macOS 装进 crontab 的行尾标记
+BUILD_MARK = 'scripts/build.py 生成'                    # 套件 build.py 生成的 agent 文件头注释
+_BAK = re.compile(r'\.bak-\d{8,}$')                    # 套件 install_helper / settings_merge 留下的 <文件>.bak-<时间>
+
+
+def _plist():
+    return Path.home() / 'Library' / 'LaunchAgents' / f'{SCHED_LABEL}.plist'
+
+
+def _launchctl(*args):
+    import subprocess
+    try:
+        subprocess.run(['launchctl', *args], capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _crontab_read():
+    import subprocess
+    try:
+        r = subprocess.run(['crontab', '-l'], capture_output=True, text=True, timeout=30)
+        return r.stdout if r.returncode == 0 else ''
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def _crontab_write(text):
+    import subprocess
+    try:
+        subprocess.run(['crontab', '-'], input=text, text=True, capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _cron_lines():
+    return [ln for ln in _crontab_read().splitlines() if CRON_MARK in ln]
+
+
+def _schedule_left():
+    out = []
+    if _plist().is_file():
+        out.append(f'自动学习定时任务 {_plist().name}（launchd）')
+    if _cron_lines():
+        out.append('自动学习定时任务（crontab）')
+    return out
+
+
+def _stale_baks(base, rels=()):
+    """base 下套件留下的 .bak-<时间>：settings.json.bak-* 里带套件 hook 标记的；agents/ skills/ 下套件文件（清单里的或套件同名 agent）的 .bak-*。
+    用户自己的 settings.json.bak、.bak-figma 这类不带时间戳 / 不含标记的不碰。返回相对 base 的路径。"""
+    out = []
+    if not base.is_dir():
+        return out
+    for f in base.glob('settings.json.bak-*'):
+        if f.is_file() and _BAK.search(f.name):
+            try:
+                if SUITE_MARK in read_text(f):
+                    out.append(f.name)
+            except OSError:
+                pass
+    names = set(rels) | {f'agents/{a}.md' for a in ALL_AGENTS}
+    for sub in ('agents', 'skills'):
+        d = base / sub
+        for f in d.rglob('*.bak-*') if d.is_dir() else []:
+            if f.is_file() and _BAK.search(f.name):
+                rel = str(f.relative_to(base))
+                if _BAK.sub('', rel) in names:
+                    out.append(rel)
+    return sorted(out)
+
+
+def _stray_agents(base, rels=()):
+    """清单外、但由套件 build.py 生成的同名角色 agent（老版本装的、清单丢了的），一并清掉。"""
+    out = []
+    for a in ALL_AGENTS:
+        r = f'agents/{a}.md'
+        f = base / r
+        if r in rels or not f.is_file():
+            continue
+        try:
+            if BUILD_MARK in read_text(f):
+                out.append(r)
+        except OSError:
+            pass
+    return out
+
+
+def _projects(home=''):
+    """套件登记过的项目级安装（<套件目录>/state/projects.json），只列 <项目>/.claude/role-agents/manifest.json 还在的。"""
+    home = home or (_manifest() or {}).get('home') or _suite_home()
+    if not home:
+        return []
+    try:
+        st = json.loads(read_text(Path(home).expanduser() / 'state' / 'projects.json'))
+    except (OSError, ValueError):
+        return []
+    out = []
+    for p in st.get('projects') or [] if isinstance(st, dict) else []:
+        if isinstance(p, str) and p and (Path(p) / '.claude' / 'role-agents' / 'manifest.json').is_file():
+            out.append(p)
+    return out
+
+
+def _mv(src, dst):
+    import shutil
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+
+
+def _remove_at(base, dst):
+    """把 base（~/.claude 或 <项目>/.claude）下的套件整套删掉，删前全部备份到 dst：
+    files/<清单文件>、manifest.json、hooks.json、settings.json（改前）、bak/<残留 .bak>。返回 (文件数, hook 组数, .bak 数, 清单相对路径)。"""
+    import shutil
+    mp = base / 'role-agents' / 'manifest.json'
+    try:
+        man = json.loads(read_text(mp))
+    except (OSError, ValueError):
+        man = None
+    rels = [r for r in ((man or {}).get('files') or {}) if isinstance(r, str)]
+    bad = [r for r in rels if r.startswith('/') or '..' in Path(r).parts]
+    if bad:
+        raise KBError(f'安装清单里有不安全的路径，不删：{"、".join(bad[:3])}')
+    rels += _stray_agents(base, rels)
+    dst.mkdir(parents=True, exist_ok=True)
+    files = []
+    for r in rels:
+        f = base / r
+        if f.is_file():
+            (dst / 'files' / r).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, dst / 'files' / r)
+            files.append(r)
+    if man is not None:
+        shutil.copy2(mp, dst / 'manifest.json')
+    p = base / 'settings.json'
+    try:
+        settings = json.loads(read_text(p) or '{}') if p.is_file() else None
+    except (OSError, ValueError):
+        settings = None
+    keep, ours = _split_hooks(settings)
+    (dst / 'hooks.json').write_text(json.dumps(ours, ensure_ascii=False, indent=2), 'utf-8')
+    # 备份齐了再删
+    for r in files:
+        f = base / r
+        f.unlink()
+        d = f.parent
+        while d != base and base in d.parents and d.is_dir() and not any(d.iterdir()):
+            d.rmdir()
+            d = d.parent
+    if mp.is_file():
+        mp.unlink()
+    sd = base / 'role-agents'
+    if sd.is_dir() and not any(sd.iterdir()):
+        sd.rmdir()
+    if ours and settings is not None:
+        shutil.copy2(p, dst / 'settings.json')
+        settings = dict(settings)
+        if keep:
+            settings['hooks'] = keep
+        else:
+            settings.pop('hooks', None)
+        p.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + '\n', 'utf-8')
+    baks = _stale_baks(base, rels)
+    for r in baks:                                   # 移进备份（Claude 不加载，但属于残留），恢复时放回
+        _mv(base / r, dst / 'bak' / r)
+    return len(files), sum(map(len, ours.values())), len(baks), rels
+
+
+def _remove_schedule(dst):
+    out = []
+    pl = _plist()
+    if pl.is_file():
+        _launchctl('unload', str(pl))
+        _mv(pl, dst / 'schedule' / pl.name)
+        out.append('launchd')
+    lines = _cron_lines()
+    if lines:
+        (dst / 'schedule').mkdir(parents=True, exist_ok=True)
+        (dst / 'schedule' / 'crontab.txt').write_text('\n'.join(lines) + '\n', 'utf-8')
+        _crontab_write('\n'.join(ln for ln in _crontab_read().splitlines() if CRON_MARK not in ln) + '\n')
+        out.append('crontab')
+    return out
+
+
+def suite_residue(base=None, rels=(), projects=None):
+    """自检：Claude 还能不能加载到套件的东西。返回 [残留说明]，空 = 干净。"""
+    base = base or _base()
+    left = []
+    ag = sorted({a for a in ALL_AGENTS if (base / 'agents' / f'{a}.md').is_file()}
+                | {Path(r).stem for r in rels if r.startswith('agents/') and (base / r).is_file()})
+    if ag:
+        left.append(f'~/.claude/agents 里还有角色 agent：{"、".join(ag)}（没删掉，或不是套件装的所以没动；不要了请手动删，或在 ~/.claude/agents 里改名）')
+    sk = sorted({r.split('/')[1] for r in rels if r.startswith('skills/') and r.count('/') >= 2 and (base / r).is_file()})
+    if sk:
+        left.append(f'~/.claude/skills 里还有套件 skill：{"、".join(sk[:8])}{"…" if len(sk) > 8 else ""}')
+    try:
+        settings = json.loads(read_text(base / 'settings.json') or '{}') if (base / 'settings.json').is_file() else None
+    except (OSError, ValueError):
+        settings = None
+    _, ours = _split_hooks(settings)
+    if ours:
+        left.append(f'settings.json 里还有 {sum(map(len, ours.values()))} 组套件 hook')
+    if (base / 'role-agents').exists():
+        left.append('~/.claude/role-agents/ 还在')
+    bk = _stale_baks(base, rels)
+    if bk:
+        left.append(f'套件留下的备份文件：{"、".join(bk[:4])}{"…" if len(bk) > 4 else ""}')
+    left += _schedule_left()
+    for p in (projects if projects is not None else _projects()):
+        left.append(f'项目级安装：{p}/.claude')
+    return left
+
+
+def _running_sessions():
+    """正在跑的知识库后台会话（管家「正在跑的 AI」同一份），拿不到就空。"""
+    try:
+        from kblib.steward import brief
+        return [f'{x.get("角色", "")} · {x.get("对象", "")}（{x.get("状态", "")}）' for x in brief._activities() if x.get('状态') != '要你看']
+    except Exception:
+        return []
+
+
+def _has_anything():
+    return _manifest() is not None or bool(_stray_agents(_base())) or bool(_stale_baks(_base())) or bool(_schedule_left()) or bool(_projects())
+
+
+def team_remove(projects=True):
+    """「移除」：把套件在本机的东西清干净，并自检。
+      1. 按 manifest 清单删 ~/.claude 下的套件文件（agents / skills / role-agents），清单外由套件 build.py 生成的同名角色 agent 一并删；
+         settings.json 里带套件标记的 hook 删掉；用户自己的 agent / skill / hook 不碰。
+      2. 套件留下的 settings.json.bak-<时间>（含套件 hook）、agents / skills 下套件文件的 .bak-<时间> 移进备份。
+      3. 自动学习定时任务（launchd com.worker-agent.skills-refresh / crontab「# worker-agent skills-refresh」）卸掉、进备份。
+      4. projects=True 时，套件 state/projects.json 登记的项目级安装（<项目>/.claude）同样处理。
+      5. 逐项自检，结果列「已删 / 仍残留」；提示已经开着的会话到结束前仍能调用，并列出在跑的知识库后台会话。
+    全部先备份到 _system/cache/角色套件备份/<时间>/，可一键恢复。移除后角色团关。"""
+    import shutil
+    from datetime import datetime
+    if not _has_anything():
+        raise KBError('没装角色套件（~/.claude/role-agents/manifest.json 不存在），也没有残留，没什么可移除的')
+    man = _manifest() or {}
+    home = man.get('home') or _suite_home()
+    projs = _projects(home)
+    base = _base().resolve()
+    dst = _backup_root() / datetime.now().strftime('%Y%m%d-%H%M%S')
+    n = 1
+    while dst.exists():
+        n += 1
+        dst = _backup_root() / (datetime.now().strftime('%Y%m%d-%H%M%S') + f'-{n}')
+    nf, nh, nb, rels = _remove_at(base, dst)
+    sched = _remove_schedule(dst)
+    done_p, fail_p = [], []
+    if projects:
+        for i, p in enumerate(projs):
+            try:
+                pf, ph, pb, _ = _remove_at(Path(p) / '.claude', dst / 'projects' / str(i))
+                done_p.append({'目录': p, '子目录': str(i), '文件数': pf})
+            except (KBError, OSError) as e:
+                fail_p.append(f'{p}（{e}）')
+    if not (dst / 'manifest.json').is_file():
+        (dst / 'manifest.json').write_text(json.dumps({'home': home, 'files': {}}, ensure_ascii=False), 'utf-8')   # 只清残留时也能列进备份
+    (dst / '备份说明.json').write_text(json.dumps({'文件数': nf, '套件版本': man.get('suite_version', ''), 'hook组数': nh, '套件目录': home,
+                                                 '残留备份数': nb, '定时任务': sched, '项目': done_p}, ensure_ascii=False, indent=2), 'utf-8')
+    _save_team(开启=False, 套件目录=home)
+    done = [f'{nf} 个套件文件（agent / skill / role-agents）'] if nf else []
+    done += [f'settings.json 里 {nh} 组套件 hook'] if nh else []
+    done += [f'{nb} 个套件留下的 .bak 备份文件（移进备份）'] if nb else []
+    done += [f'自动学习定时任务（{"、".join(sched)}）'] if sched else []
+    done += [f'项目级安装 {x["目录"]}/.claude（{x["文件数"]} 个文件）' for x in done_p]
+    left = suite_residue(base, rels, projects=[p for p in _projects(home)])
+    left += [f'项目级安装没删掉：{x}' for x in fail_p]
+    if not projects and projs:
+        left.append('（这次没选一并移除项目级安装）')
+    run = _running_sessions()
+    lines = [f'已移除角色套件，角色团已关。你自己的 agent / skill / hook 没动。备份在 {dst.name}，可点「恢复」放回。',
+             '已删：' + ('；'.join(done) if done else '没有要删的'),
+             '仍残留：' + ('；'.join(left) if left else '无（自检通过：~/.claude 里没有角色 agent、套件 skill、套件 hook、自动学习定时任务）'),
+             '提示：已经开着的 Claude 会话在启动时就加载了 agent 列表，到会话结束前仍能调用角色 agent；要彻底断开，结束或重开这些会话。'
+             + ('当前在跑的知识库后台会话：' + '；'.join(run) if run else '当前没有在跑的知识库后台会话。')]
+    return '\n'.join(lines)
+
+
+def _restore_at(base, src):
+    """把 _remove_at 备份的一份放回 base：文件、manifest、.bak、hook（合并，不覆盖之后的其他改动）。返回 (文件数, hook 组数)。"""
+    import shutil
+    n = 0
+    for sub in ('files', 'bak'):
+        for f in (src / sub).rglob('*') if (src / sub).is_dir() else []:
+            if f.is_file():
+                to = base / f.relative_to(src / sub)
+                to.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, to)
+                n += sub == 'files'
+    try:
+        man = json.loads(read_text(src / 'manifest.json'))
+    except (OSError, ValueError):
+        man = None
+    if man and man.get('files'):
+        mp = base / 'role-agents' / 'manifest.json'
+        mp.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src / 'manifest.json', mp)
+    try:
+        ours = json.loads(read_text(src / 'hooks.json'))
+    except (OSError, ValueError):
+        ours = {}
+    if ours:
+        sp = base / 'settings.json'
+        try:
+            settings = json.loads(read_text(sp) or '{}') if sp.is_file() else {}
+        except (OSError, ValueError):
+            settings = {}
+        settings = settings if isinstance(settings, dict) else {}
+        keep, _ = _split_hooks(settings)           # 去掉现有的套件 hook 再加，重复恢复不会叠加
+        for ev, groups in ours.items():
+            keep.setdefault(ev, []).extend(groups)
+        settings['hooks'] = keep
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        sp.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + '\n', 'utf-8')
+    return n, sum(map(len, ours.values()))
+
+
+def team_restore(name=''):
+    """「恢复」：把某次（默认最近一次）移除前的备份放回：~/.claude 的文件和 hook、.bak、自动学习定时任务、项目级安装。开关不动。"""
+    import shutil
+    bs = _backups()
+    b = next((x for x in bs if x['名称'] == name), None) if name else (bs[0] if bs else None)
+    if not b:
+        raise KBError('没有可恢复的角色套件备份')
+    src = _backup_root() / b['名称']
+    info_f = src / '备份说明.json'
+    try:
+        info = json.loads(read_text(info_f))
+    except (OSError, ValueError):
+        info = {}
+    n, nh = _restore_at(_base(), src)
+    extra = []
+    sd = src / 'schedule'
+    pl = sd / f'{SCHED_LABEL}.plist'
+    if pl.is_file():
+        _plist().parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(pl, _plist())
+        _launchctl('load', str(_plist()))
+        extra.append('自动学习定时任务（launchd）')
+    if (sd / 'crontab.txt').is_file():
+        cur = [ln for ln in _crontab_read().splitlines() if CRON_MARK not in ln]
+        _crontab_write('\n'.join(cur + read_text(sd / 'crontab.txt').splitlines()) + '\n')
+        extra.append('自动学习定时任务（crontab）')
+    for x in info.get('项目') or []:
+        ps = src / 'projects' / str(x.get('子目录', ''))
+        if x.get('目录') and ps.is_dir():
+            _restore_at(Path(x['目录']) / '.claude', ps)
+            extra.append(f'项目级安装 {x["目录"]}')
+    info['已恢复'] = True
+    info_f.write_text(json.dumps(info, ensure_ascii=False, indent=2), 'utf-8')
+    return (f'已从备份 {b["名称"]} 恢复角色套件（{n} 个文件' + (f'、{nh} 组 hook' if nh else '') + '）'
+            + (f'，另外放回：{"、".join(extra)}' if extra else '') + '。角色团开关没动，要用时在这里打开')
 
 
 # ---------------------------------------------------------------- 开关判断与提示词
@@ -398,10 +899,9 @@ def role_cn(slug):
 
 
 def team_usage(m):
-    """期「角色调用」→ 契约 TeamUsage（上限取当前全局设置）。"""
+    """期「角色调用」→ {合计, 按角色}：只统计，不设上限。"""
     u = (m or {}).get('角色调用') or {}
-    return {'合计': int(u.get('合计') or 0), '上限': team_settings()['每期上限'], '按角色': dict(u.get('按角色') or {}),
-            '超限已记': bool(u.get('超限已记'))}
+    return {'合计': int(u.get('合计') or 0), '按角色': dict(u.get('按角色') or {})}
 
 
 _OWN_TOOL_PRODUCTS = ('PRD', '方案', 'Bug分析')        # 有原来的工具（kb_write_doc 需求 / kb_stack_plan / kb_bug_analysis），不另写角色产物
@@ -420,13 +920,6 @@ def team_text(scene, m=None, end='', eng=None, auto=False):
     if not cfg or not roles:
         return ''
     t, _ = load_scenes(team_settings()['档位'])
-    limit = team_settings()['每期上限']
-    if m is not None:
-        left = limit - team_usage(m)['合计']
-        if left <= 0:
-            return '\n\n【角色团】本期角色调用已用完，不要再派角色，按原流程继续。'
-    else:
-        left = None
     cap = int(cfg.get('上限') or 1)
     per = cfg.get('每确认点上限')
     pdir = t.get('产物目录') or _BUILTIN['产物目录']
@@ -440,8 +933,7 @@ def team_text(scene, m=None, end='', eng=None, auto=False):
            *lines,
            f'什么时候派：{cfg.get("触发") or "需要专业意见时"}。不需要就不派。',
            f'- 次数：本会话最多派 {cap} 次' + (f'（每个确认点最多 {per} 次）' if per else '')
-           + (f'；本期还能派 {left} 次（每期上限 {limit}）' if left is not None else '')
-           + '。到了上限就不再派角色，按原流程继续，并用 kb_log 记一句「角色团：已到上限，不再派角色」。',
+           + '，避免反复派同一个专家；够了就不再派，按原流程继续。',
            '- 派单必须前台运行：不要 run_in_background，等子 agent 交回结果再继续。'
            + (f'这是自动发起的会话：派单时 model 参数填 "{model}"。' if auto and P0_MODEL_PARAM else ''),
            '- 任务说明开头写「知识库会话：只把正文交回，不写文件、不写 workspace/」；子 agent 只交回正文，不写文件。',
@@ -451,7 +943,7 @@ def team_text(scene, m=None, end='', eng=None, auto=False):
             '- 专家的意见由你吸收进原来的产出' + (f'（{prod} 照旧用原来的知识库工具交）' if prod else '')
             + '，本场景不用另写角色产物文件；不要在仓库或知识库目录里建 workspace/。'),
            f'- 要用户确认时照旧 kb_ask（stage 填 立项 / 技术方案 / 上线放量 / 确认点），recommend 由主导角色给出，末尾注明「建议来自：{role_cn(lead)}」'
-           '（实际是谁的建议就写谁）；kb_ask 提示免打扰时按 recommend 执行，并用 kb_log 写明采用的建议和「建议来自：<角色>」。'
+           '（实际是谁的建议就写谁）；明确、不扩大范围的带 sure=true。kb_ask 返回「AI 已自动定」或提示免打扰时按 recommend 执行，并用 kb_log 写明采用的建议和「建议来自：<角色>」。'
            '产品经理的选项里有扩大范围和不扩大两类时，recommend 选不扩大。',
            '- 开始开发、方案拍板、Bug 审核只能用户本人在网页上点：不要调用 kb approve，也不要替用户操作网页。']
     if cfg.get('只读'):
@@ -540,24 +1032,12 @@ def tally(rec, logf, m=None, d=None, scene='', cumulative=True):
         br = u.setdefault('按角色', {})
         for k, v in got.items():
             br[k] = br.get(k, 0) + v
-        _check_limit(m, d)
+        u.pop('超限已记', None)          # 旧版字段：已没有每期上限
     cap = _cap_of(scene or rec.get('场景', ''))
     used = sum(have.values()) if cumulative else n          # cumulative=False：一份日志就是一个会话（各端开发 / 审查每轮一份）
     if d is not None and cap and used > cap:
         log(d, '角色团', f'超限提醒：「{scene or rec.get("场景", "")}」会话调用了 {used} 次角色，场景上限 {cap}（{roles_text(got)}）')
     return got
-
-
-def _check_limit(m, d):
-    u = m.setdefault('角色调用', {})
-    lim = team_settings()['每期上限']
-    if int(u.get('合计') or 0) >= lim:
-        if not u.get('超限已记'):
-            u['超限已记'] = True
-            if d is not None:
-                log(d, '角色团', f'本期已用 {u["合计"]}/{lim}，之后不再派角色')
-    else:
-        u.pop('超限已记', None)          # 上限调大了：恢复可派，下次用完再记一次
 
 
 def tally_dirs(rec, logf, dirs, scene=''):
@@ -575,7 +1055,7 @@ def tally_dirs(rec, logf, dirs, scene=''):
         br = u.setdefault('按角色', {})
         for k, v in got.items():
             br[k] = br.get(k, 0) + v
-        _check_limit(m, d)
+        u.pop('超限已记', None)
         save_meta(d, m)
         cap = _cap_of(scene)
         if cap and sum(rec.get('角色', {}).values()) > cap:
