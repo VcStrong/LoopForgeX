@@ -193,6 +193,8 @@ async function settingsPage(){
     if(await kbConfirm('移除角色套件？会清掉：套件装进 ~/.claude 的文件（按安装清单：agents、skills、role-agents）和套件加的 hook、套件留下的 .bak 备份、自动学习定时任务'
       +(pj.length?`，以及 ${pj.length} 个项目级安装（${pj.join('、')}）`:'')+'；你自己的 agent / skill 不动。删完逐项自检，全部先备份，可以一键恢复。角色团会关掉。'))rtRm({action:'remove'},e.target)};
   if($('#rtClean'))$('#rtClean').onclick=e=>rtRm({action:'remove'},e.target);
+  app.querySelectorAll('.rtAdapt').forEach(b=>b.onclick=e=>rtSuite({action:'install',engine:b.dataset.e,home:($('#rtHome')||{}).value||''},e.target));
+  app.querySelectorAll('.rtUnadapt').forEach(b=>b.onclick=async e=>{if(await kbConfirm(`移除 ${b.dataset.n} 的角色套件适配？按清单删 ${b.dataset.d} 下知识库生成的专家 SKILL.md（删前备份），你自己的 skill 不动；~/.claude 的套件不动。`))rtSuite({action:'remove',engine:b.dataset.e},e.target)});
   if($('#rtRestore'))$('#rtRestore').onclick=e=>rtSuite({action:'restore',backup:e.target.dataset.b||''},e.target);
   const rl=async b=>{try{toast((await post('/api/chat/rule',b)).msg.split('\n')[0])}catch(e){toast(e.message)}settingsPage()};
   if($('#rlTeam'))$('#rlTeam').onclick=async()=>{if(!await kbConfirm('把本机的管家规矩和管家设置（自主度、每日上限等）设为团队默认？会写进程序目录的 _system/团队默认.json，提交推送后同事 git pull 就带过去。'))return;
@@ -262,6 +264,18 @@ async function settingsPage(){
     $('#fiGo').onclick=async()=>{let f;try{f=JSON.parse($('#fiT').value)}catch(_){return toast('不是有效的 JSON')}
       delete f.id;try{const r=await post('/api/settings/flow',{flow:f});dlg.close();toast(r.msg);render()}catch(e){toast(e.message)}}};
 }
+function engRows(E,ok){   // 角色团卡片：各引擎的注入方式和适配状态（装 / 更新 / 移除适配只走知识库 team_install / team_remove）
+  if(!E.length)return'';
+  const row=e=>`<tr><td><b>${esc(e['名称'])}</b><div class="small mut mono">${esc(e.id)}</div></td>
+    <td class="small">${e['方式']==='子agent'?'🤖 子 agent':e['方式']==='内联'?'💬 内联专家意见':'<span class="mut">关</span>'}</td>
+    <td class="small">${e['原生']?'<span class="mut">原生：用 ~/.claude 的套件</span>'
+      :e['适配已装']?`✅ 已装 ${e['适配数']}/${e['应有']} 个专家 <span class="mut mono">${esc((e['专家目录']||'').replace(/^\/Users\/[^/]+/,'~'))}</span>`
+      :e['专家目录']?`<span class="mut">未装（内联照样能用）· 会装到 <span class="mono">${esc(e['专家目录'].replace(/^\/Users\/[^/]+/,'~'))}</span></span>`
+      :'<span class="mut">没填专家目录（内联照样能用；要装适配在「AI 引擎」里填）</span>'}</td>
+    <td>${e['原生']?'':`${e['专家目录']&&ok?`<button class="rtAdapt" data-e="${esc(e.id)}" title="从 ~/.claude/agents 的角色定义生成 &lt;专家目录&gt;/&lt;角色&gt;/SKILL.md">${e['适配已装']?'⬆ 更新适配':'📦 装适配'}</button>`:''}
+      ${e['适配已装']?`<button class="rtUnadapt" data-e="${esc(e.id)}" data-n="${esc(e['名称'])}" data-d="${esc(e['专家目录']||'')}">🗑 移除适配</button>`:''}`}</td></tr>`;
+  return `<h3 style="margin-top:10px">各引擎</h3><div class="tw"><table><tr><th style="width:150px">引擎</th><th style="width:120px">方式</th><th>适配</th><th style="width:200px"></th></tr>${E.map(row).join('')}</table></div>`;
+}
 function teamCard(t){   // 「⚙ 设置」角色团卡片：安装 / 移除 / 恢复、开关、档位、全部 agent（只协助、不设卡：没有每期次数上限）
   if(!t)return'';
   const S=t['状态']||{},ok=S['套件已装'],miss=S['缺']||[],df=S['场景表差异']||[],bk=(S['备份']||[]).filter(b=>!b['已恢复']),R=t['角色']||[];
@@ -274,7 +288,7 @@ function teamCard(t){   // 「⚙ 设置」角色团卡片：安装 / 移除 / �
     <td style="text-align:center">${r['已安装']?'✅':'<span class="mut">—</span>'}</td>
     <td class="small">${r['场景'].length?sc(r['场景']):'<span class="mut">本档不派</span>'}${r['其他档场景'].length?`<div class="mut">${esc(r['其他档'])}档还会派：${sc(r['其他档场景'])}</div>`:''}</td></tr>`).join('');
   return `<h2>🧑‍🤝‍🧑 角色团</h2><div class="bcard" id="rtCard">
-    <div class="small mut" style="margin-bottom:6px">角色套件（worker-agent）只协助、不设卡：后台会话（问管家、完善需求、出方案、Bug 分析 / 修复、开发确认点、审查、跟进、发布清单）按场景用 Agent 请专家子 agent 出意见，流程命令照旧，产物照样交回知识库，拍板还是你在网页上点。只对 Claude 引擎生效；每一期可以在开发面板单独关。默认不装、默认关。</div>
+    <div class="small mut" style="margin-bottom:6px">角色套件（worker-agent）只协助、不设卡：后台会话（问管家、完善需求、出方案、Bug 分析 / 修复、开发确认点、审查、跟进、发布清单）按场景请专家出意见，流程命令照旧，产物照样交回知识库，拍板还是你在网页上点。Claude 用 Agent 子 agent；Codex / Gemini / Hermes / 自定义引擎没有子 agent，按「内联专家意见」把专家说明拼进提示词、由主会话按专家视角出意见，可另装适配（专家 SKILL.md）。每一期可以在开发面板单独关。默认不装、默认关。</div>
     <div class="small">${inst}${ok?` · ${S['kb接入']?'✅ kb MCP 已接入':'⚠ kb MCP 未接入（子 agent 查不了知识库）'} · 场景表：${esc(S['场景表']||'')}${df.length?` · <span style="color:var(--warn)" title="${esc(df.join('、'))}">⚠ 套件场景表与内置兜底不同（以套件为准）：${esc(df.slice(0,6).join('、'))}${df.length>6?'…':''}</span>`:''}`:''}</div>
     <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px;align-items:center">
       <label class="small">套件目录 <input type="text" class="mono" id="rtHome" value="${esc(S['套件目录']||'')}" placeholder="worker-agent 仓库目录" style="width:280px"></label>
@@ -285,7 +299,8 @@ function teamCard(t){   // 「⚙ 设置」角色团卡片：安装 / 移除 / �
       ${S['套件目录可用']||ok?'':'<span class="small" style="color:var(--warn)">这个目录下没有 scripts/install_helper.py</span>'}</div>
     ${ok&&(S['项目级安装']||[]).length?`<div class="small mut" style="margin-top:4px">项目级安装（移除时一并清掉）：${esc(S['项目级安装'].join('、'))}</div>`:''}
     ${!ok&&(S['残留']||[]).length?`<div class="small" style="color:var(--warn);margin-top:4px">⚠ 套件已移除，但还有残留：${esc(S['残留'].join('；'))}</div>`:''}
-    ${ok&&!S['默认引擎支持']?'<div class="small" style="color:var(--warn);margin-top:4px">当前默认引擎不支持角色团，只在 Claude 引擎的会话生效</div>':''}
+    ${ok&&!S['默认引擎支持']?'<div class="small" style="color:var(--warn);margin-top:4px">当前默认引擎把角色团关了（「⚙ 设置 · AI 引擎」里它的「角色团方式」是「关」）</div>':''}
+    ${engRows(S['引擎']||[],ok)}
     <div class="row" style="gap:16px;flex-wrap:wrap;margin-top:8px">
       <label title="${ok?'':'先安装角色套件'}"><input type="checkbox" id="rtOn" ${t['开启']?'checked':''} ${ok?'':'disabled'}> 开启</label>
       <span>档位 ${['精简','标准'].map(x=>`<label style="margin-right:8px" title="${x==='精简'?'每个场景只派少数核心角色（设计由产品经理兼、发布由架构师兼），省钱':'按场景表派全部相关专家'}"><input type="radio" name="rtTier" value="${x}" ${t['档位']===x?'checked':''}> ${x}</label>`).join('')}</span>

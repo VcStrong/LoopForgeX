@@ -149,8 +149,8 @@ async function devBox(name){
   const acts=v['动作'];
   const barHtml=`<div class="top"><b>会话</b>${sess}<span class="sp"></span>
  <label class="small mut" title="这一期 AI 开发用的引擎（全栈各端没单独指定时也用它）；在「⚙ 设置」里管理">AI <select id="dvEng" ${run?'disabled':''}><option value="">默认（${esc(v['默认引擎'])}）</option>${v['引擎列表'].map(x=>`<option value="${esc(x.id)}" ${x.id===v['引擎']?'selected':''}>${esc(x['名称'])}</option>`).join('')}</select></label>
- ${(u=>`<label class="small mut" title="角色团：后台会话按场景请专家子 agent（产品经理、架构师…）出意见；只对 Claude 引擎生效。全局开关、安装 / 移除在「⚙ 设置 → 角色团」">🧑‍🤝‍🧑 <select id="dvTeam"><option value="跟随" ${v['角色团']!=='关'?'selected':''}>跟随全局（${v['角色团全局']?'开':'关'}）</option><option value="关" ${v['角色团']==='关'?'selected':''}>关</option></select>${
-   v['角色团']!=='关'&&v['角色团全局']&&!v['角色团引擎支持']?' <span style="color:var(--warn)">这一期的引擎不支持角色团</span>':''}${
+ ${(u=>`<label class="small mut" title="角色团：后台会话按场景请专家子 agent（产品经理、架构师…）出意见；Claude 用子 agent，其他引擎用内联专家意见。全局开关、安装 / 移除在「⚙ 设置 → 角色团」">🧑‍🤝‍🧑 <select id="dvTeam"><option value="跟随" ${v['角色团']!=='关'?'selected':''}>跟随全局（${v['角色团全局']?'开':'关'}）</option><option value="关" ${v['角色团']==='关'?'selected':''}>关</option></select>${
+   v['角色团']!=='关'&&v['角色团全局']&&!v['角色团引擎支持']?' <span style="color:var(--warn)">这一期的引擎把角色团关了</span>':''}${
    u['合计']?` <span title="${esc(Object.entries(u['按角色']||{}).map(([k,n])=>k+' '+n).join('、'))}">本期已派 ${u['合计']} 次</span>`:''}</label>`)(v['角色调用']||{合计:0})}
     ${SP?'':`<span class="small mut" title="开发流程跟着端和仓库走：在「全栈 → 各端」里给每个端选">流程 ${(v['各端流程']||[]).length?v['各端流程'].map(x=>`${esc(x['端'])} <b>${esc(x['流程'])}</b>`).join('，'):`<b>${esc(v['当前流程'])}</b>`}${v['流程']?' <span class="badge" title="老的期在这里统一指定过流程">整期统一</span> <a id="dvFlowEnd" title="取消整期统一的流程，改为在「全栈 → 各端」按端选">改为按端</a>':''} · <a id="dvFlowGo">按端选 →</a></span>`}
     ${apSw(v,'dvPush')}<span class="sw ${v['免打扰']?'on':''}" id="dvDnd" title="整期生效：出方案、完善需求、各端开发、单端开发的提问都由 AI 按自己的建议决策并记录"><i></i>🌙 免打扰（整期）</span>${btn}</div>

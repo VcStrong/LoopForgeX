@@ -2,7 +2,10 @@
 
   知识库继续管流程和拍板，专家只出意见：engines.engine_cmd 在 rules_text() 后面接 team_text(scene, …)，
   各会话入口只传 scene（管家 / 流程设计 / 需求 / 方案 / Bug分析·<端> / Bug修复·<端> / 开发 / 开发·<端> / 审查·<端> / 跟进 / 发布）。
-  只对本机 Claude 引擎生效；全局关、期选「关」、scene 为空、续跑、远程主机会话都返回空串（命令行和现在逐字一致）。
+  按引擎能力注入（team_mode）：Claude 用 Agent 子 agent（原样，命令行逐字不变）；Codex / Gemini / Hermes / 自定义引擎降级为「内联专家意见」
+  （场景专家的说明拼进提示词，主会话按专家视角出意见、打 [kb-role:<角色>] 标记计数）；引擎「角色团方式」可强制 子agent / 内联 / 关。
+  非 Claude 引擎可在设置里装适配（<专家目录>/<角色>/SKILL.md，见「其他引擎的适配层」）。
+  全局关、期选「关」、引擎关、scene 为空、续跑、远程主机会话都返回空串（命令行和现在逐字一致）。
 
   设置.json「角色团」{开启, 档位: 精简 / 标准, 套件目录}；期信息「角色团」= 关（不存 = 跟随全局）、「角色调用」{合计, 按角色}（只统计，不设上限）。
   角色套件只协助、不设卡：没有每期次数上限；新装知识库默认关（设置.json 没有「角色团」时：本机已装套件 = 老用户保持开，没装 = 关）。
@@ -168,6 +171,22 @@ def is_claude(eng):
     return bool(eng) and (eng.get('id') == 'claude' or Path(eng.get('命令') or '').name == 'claude')
 
 
+TEAM_MODES = ('自动', '子agent', '内联', '关')
+
+
+def team_mode(eng):
+    """引擎挂角色团的方式 → '子agent'（Agent 工具派专家子 agent，Claude 原样）/ '内联'（专家角色说明拼进提示词，主会话按专家视角出意见）/ ''（不挂）。
+    引擎配置「角色团方式」：自动（默认）= Claude 子agent、其他引擎内联；子agent / 内联 / 关 = 强制。"""
+    if not eng:
+        return ''
+    v = eng.get('角色团方式') or '自动'
+    if v == '关':
+        return ''
+    if v in ('子agent', '内联'):
+        return v
+    return '子agent' if is_claude(eng) else '内联'
+
+
 def installed_agents():
     return [a for a in ALL_AGENTS if (AGENTS_DIR / f'{a}.md').is_file()]
 
@@ -321,7 +340,7 @@ def team_status():
     man = _manifest()
     have = installed_agents()
     try:
-        dft = is_claude(get_engine())
+        dft = bool(team_mode(get_engine()))
     except KBError:
         dft = False
     _, src = load_scenes()
@@ -331,7 +350,8 @@ def team_status():
                  '套件版本': (man or {}).get('suite_version', '') if man else '', '套件已装': man is not None,
                  'kb接入': _kb_linked(), '场景表': src, '场景表差异': diff or [], '默认引擎支持': dft, '安装命令': INSTALL_HINT,
                  '套件目录': home or '', '套件目录可用': bool(home and _helper(home).is_file()), '备份': _backups()[:5],
-                 '项目级安装': _projects(home), '残留': [] if man is not None else suite_residue()}
+                 '项目级安装': _projects(home), '残留': [] if man is not None else suite_residue() + adapter_residue(),
+                 '引擎': adapter_status()}
     st['角色'] = agent_list(st['档位'])
     return st
 
@@ -407,8 +427,18 @@ def _split_hooks(settings):
     return keep, ours
 
 
-def team_install(home=''):
-    """「安装 / 更新」：前台跑 python3 <套件>/scripts/install_helper.py --user（--update 当已装）。装好开关不动（新用户仍是关）。"""
+def team_install(home='', engine=''):
+    """「安装 / 更新」：前台跑 python3 <套件>/scripts/install_helper.py --user（--update 当已装）。装好开关不动（新用户仍是关）。
+    已装适配的其他引擎跟着重新生成。engine = 非 Claude 引擎 id：给这个引擎装 / 更新适配（套件还没装时先装套件，~/.claude 是唯一真源）。"""
+    if engine and engine != 'claude':
+        eng = next((e for e in _engines() if e['id'] == engine), None)
+        if not eng:
+            raise KBError(f'没有这个 AI 引擎：{engine}')
+        if not is_claude(eng):
+            first = ''
+            if _manifest() is None:
+                first = team_install(home).split('\n')[0] + '\n'
+            return first + adapt_engine(engine)
     import subprocess
     home = str(Path((home or '').strip() or _suite_home()).expanduser()) if (home or '').strip() or _suite_home() else ''
     if not home or not _helper(home).is_file():
@@ -428,7 +458,9 @@ def team_install(home=''):
     tail = '\n'.join(((r.stdout or '') + (r.stderr or '')).strip().splitlines()[-8:])
     if r.returncode != 0:
         raise KBError(f'安装失败（退出码 {r.returncode}）：{tail}')
-    return f'角色套件已安装（{len(installed_agents())}/{len(ALL_AGENTS)} 个 agent）' + ('；角色团开关没动，要用时在这里打开' if not team_settings()['开启'] else '') + f'\n{tail}'
+    ad = _refresh_adapters() if _manifest() is not None else []
+    return (f'角色套件已安装（{len(installed_agents())}/{len(ALL_AGENTS)} 个 agent）' + ('；角色团开关没动，要用时在这里打开' if not team_settings()['开启'] else '')
+            + (f'；其他引擎适配：{"；".join(ad)}' if ad else '') + f'\n{tail}')
 
 
 SCHED_LABEL = 'com.worker-agent.skills-refresh'       # 套件 auto_refresh.py --install-schedule 装的 launchd 任务
@@ -654,10 +686,10 @@ def _running_sessions():
 
 
 def _has_anything():
-    return _manifest() is not None or bool(_stray_agents(_base())) or bool(_stale_baks(_base())) or bool(_schedule_left()) or bool(_projects())
+    return _manifest() is not None or bool(adapter_residue()) or bool(_stray_agents(_base())) or bool(_stale_baks(_base())) or bool(_schedule_left()) or bool(_projects())
 
 
-def team_remove(projects=True):
+def team_remove(projects=True, engine=''):
     """「移除」：把套件在本机的东西清干净，并自检。
       1. 按 manifest 清单删 ~/.claude 下的套件文件（agents / skills / role-agents），清单外由套件 build.py 生成的同名角色 agent 一并删；
          settings.json 里带套件标记的 hook 删掉；用户自己的 agent / skill / hook 不碰。
@@ -665,9 +697,13 @@ def team_remove(projects=True):
       3. 自动学习定时任务（launchd com.worker-agent.skills-refresh / crontab「# worker-agent skills-refresh」）卸掉、进备份。
       4. projects=True 时，套件 state/projects.json 登记的项目级安装（<项目>/.claude）同样处理。
       5. 逐项自检，结果列「已删 / 仍残留」；提示已经开着的会话到结束前仍能调用，并列出在跑的知识库后台会话。
-    全部先备份到 _system/cache/角色套件备份/<时间>/，可一键恢复。移除后角色团关。"""
+      6. 其他引擎的适配（<专家目录>/<角色>/SKILL.md）按各自清单一并删，备份到 角色套件备份/<引擎 id>/<时间>/。
+    全部先备份到 _system/cache/角色套件备份/<时间>/，可一键恢复（适配不恢复，要用时重新装适配）。移除后角色团关。
+    engine = 非 Claude 引擎 id：只移除这个引擎的适配，~/.claude 的套件和开关不动。"""
     import shutil
     from datetime import datetime
+    if engine and engine != 'claude':
+        return remove_adapter(engine)
     if not _has_anything():
         raise KBError('没装角色套件（~/.claude/role-agents/manifest.json 不存在），也没有残留，没什么可移除的')
     man = _manifest() or {}
@@ -681,6 +717,7 @@ def team_remove(projects=True):
         dst = _backup_root() / (datetime.now().strftime('%Y%m%d-%H%M%S') + f'-{n}')
     nf, nh, nb, rels = _remove_at(base, dst)
     sched = _remove_schedule(dst)
+    adapted = _remove_all_adapters()
     done_p, fail_p = [], []
     if projects:
         for i, p in enumerate(projs):
@@ -699,7 +736,9 @@ def team_remove(projects=True):
     done += [f'{nb} 个套件留下的 .bak 备份文件（移进备份）'] if nb else []
     done += [f'自动学习定时任务（{"、".join(sched)}）'] if sched else []
     done += [f'项目级安装 {x["目录"]}/.claude（{x["文件数"]} 个文件）' for x in done_p]
+    done += adapted
     left = suite_residue(base, rels, projects=[p for p in _projects(home)])
+    left += adapter_residue()
     left += [f'项目级安装没删掉：{x}' for x in fail_p]
     if not projects and projs:
         left.append('（这次没选一并移除项目级安装）')
@@ -788,6 +827,242 @@ def team_restore(name=''):
             + (f'，另外放回：{"、".join(extra)}' if extra else '') + '。角色团开关没动，要用时在这里打开')
 
 
+# ---------------------------------------------------------------- 其他引擎的适配层（Codex / Gemini / Hermes / 自定义）
+# 唯一真源是知识库装进 ~/.claude/agents 的角色定义（套件 build.py 生成）；其他引擎按「专家目录」生成 Agent Skills 格式的
+# <专家目录>/<角色>/SKILL.md（去掉 Claude 专用的 tools / model），清单写 <专家目录>/.kb-role-agents.json，
+# 移除时备份到 _system/cache/角色套件备份/<引擎 id>/<时间>/。设置.json「角色团」「适配」{引擎 id: 专家目录} 记着装到了哪，引擎配置改了也能删干净。
+# 内联模式不依赖适配：提示词里给的完整角色说明路径优先用适配目录里的 SKILL.md，没有就用 ~/.claude/agents/<角色>.md。
+ADAPT_MANIFEST = '.kb-role-agents.json'
+ADAPT_MARK = '由知识库从角色套件生成'
+DEFAULT_ROLE_DIRS = {'codex': '~/.codex/skills', 'gemini': '~/.gemini/skills', 'hermes': '~/.hermes/skills'}
+ADAPT_ROLES = EXPERTS                      # orchestrator / tech-scout 依赖 Claude 的 Agent / 定时任务，不生成
+
+
+def _engines():
+    from kblib.ai.engines import engines         # 同层；engines 也要 import 本模块，放到用时
+    return engines()
+
+
+def engine_role_dir(eng):
+    """引擎的专家目录（展开 ~）；Claude（原生子 agent）和没填、按命令名也推不出的 → ''。"""
+    if not eng or is_claude(eng):
+        return ''
+    d = (eng.get('专家目录') or '').strip() or DEFAULT_ROLE_DIRS.get(Path(eng.get('命令') or '').name, '')
+    return str(Path(d).expanduser()) if d else ''
+
+
+def _adapt_records():
+    raw = load_settings().get('角色团')
+    return dict((raw or {}).get('适配') or {}) if isinstance(raw, dict) else {}
+
+
+def _save_adapt_records(rec):
+    s = load_settings()
+    cur = s.get('角色团') if isinstance(s.get('角色团'), dict) else {}
+    cur = {**cur, **team_settings()}
+    if rec:
+        cur['适配'] = rec
+    else:
+        cur.pop('适配', None)
+    s['角色团'] = cur
+    save_settings(s)
+
+
+def _adapt_manifest(d):
+    try:
+        man = json.loads(read_text(Path(d) / ADAPT_MANIFEST))
+    except (OSError, ValueError, TypeError):
+        return None
+    return man if isinstance(man, dict) else None
+
+
+def _adapt_dir_of(eng):
+    """引擎当前装着适配的目录：记录里的优先（引擎配置后来改了目录也认得），否则按配置推的目录里有清单才算。"""
+    if not eng:
+        return ''
+    d = _adapt_records().get(eng.get('id') or '')
+    if d and _adapt_manifest(d) is not None:
+        return d
+    d = engine_role_dir(eng)
+    return d if d and _adapt_manifest(d) is not None else ''
+
+
+def role_file(slug, eng=None):
+    """内联提示词里给的完整角色说明：引擎适配目录里的 SKILL.md > ~/.claude/agents/<角色>.md。"""
+    d = _adapt_dir_of(eng)
+    if d and f'{slug}/SKILL.md' in ((_adapt_manifest(d) or {}).get('files') or {}) and (Path(d) / slug / 'SKILL.md').is_file():
+        return str(Path(d) / slug / 'SKILL.md')
+    return str(AGENTS_DIR / f'{slug}.md')
+
+
+def _sha(text):
+    import hashlib
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()[:12]
+
+
+def _skill_text(slug, src):
+    """~/.claude/agents/<角色>.md → Agent Skills 格式的 SKILL.md：frontmatter 只留 name / description（≤500 字），正文原样，前面加一段用法。"""
+    text = read_text(src)
+    head, body = '', text
+    if text.startswith('---'):
+        parts = text.split('\n---', 1)
+        if len(parts) == 2:
+            head, body = parts[0], parts[1].lstrip('-').lstrip('\n')
+    mm = re.search(r'^description:\s*(.+)$', head, re.M)
+    desc = (mm.group(1).strip().strip('"\'') if mm else '') or f'{role_cn(slug)}：{ROLE_DUTY.get(slug, "")}'
+    desc = desc.replace('"', '“')[:500]
+    return (f'---\nname: {slug}\ndescription: "{desc}"\n---\n'
+            f'<!-- {ADAPT_MARK}（{src}），请勿手改：在知识库「⚙ 设置 → 🧑‍🤝‍🧑 角色团」更新 / 移除 -->\n\n'
+            f'> 这是角色套件里「{role_cn(slug)}」的角色说明。被要求以这个专家的视角出意见时，按下面的身份、职责和方法工作；'
+            '只给意见、补能力，不设卡、不替用户做决定。正文里提到的 Agent 子 agent、Claude 专用工具在本引擎没有的，按同样的思路用本引擎的工具完成。\n\n'
+            + body)
+
+
+def adapt_engine(eid):
+    """给一个非 Claude 引擎生成 / 更新适配：<专家目录>/<角色>/SKILL.md。用户自己的同名 skill 不覆盖；装过的被手改了先备份再覆盖。"""
+    import shutil
+    from datetime import datetime
+    eng = next((e for e in _engines() if e['id'] == eid), None)
+    if not eng:
+        raise KBError(f'没有这个 AI 引擎：{eid}')
+    if is_claude(eng):
+        return f'{eng["名称"]} 用原生子 agent，套件装在 ~/.claude，不用另装适配'
+    d = engine_role_dir(eng)
+    if not d:
+        raise KBError(f'{eng["名称"]} 没有专家目录：在「⚙ 设置 · AI 引擎」编辑它，填「角色套件专家目录」后再装（内联专家意见不装适配也能用）')
+    if _manifest() is None:
+        raise KBError('还没装角色套件：先装套件（~/.claude 是角色定义的唯一真源），再给其他引擎装适配')
+    old = _adapt_records().get(eid)
+    if old and old != d and _adapt_manifest(old) is not None:
+        remove_adapter(eid, quiet=True)                 # 专家目录换了：旧目录里的先清掉
+    base = Path(d)
+    man = _adapt_manifest(base) or {}
+    had = man.get('files') or {}
+    files, skipped, backed = {}, [], []
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    for a in ADAPT_ROLES:
+        src = AGENTS_DIR / f'{a}.md'
+        if not src.is_file():
+            continue
+        rel = f'{a}/SKILL.md'
+        f = base / rel
+        txt = _skill_text(a, src)
+        if f.is_file() and rel not in had:
+            skipped.append(a)                            # 用户自己的同名 skill：不碰
+            continue
+        if f.is_file():
+            cur = read_text(f)
+            if _sha(cur) != (had.get(rel) or {}).get('sha') and cur != txt:
+                bk = _backup_root() / eid / stamp / 'files' / rel
+                bk.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, bk)
+                backed.append(a)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(txt, 'utf-8')
+        files[rel] = {'sha': _sha(txt)}
+    for rel in set(had) - set(files):                    # 上一版有、这一版没有的
+        f = base / rel
+        if f.is_file() and ADAPT_MARK in read_text(f):
+            f.unlink()
+            if f.parent.is_dir() and not any(f.parent.iterdir()):
+                f.parent.rmdir()
+    base.mkdir(parents=True, exist_ok=True)
+    (base / ADAPT_MANIFEST).write_text(json.dumps({'engine': eid, 'source': str(AGENTS_DIR), 'suite_version': (_manifest() or {}).get('suite_version', ''),
+                                                    'generated_at': stamp, 'files': files}, ensure_ascii=False, indent=2), 'utf-8')
+    rec = _adapt_records()
+    rec[eid] = d
+    _save_adapt_records(rec)
+    msg = f'已给 {eng["名称"]} 装好角色套件适配：{len(files)} 个专家 → {d}/<角色>/SKILL.md'
+    if skipped:
+        msg += f'；同名 skill 是你自己的，没覆盖：{"、".join(skipped)}'
+    if backed:
+        msg += f'；手改过的先备份到 角色套件备份/{eid}/{stamp}：{"、".join(backed)}'
+    return msg
+
+
+def remove_adapter(eid, quiet=False):
+    """按清单删一个引擎的适配（只删带生成标记的），删前备份到 角色套件备份/<引擎 id>/<时间>/。"""
+    import shutil
+    from datetime import datetime
+    rec = _adapt_records()
+    eng = next((e for e in _engines() if e['id'] == eid), None)
+    d = rec.get(eid) or (engine_role_dir(eng) if eng else '')
+    man = _adapt_manifest(d) if d else None
+    if man is None:
+        rec.pop(eid, None)
+        _save_adapt_records(rec)
+        if quiet:
+            return ''
+        raise KBError(f'{(eng or {}).get("名称", eid)} 没装角色套件适配')
+    base = Path(d)
+    dst = _backup_root() / eid / datetime.now().strftime('%Y%m%d-%H%M%S')
+    n = 0
+    for rel in man.get('files') or {}:
+        if rel.startswith('/') or '..' in Path(rel).parts:
+            continue
+        f = base / rel
+        if f.is_file() and ADAPT_MARK in read_text(f):
+            (dst / 'files' / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, dst / 'files' / rel)
+            f.unlink()
+            n += 1
+            if f.parent.is_dir() and not any(f.parent.iterdir()):
+                f.parent.rmdir()
+    dst.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(base / ADAPT_MANIFEST), str(dst / ADAPT_MANIFEST))
+    rec.pop(eid, None)
+    _save_adapt_records(rec)
+    return f'已移除 {(eng or {}).get("名称", eid)} 的角色套件适配（{n} 个文件，备份在 角色套件备份/{eid}/{dst.name}）'
+
+
+def adapter_status():
+    """设置卡片：各引擎 → [{id, 名称, 方式, 专家目录, 适配已装, 适配数, 应有}]。"""
+    out = []
+    have = [a for a in ADAPT_ROLES if (AGENTS_DIR / f'{a}.md').is_file()]
+    for e in _engines():
+        d = _adapt_dir_of(e)
+        man = _adapt_manifest(d) if d else None
+        out.append({'id': e['id'], '名称': e['名称'], '方式': team_mode(e) or '关', '原生': is_claude(e),
+                    '专家目录': d or engine_role_dir(e), '适配已装': man is not None, '适配数': len((man or {}).get('files') or {}),
+                    '应有': len(have)})
+    return out
+
+
+def adapter_residue():
+    """适配残留：记录里或各引擎专家目录里还有适配清单的 → ['<引擎>：<目录>'…]。"""
+    seen, out = set(), []
+    names = {e['id']: e['名称'] for e in _engines()}
+    cands = list(_adapt_records().items()) + [(e['id'], engine_role_dir(e)) for e in _engines()]
+    for eid, d in cands:
+        if d and d not in seen and _adapt_manifest(d) is not None:
+            seen.add(d)
+            out.append(f'{names.get(eid, eid)} 的角色套件适配：{d}')
+    return out
+
+
+def _refresh_adapters():
+    """套件装好 / 更新后，已装适配的引擎跟着重新生成。→ [结果]"""
+    out = []
+    for eid in list(_adapt_records()):
+        try:
+            out.append(adapt_engine(eid))
+        except KBError as e:
+            out.append(f'{eid} 适配没更新：{e}')
+    return out
+
+
+def _remove_all_adapters():
+    out = []
+    for eid in {**_adapt_records(), **{e['id']: '' for e in _engines() if _adapt_dir_of(e)}}:
+        try:
+            m = remove_adapter(eid, quiet=True)
+            if m:
+                out.append(m)
+        except (KBError, OSError) as e:
+            out.append(f'{eid} 适配没删掉：{e}')
+    return out
+
+
 # ---------------------------------------------------------------- 开关判断与提示词
 def _meta(period):
     if isinstance(period, dict):
@@ -801,8 +1076,8 @@ def _meta(period):
 
 
 def team_on(m, eng):
-    """这个会话挂不挂角色团：全局开、期没选关、本机 Claude 引擎、套件装了。"""
-    if not team_settings()['开启'] or not is_claude(eng):
+    """这个会话挂不挂角色团：全局开、期没选关、引擎没关角色团（Claude 子 agent / 其他引擎内联）、套件装了（~/.claude 是唯一真源）。"""
+    if not team_settings()['开启'] or not team_mode(eng):
         return False
     if (_meta(m) or {}).get('角色团') == '关':
         return False
@@ -919,6 +1194,8 @@ def team_text(scene, m=None, end='', eng=None, auto=False):
         _warn_unknown(scene, m)
     if not cfg or not roles:
         return ''
+    if eng is not None and team_mode(eng) == '内联':
+        return _inline_text(scene, cfg, roles, eng)
     t, _ = load_scenes(team_settings()['档位'])
     cap = int(cfg.get('上限') or 1)
     per = cfg.get('每确认点上限')
@@ -951,17 +1228,60 @@ def team_text(scene, m=None, end='', eng=None, auto=False):
     return '\n'.join(out)
 
 
+def _role_lines(roles, eng):
+    out = []
+    for r, why, lead in roles:
+        out.append(f'- {r}（{role_cn(r)}{"，主导" if lead else ""}）' + (f'：{why}' if why else '')
+                   + f'\n  负责：{ROLE_DUTY.get(r, "")}；完整角色说明：{role_file(r, eng)}')
+    return out
+
+
+def _inline_text(scene, cfg, roles, eng):
+    """内联专家意见：引擎没有 Agent 子 agent 时，把场景专家的说明拼进提示词，主会话按专家视角出意见（只给意见、不设卡）。
+    每段意见开头单独一行 [kb-role:<英文名>]，会话结束按标记统计「👤 参与」。"""
+    cap = int(cfg.get('上限') or 1)
+    per = cfg.get('每确认点上限')
+    t, _ = load_scenes(team_settings()['档位'])
+    pdir = t.get('产物目录') or _BUILTIN['产物目录']
+    sub = pdir.split('/', 1)[1] if '/' in pdir else '角色产物'
+    prod = cfg.get('产物') or ''
+    lead = next((r for r, _, ld in roles if ld), roles[0][0])
+    out = ['\n\n【角色团·内联专家意见】流程命令照旧，专家只出意见：开发流程、斜杠命令、知识库工具照原来的要求用，专家意见不替代它们。',
+           f'这个引擎没有子 agent：本场景「{scene}」需要专业意见时，由你换到下面专家的视角自己出意见（先读完整角色说明，按其中的职责、方法和交付模板来）：',
+           *_role_lines(roles, eng),
+           f'什么时候用：{cfg.get("触发") or "需要专业意见时"}（说「派 / 请某专家」的地方，都按「换到该专家视角出意见」理解）。不需要就不用。',
+           f'- 次数：本会话最多出 {cap} 段专家意见' + (f'（每个确认点最多 {per} 段）' if per else '') + '，同一个专家不要反复出；够了就按原流程继续。',
+           '- 格式：每段专家意见开头单独一行写标记「[kb-role:<英文名>]」（英文名用上面列表里的，如列表第一个就写它的英文名），'
+           '下一行起写意见正文；知识库按这个标记统计参与的专家。意见写在你的回复里，不另建文件。',
+           ('- 产物由你用知识库工具落库：PRD / 方案 / Bug 分析照旧走 kb_write_doc / kb_stack_plan / kb_bug_analysis；'
+            f'本场景的角色产物「{prod}」用 kb_write_doc 写到 category=其他资料、filename={sub}/<阶段序号>-{prod}.md，'
+            '同名覆盖更新，不要新建重复文件；不要在仓库或知识库目录里建 workspace/。' if prod and prod not in _OWN_TOOL_PRODUCTS else
+            '- 专家意见由你吸收进原来的产出' + (f'（{prod} 照旧用原来的知识库工具交）' if prod else '')
+            + '，本场景不用另写角色产物文件；不要在仓库或知识库目录里建 workspace/。'),
+           f'- 要用户确认时照旧 kb_ask（stage 填 立项 / 技术方案 / 上线放量 / 确认点），recommend 按主导专家的意见给，末尾注明「建议来自：{role_cn(lead)}」'
+           '（实际按谁的视角就写谁）；明确、不扩大范围的带 sure=true。kb_ask 返回「AI 已自动定」或提示免打扰时按 recommend 执行，并用 kb_log 写明采用的建议和「建议来自：<角色>」。'
+           '产品经理视角的选项里有扩大范围和不扩大两类时，recommend 选不扩大。',
+           '- 专家只协助、不设卡：不因为专家视角拦下、拒绝或要求额外确认原流程里的步骤。',
+           '- 开始开发、方案拍板、Bug 审核只能用户本人在网页上点：不要调用 kb approve，也不要替用户操作网页。']
+    if cfg.get('只读'):
+        out.append('- 这是只读会话：专家视角同样只读代码、给意见，不改代码或本机文件。')
+    return '\n'.join(out)
+
+
 def push_rule(m, eng):
     """跟进（talk._push_prompt）第 1 步后补的「按类型派角色」；不挂角色团时空串。"""
     if not team_on(m, eng) or not scene_roles('跟进', _meta(m))[1]:
         return ''
+    if team_mode(eng) == '内联':
+        return ('\n   按类型出专家意见：只需回答的问题不用；缺陷按对应端工程师视角定位、测试专家视角补复现和影响面；'
+                '需求扩展先按 product-manager 视角写变更说明（改什么、影响谁、延后什么），再用 kb_ask 确认。')
     return ('\n   按类型派角色：只需回答的问题不派角色；缺陷请对应端工程师定位、测试专家补复现和影响面；'
             '需求扩展先请 product-manager 写变更说明（改什么、影响谁、延后什么），再用 kb_ask 确认。')
 
 
 # ---------------------------------------------------------------- 统计：会话日志里的 Agent / Task 调用
 def team_count(logf):
-    """数主会话的 Agent / Task 调用 → {subagent_type: 次数}（子 agent 内部的调用不算）。"""
+    """数主会话的 Agent / Task 调用 → {subagent_type: 次数}（子 agent 内部的调用不算）；内联模式数 AI 回复里的 [kb-role:<角色>] 标记。"""
     try:
         fh = open(logf, encoding='utf-8', errors='ignore')
     except (OSError, TypeError):
@@ -975,9 +1295,23 @@ def team_count_text(text):
     return _count_lines((text or '').splitlines())
 
 
+_MARK = re.compile(r'\[kb-role:([a-z][a-z0-9-]*)\]')
+# 内联标记只数 AI 自己说的话：最终汇总、工具返回、命令输出、子 agent 的行里重复出现的不算
+_MARK_SKIP = ('"type":"result"', '"type": "result"', '"tool_result"', '"function_call_output"', '"command_execution"',
+              '"type":"user"', '"type": "user"', '"tool_output"', '"aggregated_output"', '"type":"reasoning"', '"type": "reasoning"')
+
+
+def _count_marks(line, out):
+    if '[kb-role:' not in line or any(x in line for x in _MARK_SKIP) or '"parent_tool_use_id":"' in line.replace(' ', ''):
+        return
+    for r in sorted(set(_MARK.findall(line))):
+        out[r] = out.get(r, 0) + 1
+
+
 def _count_lines(lines):
     out = {}
     for line in lines:
+        _count_marks(line, out)
         if '"assistant"' not in line[:40] or ('"Agent"' not in line and '"Task"' not in line):
             continue          # 同 devices._parse_act：工具返回、系统事件不解析
         try:

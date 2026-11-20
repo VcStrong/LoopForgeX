@@ -144,6 +144,7 @@ class TestInject(Base):
     def test_other_engines(self):
         for e in (CODEX, CUSTOM):
             self.assertNotIn('【角色团】', ' '.join(engines.engine_cmd(e, '任务', 't', '', '方案', self.meta())))
+            self.assertIn('【角色团·内联专家意见】', ' '.join(engines.engine_cmd(e, '任务', 't', '', '方案', self.meta())))
         hermes = dict(engines.BUILTIN_ENGINES['hermes'], id='hermes', 名称='Hermes', 命令='/bin/echo')
         self.assertNotIn('【角色团】', ' '.join(engines.engine_cmd(hermes, '任务', 't', '', '方案', self.meta())))
 
@@ -284,7 +285,8 @@ class TestScenes(Base):
 
     def test_push_rule(self):
         self.assertIn('需求扩展先请 product-manager 写变更说明', team.push_rule(self.meta(), CLAUDE))
-        self.assertEqual(team.push_rule(self.meta(), CODEX), '')
+        self.assertIn('需求扩展先按 product-manager 视角写变更说明', team.push_rule(self.meta(), CODEX))
+        self.assertEqual(team.push_rule(self.meta(), dict(CODEX, 角色团方式='关')), '')
         set_settings(开启=False)
         self.assertEqual(team.push_rule(self.meta(), CLAUDE), '')
 
@@ -835,6 +837,128 @@ class TestSuiteManage(Base):
         self.assertEqual(team.team_status()['状态']['套件目录'], str(home))
         h, _ = call('POST', '/api/team/suite', {'action': 'nope'})
         self.assertEqual(h.code, 400)
+
+
+
+def codex_line(text, kind='agent_message'):
+    return json.dumps({'type': 'item.completed', 'item': {'id': 'i', 'type': kind, 'text': text}}, ensure_ascii=False)
+
+
+class TestMultiEngine(Base):
+    """多引擎：Claude 子 agent 原样；其他引擎内联专家意见；引擎可强制方式；适配层按引擎装 / 移除；内联也计数。"""
+    def set_engine(self, eid, **kv):
+        s = kb.load_settings()
+        s.setdefault('引擎', {})[eid] = dict(engines.BUILTIN_ENGINES[eid], **kv)       # 命令名留原样（codex / hermes）：只推专家目录，不运行
+        kb.save_settings(s)
+
+    def tearDown(self):
+        s = kb.load_settings()
+        s.pop('引擎', None)
+        kb.save_settings(s)
+
+    def test_modes(self):
+        self.assertEqual(team.team_mode(CLAUDE), '子agent')
+        self.assertEqual(team.team_mode(CODEX), '内联')
+        self.assertEqual(team.team_mode(dict(CLAUDE, 角色团方式='内联')), '内联')
+        self.assertEqual(team.team_mode(dict(CODEX, 角色团方式='关')), '')
+        self.assertEqual(team.team_mode(dict(CUSTOM, 角色团方式='子agent')), '子agent')
+        self.assertEqual(team.team_mode(None), '')
+
+    def test_engine_off_identical(self):
+        e = dict(CODEX, 角色团方式='关')
+        self.assertEqual(engines.engine_cmd(e, '任务', 't', '', '方案', self.meta()), old_engine_cmd(e, '任务', 't'))
+
+    def test_inline_text(self):
+        t = team.team_text('方案', self.meta(), eng=CODEX)
+        self.assertTrue(t.startswith('\n\n【角色团·内联专家意见】'))
+        self.assertIn('- architect（架构师，主导）', t)
+        self.assertIn(str(team.AGENTS_DIR / 'architect.md'), t)
+        self.assertIn('[kb-role:<英文名>]', t)
+        self.assertIn('本会话最多出 4 段专家意见', t)
+        self.assertNotIn('subagent_type', t)
+        self.assertNotIn('run_in_background', t)
+        self.assertIn('只读会话', t)
+        self.assertNotRegex(t, r'\[kb-role:[a-z]', '提示词里不能有会被计数的真标记')
+        install(manifest=False)
+        self.assertEqual(team.team_text('方案', self.meta(), eng=CODEX), '', '套件没装不挂')
+
+    def test_inline_count(self):
+        lines = [codex_line('[kb-role:architect]\n方案意见……\n[kb-role:qa-expert]\n用例'),
+                 codex_line('[kb-role:architect]\n第二段'),
+                 codex_line('cat x 输出 [kb-role:product-manager]', 'command_execution'),
+                 json.dumps({'type': 'result', 'result': '[kb-role:architect] 汇总'}),
+                 json.dumps({'type': 'user', 'message': {'content': [{'type': 'tool_result', 'content': '[kb-role:ux-designer]'}]}}),
+                 assistant('Agent', 'backend-engineer')]
+        self.assertEqual(team.team_count_text('\n'.join(lines)), {'architect': 2, 'qa-expert': 1, 'backend-engineer': 1})
+        self.assertEqual(team.team_count_text('纯文本输出\n[kb-role:architect]\n意见'), {'architect': 1})
+
+    def test_adapter_install_remove(self):
+        d = TMP / 'home' / '.codex' / 'skills'
+        shutil.rmtree(d.parent, ignore_errors=True)
+        (d / 'architect').mkdir(parents=True)
+        (d / 'architect' / 'SKILL.md').write_text('mine', 'utf-8')        # 用户自己的同名 skill
+        (team.AGENTS_DIR / 'qa-expert.md').write_text('---\nname: qa-expert\ndescription: 测试专家。什么时候用我：对质量负责。\ntools: Read\nmodel: opus\n---\n# 测试专家\n正文', 'utf-8')
+        self.set_engine('codex')
+        self.assertEqual(team.engine_role_dir(engines.get_engine('codex')), str(d))
+        h, _ = call('POST', '/api/team/suite', {'action': 'install', 'engine': 'codex'})
+        self.assertEqual(h.code, 200, h.body)
+        self.assertIn('没覆盖：architect', h.body['msg'])
+        self.assertEqual((d / 'architect' / 'SKILL.md').read_text('utf-8'), 'mine')
+        q = (d / 'qa-expert' / 'SKILL.md').read_text('utf-8')
+        self.assertTrue(q.startswith('---\nname: qa-expert\ndescription: "测试专家。'))
+        self.assertNotIn('tools:', q)
+        self.assertIn('# 测试专家\n正文', q)
+        self.assertFalse((d / 'orchestrator').exists())
+        self.assertEqual(team.role_file('qa-expert', engines.get_engine('codex')), str(d / 'qa-expert' / 'SKILL.md'))
+        self.assertIn(str(d / 'qa-expert' / 'SKILL.md'), team.team_text('审查·端', self.meta(), 'Web', eng=engines.get_engine('codex')))
+        st = {e['id']: e for e in team.team_status()['状态']['引擎']}
+        self.assertTrue(st['codex']['适配已装'])
+        self.assertEqual(st['codex']['适配数'], 13)
+        self.assertTrue(st['claude']['原生'])
+        (d / 'qa-expert' / 'SKILL.md').write_text('手改', 'utf-8')
+        self.assertIn('手改过的先备份', team.adapt_engine('codex'))
+        h, _ = call('POST', '/api/team/suite', {'action': 'remove', 'engine': 'codex'})
+        self.assertEqual(h.code, 200, h.body)
+        self.assertFalse((d / 'qa-expert').exists())
+        self.assertFalse((d / team.ADAPT_MANIFEST).exists())
+        self.assertEqual((d / 'architect' / 'SKILL.md').read_text('utf-8'), 'mine', '用户自己的 skill 不动')
+        self.assertTrue(team.MANIFEST.is_file(), '只移除适配，套件不动')
+        self.assertEqual(team.adapter_residue(), [])
+
+    def test_full_remove_takes_adapters(self):
+        d = TMP / 'home' / 'hx'
+        shutil.rmtree(d, ignore_errors=True)
+        self.set_engine('hermes', 专家目录=str(d))
+        team.adapt_engine('hermes')
+        self.assertTrue((d / 'architect' / 'SKILL.md').is_file())
+        man = json.loads(team.MANIFEST.read_text('utf-8'))
+        man['files'] = {}
+        team.MANIFEST.write_text(json.dumps(man), 'utf-8')
+        msg = team.team_remove()
+        self.assertIn('Hermes Agent 的角色套件适配', msg)
+        self.assertFalse((d / 'architect').exists())
+        self.assertEqual(team.adapter_residue(), [])
+
+    def test_residue_in_status_and_doctor(self):
+        d = TMP / 'home' / 'gx'
+        shutil.rmtree(d, ignore_errors=True)
+        self.set_engine('codex', 专家目录=str(d))
+        team.adapt_engine('codex')
+        team.MANIFEST.unlink()
+        self.assertTrue(any('Codex CLI 的角色套件适配' in x for x in team.team_status()['状态']['残留']))
+        from kblib.steward import doctor
+        it = next(x for x in doctor.doctor(probe=False) if x['id'] == 'suite')
+        self.assertEqual(it['状态'], 'bad')
+        team.team_remove()
+        self.assertFalse((d / team.ADAPT_MANIFEST).exists())
+
+    def test_flow_draft_inline_not_agent_prompt(self):
+        self.assertEqual(team.team_mode(CODEX), '内联')
+        self.assertIn("team_mode(eng) == '子agent'", inspect.getsource(engines.flow_draft))
+
+    def test_save_engine_mode_validated(self):
+        with self.assertRaises(kb.KBError):
+            engines.save_engine(dict(engines.BUILTIN_ENGINES['codex'], id='codex', 角色团方式='乱填'))
 
 
 if __name__ == '__main__':

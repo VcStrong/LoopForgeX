@@ -243,7 +243,7 @@ def doctor(probe=True):
                 '后台会话用 --permission-mode auto' + ('' if sup else '（claude --help 里没读到选项；账号是否开通 auto 只能实际跑一次看）'))
 
     man = _team._manifest()
-    left = [] if man is not None else _team.suite_residue()
+    left = [] if man is not None else _team.suite_residue() + _team.adapter_residue()      # 套件移除了，其他引擎的适配也该一并清掉
     hooks = 0
     if man is None and d:
         _, ours = _team._split_hooks(d)

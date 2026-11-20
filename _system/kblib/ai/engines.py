@@ -34,6 +34,12 @@ ENGINE_FIELDS = [
      '用来在网页上显示动作、取最后结果和会话号；不确定选「纯文本」'),
     ('接入命令', '接入知识库的命令（可空）', 'text', '把知识库 MCP 服务注册给这个引擎；可用 {kb} 代表「python kb.py serve」的完整命令'),
     ('接入配置', '手动接入说明（可空）', 'textarea', '没有接入命令时，告诉用户把什么写进哪个配置文件；可用 {python}、{kbpy}'),
+    ('角色团方式', '角色团方式', 'select:自动|子agent|内联|关',
+     '自动：Claude 用 Agent 子 agent 派专家，其他引擎把场景专家的角色说明拼进提示词、由主会话按专家视角出意见（内联）；'
+     '子agent 只适合支持 Claude 同款 Agent 工具的引擎；关 = 这个引擎的会话不挂角色团'),
+    ('专家目录', '角色套件专家目录（可空）', 'text',
+     '在「⚙ 设置 → 角色团」给这个引擎装适配时，每个专家生成一个 <目录>/<角色>/SKILL.md；'
+     '空 = 按命令名：codex → ~/.codex/skills、gemini → ~/.gemini/skills、hermes → ~/.hermes/skills'),
 ]
 BUILTIN_ENGINES = {
     'claude': {
@@ -180,6 +186,8 @@ def save_engine(data):
             e[k] = [x.strip() for x in e[k].splitlines() if x.strip()]
     if e.get('输出格式') and e['输出格式'] not in ENGINE_FIELDS[5][2][7:].split('|'):
         raise KBError('输出格式不对')
+    if e.get('角色团方式') and e['角色团方式'] not in team.TEAM_MODES:
+        raise KBError('角色团方式只能是：' + '、'.join(team.TEAM_MODES))
     if not (e.get('名称') or '').strip() or not (e.get('命令') or '').strip():
         raise KBError('名称和命令不能为空')
     if '{提示词}' not in ' '.join(e.get('启动参数') or []):
@@ -625,7 +633,7 @@ def flow_draft(path, use_ai=False):
 - 开发步骤写成编号步骤，写清用什么命令推进、推进到什么状态算完成、停下等人时怎么用 kb_ask。
 - 只输出一个 JSON 对象，键为上面的配置项名称，不要输出其他文字，不要调用任何工具。"""
     eng = get_engine()
-    if team.team_on(None, eng) and team.scene_roles('流程设计')[1]:     # 角色团：请产品经理设计开发步骤和确认点（子 agent 一次可能超过 5 分钟）
+    if team.team_on(None, eng) and team.team_mode(eng) == '子agent' and team.scene_roles('流程设计')[1]:     # 角色团：请产品经理设计开发步骤和确认点（子 agent 一次可能超过 5 分钟）
         prompt = prompt.replace('不要输出其他文字，不要调用任何工具。',
                                 '不要输出其他文字。只可调用 Agent 工具请产品经理（subagent_type=product-manager）设计开发步骤和确认点，'
                                 '不要调用其他任何工具；最后只输出 JSON。')

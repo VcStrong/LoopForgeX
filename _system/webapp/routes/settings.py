@@ -74,13 +74,13 @@ def _post_api_team(self, u, n, body):
 
 @post('/api/team/suite', page_only=True)
 def _post_api_team_suite(self, u, n, body):
-    """角色套件安装 / 移除 / 恢复：action=install（home=套件目录，可空）/ remove（projects=false 不动项目级安装）/ restore（backup=备份名，空 = 最近一次）。"""
+    """角色套件安装 / 移除 / 恢复：action=install（home=套件目录，可空；engine=非 Claude 引擎 id 时只装这个引擎的适配）/ remove（projects=false 不动项目级安装；engine=引擎 id 时只移除它的适配）/ restore（backup=备份名，空 = 最近一次）。"""
     def run():
         act = body.get('action')
         if act == 'install':
-            return kb.team_install(body.get('home') or '')
+            return kb.team_install(body.get('home') or '', body.get('engine') or '')
         if act == 'remove':
-            return kb.team_remove(projects=body.get('projects', True) is not False)
+            return kb.team_remove(projects=body.get('projects', True) is not False, engine=body.get('engine') or '')
         if act == 'restore':
             return kb.team_restore(body.get('backup') or '')
         raise kb.KBError('action 只能是 install / remove / restore')

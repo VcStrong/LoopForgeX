@@ -758,7 +758,7 @@ def dev_overview(period):
             '引擎': m.get('AI引擎', ''), '默认引擎': get_engine()['名称'],
             '引擎列表': [{'id': x['id'], '名称': x['名称']} for x in engines()],
             '角色团': m.get('角色团') or '跟随', '角色调用': team.team_usage(m), '角色团全局': team.team_settings()['开启'],
-            '角色团引擎支持': team.is_claude(period_engine(m)),
+            '角色团引擎支持': bool(team.team_mode(period_engine(m))), '角色团方式': team.team_mode(period_engine(m)),
             '待确认': m.get('待确认') or [], '对话': (m.get('对话') or [])[-8:], '设备': devices(d.name) if _adb() else None,
             '非阻断问题': m.get('非阻断问题') or [], '复测': retest_info(d, m),
             '代码基线': timing.baseline_text(m.get('代码基线')), '代码基线详情': (m.get('代码基线') or {}).get('记录', ''),
