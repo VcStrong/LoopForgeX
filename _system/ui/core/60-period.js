@@ -4,7 +4,7 @@ function guideHtml(g){
   const n=g['下一步'];
   return `<div class="steps">${g['步骤'].map(s=>`<div class="step ${s['状态']==='done'?'done':s['状态']==='cur'?'cur':''}">${s['状态']==='done'?'✓ ':''}${esc(s['名称'])}</div>`).join('')}</div>
   <div class="gnext">${n['谁']?`<span class="who w-${esc(n['谁'])}">${n['谁']==='你'?'需要你判断':'AI 在做'}</span>`:''}<div class="tx"><b>${esc(n['文字'])}</b>${n['说明']?`<div>${esc(n['说明'])}</div>`:''}</div>
-    ${n['按钮']?`<button class="${n['谁']==='你'?'pri':''}" id="gGo" data-to="${esc(n['去']||'')}">${esc(n['按钮'])}</button>`:''}</div>`;
+    ${n['按钮']?`<button class="${n['谁']==='你'?'pri':''}" id="gGo" data-to="${esc(n['去']||'')}" data-at="${esc(n['锚点']||'')}">${esc(n['按钮'])}</button>`:''}</div>`;
 }
 async function period(name){
   const d=await api('/api/period?name='+enc(name)), m=d.meta;
@@ -95,7 +95,8 @@ async function period(name){
   if(!whole)app.querySelectorAll('[data-tab]').forEach(a=>a.onclick=()=>{ptabs[d.name]=a.dataset.tab;try{localStorage.setItem('kb.ptabs',JSON.stringify(ptabs))}catch(_){}
     app.querySelectorAll('[data-tab]').forEach(x=>x.classList.toggle('on',x===a));app.querySelectorAll('[data-pane]').forEach(x=>x.hidden=x.dataset.pane!==a.dataset.tab)});
   const gb=$('#gGo');if(gb)gb.onclick=()=>{const k=(gb.dataset.to||'').replace('tab:','');if(!k)return;
-    if(whole){const p=app.querySelector(`[data-pane="${k}"]`);if(p)p.scrollIntoView({behavior:'smooth',block:'start'})}else{const a=app.querySelector(`[data-tab="${k}"]`);if(a)a.click()}};
+    if(whole){const p=app.querySelector(`[data-pane="${k}"]`);if(p)p.scrollIntoView({behavior:'smooth',block:'start'})}else{const a=app.querySelector(`[data-tab="${k}"]`);if(a)a.click()}
+    if(gb.dataset.at)kbJumpTo(gb.dataset.at,app)};
   liveBox(d.name);livePopBind(d.name);devBox(d.name);talkBind(d.name);termBind(d.name);buildBox(d.name);stackBox(d.name);
   bindBugs(app);
   app.querySelectorAll('[data-read]').forEach(a=>a.onclick=()=>a.dataset.dir?openDir(a.dataset.read):readFile(a.dataset.read));

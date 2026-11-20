@@ -17,8 +17,12 @@ _APPROVED = ('已拍板', '开发中', '各端完成', '已验收')
 _BUILT = ('各端完成', '已验收')
 
 
-def _go(text, why='', who='你', button='', to=''):
-    return {'文字': text, '说明': why, '谁': who, '按钮': button, '去': to}
+def _go(text, why='', who='你', button='', to='', at=''):
+    # 锚点：板块里要滚到的元素 id（| 分隔，按顺序找第一个有的），没有就只滚到板块顶部
+    g = {'文字': text, '说明': why, '谁': who, '按钮': button, '去': to}
+    if at:
+        g['锚点'] = at
+    return g
 
 
 def period_guide(name):
@@ -114,7 +118,7 @@ def period_guide(name):
         nxt = _go('各端正在开发', 'AI 互相审查，有问题会停下来问你。', who='AI', button='看进度', to='tab:stack') if fs == '开发中' else \
             _go('方案已拍板，点开工', '在「全栈」点「▶ 各端开工」，各端并行开发。', button='去开工', to='tab:stack')
     elif names[cur] == '验收' and newp:
-        nxt = _go('各端做完了，等你验收', '看证据包，点「✓ 验收」后推送 / 提交；验收后还有「发布」一步。', button='去验收', to='tab:stack')
+        nxt = _go('各端做完了，等你验收', '看证据包，点「✓ 验收」后推送 / 提交；验收后还有「发布」一步。', button='去验收', to='tab:stack', at='stAcc|stEv')
     else:
-        nxt = _go('各端做完了，等你验收', '看证据包（每条需求在各端的完成度和审查结论），点「✓ 验收」后推送 / 提交。', button='去验收', to='tab:stack')
+        nxt = _go('各端做完了，等你验收', '看证据包（每条需求在各端的完成度和审查结论），点「✓ 验收」后推送 / 提交。', button='去验收', to='tab:stack', at='stAcc|stEv')
     return {'流程': flow, '步骤': steps, '下一步': nxt}

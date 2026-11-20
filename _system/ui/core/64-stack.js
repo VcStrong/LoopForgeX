@@ -62,7 +62,7 @@ async function stackBox(name){
         <td>${['待评估','待拍板'].includes(x['状态'])?`<a class="small mut" data-crx="${esc(x['编号'])}">驳回</a>`:''}</td></tr>`).join('')}</table></div>`:''}
     <div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap"><input type="text" id="crT" placeholder="要变什么，如：iOS 也要兼容新的返回字段" style="flex:1;min-width:260px">
       ${(have.length?have:common.slice(0,5)).map(e=>`<label class="small row" style="gap:2px"><input type="checkbox" data-cre="${e}" style="width:auto;margin:0">${e}</label>`).join('')}<button id="crGo">＋ 变更</button></div></div>`:'';
-  const EV=v['证据'],evBox=EV&&D.length?`<div style="margin-top:14px"><div class="row" style="gap:8px"><b>证据包</b><span class="mut small">需求 × 端：开发会话汇报的完成度、审查结论</span><span style="flex:1"></span>
+  const EV=v['证据'],evBox=EV&&D.length?`<div id="stEv" style="margin-top:14px"><div class="row" style="gap:8px"><b>证据包</b><span class="mut small">需求 × 端：开发会话汇报的完成度、审查结论</span><span style="flex:1"></span>
       ${EV['可验收']?`<button class="pri" id="stAcc">✓ 验收（拍板 2）</button>`:''}${(v['全栈']||{})['状态']==='已验收'?'<span class="badge st-已完成">已验收</span>':''}</div>
     <div class="tw" style="margin-top:6px"><table><tr><th style="width:80px">需求</th><th>标题</th>${[...new Set(EV['需求'].flatMap(r=>Object.keys(r['端'])))].map(e=>`<th style="width:120px">${esc(e)}</th>`).join('')}</tr>
       ${(()=>{const es=[...new Set(EV['需求'].flatMap(r=>Object.keys(r['端'])))];return EV['需求'].map(r=>`<tr><td class="mono small">${esc(r['编号'])}</td><td class="small">${esc(r['标题'])} <span class="mut">验收 ${r['验收']} 条</span></td>

@@ -338,7 +338,7 @@
     const fh = title + g.nodes.map(n => {
       const [x, y] = P[n.id], st = n['状态'] || '';
       const a = ag.find(z => n.id === 'e:' + z['角色']) || (n['类'] === '契约' && ag.find(z => z['角色'] === '方案')) || (n['类'] === '结论' && ag[0]);
-      return `<button type="button" class="tpl-fn ${esc(st)} ${n.lit ? 'lit' : ''} ${a ? 'hot' : ''} k-${esc(n['类'])}" data-tab="${NODE_TAB[n['类']] || ''}" style="left:${x - FW / 2}px;top:${y - FH / 2}px;width:${FW}px;height:${FH}px">
+      return `<button type="button" class="tpl-fn ${esc(st)} ${n.lit ? 'lit' : ''} ${a ? 'hot' : ''} k-${esc(n['类'])}" data-tab="${NODE_TAB[n['类']] || ''}" data-at="${n['类'] === '证据' ? 'stAcc|stEv' : ''}" style="left:${x - FW / 2}px;top:${y - FH / 2}px;width:${FW}px;height:${FH}px">
         <span class="tpl-fc">${esc(n['类'])}</span><b>${esc(n['名称'])}</b><span>${a ? `<i class="tpl-pulse"></i>${esc(a['状态'])}` : esc(n['说明'] || '')}</span></button>`;
     }).join('');
     const hotIds = new Set(g.nodes.filter(n => ['hot', 'core', 'bad'].includes(n['状态']) || n.lit).map(n => n.id));
@@ -352,6 +352,7 @@
       if (t) t.click();
       const el = pane && !pane.hidden ? pane : t;
       if (el) scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + scrollY - (docked() ? 120 : 70)), behavior: reduced.matches ? 'auto' : 'smooth' });
+      if (b.dataset.at && window.kbJumpTo) kbJumpTo(b.dataset.at, document.querySelector('#tplApp'));   // 证据包：板块顶部是选仓库，直接到「✓ 验收」
     });
     S.fbounds = { x: Math.min(...xs) - FW / 2 - 20, y: top - 10, w: Math.max(...xs) - Math.min(...xs) + FW + 40, h: Math.max(...ys) + FH / 2 + 20 - top };
     drawInsight();

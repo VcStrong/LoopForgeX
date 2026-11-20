@@ -343,7 +343,7 @@
       const n = h.slice(3), p = entry(n), x = p && p['下一步'];
       js = judgs().filter(j => j['链接'] === '#/p/' + n || (j['提议'] && j['提议']['事项'] === n));
       acts().filter(a => a['对象'] === n || String(a['对象']).startsWith(n + ' · ')).forEach(a => live.push(actChip(a)));
-      if (x && x['文字']) chips.push(`<button class="tpl-chip is-main ${x['谁'] === '你' ? 'is-you' : ''}" data-sec="${E((x['去'] || '').replace('tab:', ''))}" type="button"><span class="tpl-ai">AI</span>${x['谁'] ? `<span class="tpl-mut">${whoLabel(x['谁'])} ·</span>` : ''}${E(x['文字'])}${x['按钮'] ? ` <b>→ ${E(x['按钮'])}</b>` : ''}</button>`);
+      if (x && x['文字']) chips.push(`<button class="tpl-chip is-main ${x['谁'] === '你' ? 'is-you' : ''}" data-sec="${E((x['去'] || '').replace('tab:', ''))}" data-at="${E(x['锚点'] || '')}" type="button"><span class="tpl-ai">AI</span>${x['谁'] ? `<span class="tpl-mut">${whoLabel(x['谁'])} ·</span>` : ''}${E(x['文字'])}${x['按钮'] ? ` <b>→ ${E(x['按钮'])}</b>` : ''}</button>`);
       KB.app.querySelectorAll('.tpl-sec').forEach(sc => { const k = sc.dataset.k; chips.push(`<button class="tpl-chip ${sc.classList.contains('is-cur') ? 'is-cur' : ''}" data-sec="${k}" type="button">${E(SECS[k][0])}</button>`) });
       if (KB.app.querySelector('#tkMsg')) chips.push(`<button class="tpl-chip" data-talk type="button">跟这一期说…</button>`);
     } else if (h === '/bugs') {
@@ -379,7 +379,7 @@
       ${chips.length ? `<div class="tpl-chips">${chips.join('')}</div>` : ''}
       ${js.length ? `<div class="tpl-ctxj"><div class="tpl-h tpl-h-s"><span>需要你判断</span><span class="tpl-n">${js.length}</span></div>${judgHtml(js)}</div>` : ''}`;
     bindJudg(box.querySelector('.tpl-judgs'));
-    box.querySelectorAll('[data-sec]').forEach(b => b.onclick = () => { const k = b.dataset.sec; if (k) openSec(k, true); else { const g = q('#gGo'); if (g) g.click() } });
+    box.querySelectorAll('[data-sec]').forEach(b => b.onclick = () => { const k = b.dataset.sec; if (k) { openSec(k, true); if (b.dataset.at) kbJumpTo(b.dataset.at, KB.app) } else { const g = q('#gGo'); if (g) g.click() } });
     box.querySelectorAll('[data-talk]').forEach(b => b.onclick = () => { const t = q('#tkMsg'); if (t) { t.scrollIntoView({ behavior: smooth(), block: 'center' }); t.focus() } });
     box.querySelectorAll('[data-prefill]').forEach(b => b.onclick = () => { qEl.value = b.dataset.prefill; grow(); qEl.focus(); qEl.setSelectionRange(qEl.value.length, qEl.value.length); qEl.dispatchEvent(new Event('input')) });
     box.querySelectorAll('[data-run="theme"]').forEach(b => b.onclick = themeCycle);
@@ -443,7 +443,7 @@
     host.after(flow); host.style.display = "none";
     // core 的标签切换 / 「下一步」按钮：改成展开对应段落并滚过去
     nav.querySelectorAll('[data-tab]').forEach(a => a.onclick = () => openSec(a.dataset.tab, true));
-    const gb = app.querySelector('#gGo'); if (gb) gb.onclick = () => { const k = (gb.dataset.to || '').replace('tab:', ''); if (k) openSec(k, true) };
+    const gb = app.querySelector('#gGo'); if (gb) gb.onclick = () => { const k = (gb.dataset.to || '').replace('tab:', ''); if (k) { openSec(k, true); if (gb.dataset.at) kbJumpTo(gb.dataset.at, app) } };
   }
 
   // ───────────────────────────────────────────── 钩子

@@ -73,3 +73,16 @@ let entries=[],ovPeriods=[];
 let ovStw=null,ovStats=null,ovRange='';try{ovRange=localStorage.getItem('kb.statRange')||''}catch(_){}
 let ovFilter='全部';try{ovFilter=localStorage.getItem('kb.ovFilter')||'全部'}catch(_){}
 const DOT={收集中:'var(--s0)',已批准开发:'var(--info)',开发中:'var(--s2)',已完成:'var(--s3)',已暂停:'var(--s1)'};
+// 跳到板块里的某个元素（如「✓ 验收」按钮）：ids 用 | 分隔、按顺序取第一个有的；板块内容多是异步画的，等它渲染出来（最多约 8 秒）再滚，
+// 滚到可视区中间并闪一下；找不到就什么都不做（调用方已滚到板块顶部）
+function kbJumpTo(ids,root){
+  const L=String(ids||'').split('|').filter(Boolean);if(!L.length)return;
+  const find=()=>{for(const id of L){const e=(root||document).querySelector('#'+CSS.escape(id));if(e&&e.offsetParent!==null)return e}return null};
+  let n=0;const tick=()=>{const e=find();
+    if(!e){if(++n<40)setTimeout(tick,200);return}
+    e.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'center'});
+    e.classList.remove('kb-flash');void e.offsetWidth;e.classList.add('kb-flash');setTimeout(()=>e.classList.remove('kb-flash'),2200);
+    // 平滑滚动途中上面的异步块（开发进度、构建…）还可能长高，把它挤出可视区：滚完再看一眼，不在就补一次
+    setTimeout(()=>{const f=find()||e,r=f.getBoundingClientRect();if(r.top<0||r.bottom>innerHeight)f.scrollIntoView({block:'center'})},1200)};
+  setTimeout(tick,60);
+}

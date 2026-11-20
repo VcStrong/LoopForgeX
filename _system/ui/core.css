@@ -342,3 +342,7 @@ dialog .pv-code pre{white-space:pre;word-break:normal;font-size:12.5px;line-heig
 /* 全栈「各端开发」：参与、代码基线、推送放在每端下面的整行副行，不挤在状态列里 */
 tr:has(+tr.esub)>td{border-bottom:0}.esub td{padding-top:0;word-break:break-word}
 .etbl button{white-space:nowrap}.etbl td:nth-child(2){min-width:96px}.etbl .badge{white-space:nowrap}.etbl td .mono{word-break:break-all}
+/* 跳转到某个按钮 / 区块时闪一下（kbJumpTo） */
+.kb-flash{animation:kbflash 2s ease-out;border-radius:8px}
+@keyframes kbflash{0%,40%{box-shadow:0 0 0 4px var(--acc,#3b82f6)}100%{box-shadow:0 0 0 0 transparent}}
+@media (prefers-reduced-motion:reduce){.kb-flash{animation:none;outline:3px solid var(--acc,#3b82f6)}}
