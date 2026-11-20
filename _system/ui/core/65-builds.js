@@ -77,16 +77,21 @@ async function runDlg(name,repo,serial){
   const r=o['工程'].find(x=>x['路径']===o['当前'])||o['工程'][0],ph=o['手机'],ok=o['平台支持'].includes(r['平台']);
   const pick=(ph.find(p=>p['可装']&&p['序列号']===serial)||ph.find(p=>p['可装'])||{})['序列号'];
   const cands=r['模块候选']||[],mod=r['记住模块']||(cands[0]||{})['模块']||'',vr=r['记住变体']||'debug',last=o['上次'];
-  const plat=x=>x['平台']||'认不出';
+  const plat=x=>x['平台']||'认不出',sw=r['切分支']||{},bp=r['编译']||{},lc=((bp['学习']||{})['命令']||[]).slice(0,8);
   $('#dlgB').innerHTML=`<div class="form">
-    <p class="small mut" style="margin:0">用工程<b>当前工作区</b>的代码编译（不切分支、不拉代码；代码更新按「⚙ 设置 → ⏱ 时机 → 运行到手机前」，现在：${esc(r['代码更新']||'不动')}），装到手机并拉起启动页。工程被别的会话占着时自动排队。</p>
+    <p class="small mut" style="margin:0">${sw['动作']==='切换'?`先切到本期分支 <span class="mono">${esc(sw['目标'])}</span> 再编译（切过去就留在那）`:sw['动作']==='副本'?`用检出本期分支 <span class="mono">${esc(sw['目标'])}</span> 的 worktree 编译`:'用工程<b>当前工作区</b>的代码编译'}（代码更新按「⚙ 设置 → ⏱ 时机 → 运行到手机前」，现在：${esc(r['代码更新']||'不动')}），装到手机并拉起启动页。工程被别的会话占着时自动排队。</p>
     <label>工程${o['工程'].length>1?'':' <span class="mut small">（'+esc(plat(r))+'）</span>'}${o['工程'].length>1?`<select id="drRepo">${o['工程'].map(x=>`<option value="${esc(x['路径'])}" ${x['路径']===r['路径']?'selected':''}>${esc(x['端']?x['端']+' · ':'')}${esc(x['名称'])}（${esc(plat(x))}）</option>`).join('')}</select>`:`<div class="mono small">${esc(r['路径'])}</div>`}</label>
-    ${r['分支']!==undefined?`<div class="small">📍 <span class="mono">${esc(r['分支']||'?')} @${esc(r['提交']||'?')}</span>${r['未提交']?` · <span style="color:var(--warn)">${r['未提交']} 个未提交改动（会一起编进去）</span>`:''}
-      ${o['期分支']&&r['分支']&&o['期分支']!==r['分支']?`<div style="color:var(--warn)">这一期的分支是 <span class="mono">${esc(o['期分支'])}</span>，工作区现在在 <span class="mono">${esc(r['分支'])}</span>：按工作区现在的代码编译（不切分支）</div>`:''}</div>`:''}
+    ${r['分支']!==undefined?`<div class="small">📍 <span class="mono">${esc(r['分支']||'?')} @${esc(r['提交']||'?')}</span>${r['未提交']&&(!sw['动作']||sw['动作']==='不切')?` · <span style="color:var(--warn)">${r['未提交']} 个未提交改动（会一起编进去）</span>`:''}
+      ${sw['说明']?`<div style="color:${sw['动作']==='不切'?'var(--warn)':'var(--s3)'}">${sw['动作']==='不切'?'⚠ ':'⇄ '}${esc(sw['说明'])}</div>`:''}</div>`:''}
     ${!ok?`<div class="small" style="color:var(--warn)">${r['平台']?esc(r['平台'])+' 工程的「运行到手机」还没做（现在只支持 Android），后续再加。':'认不出是什么工程（没有 gradlew + settings.gradle）：现在只支持 Android gradle 工程。'}</div>`:`
     <div class="row" style="gap:8px;flex-wrap:wrap"><label style="flex:1;min-width:160px">模块 <span class="mut small">${cands.length?'（自动识别到 '+cands.length+' 个'+(r['模块依据']?'，按'+esc(r['模块依据'])+'选了 '+esc(r['记住模块']):'')+'）':'（没识别到，手动填）'}</span><input type="text" id="drMod" class="mono" list="drModL" value="${esc(mod)}" placeholder=":app"><datalist id="drModL">${cands.map(c=>`<option value="${esc(c['模块'])}">${esc(c['目录'])}${c['有渠道']?' · 有渠道，变体要写全':''}</option>`).join('')}</datalist></label>
       <label style="width:180px">变体 <input type="text" id="drVar" class="mono" value="${esc(vr)}" placeholder="debug"></label></div>
-    <label class="row small" style="gap:4px"><input type="checkbox" id="drRem" style="width:auto;margin:0"> 记住到这个工程（也可在「🗂 基础信息 → 工程设置」改）</label>
+    ${bp['方式']?`<div class="small"><label class="row" style="gap:6px">🛠 编译方式 <select id="drBuild" style="width:auto">${['自动','远程','本地'].map(x=>`<option ${x===(bp['设置']||'自动')?'selected':''}>${x}</option>`).join('')}</select>
+      <b>${bp['方式']==='远程'?'远程编译':'本地 gradle'}</b>${bp['命令']&&bp['命令'].length?` <span class="mono">${esc(bp['命令'].join(' '))}</span>`:''}</label>
+      ${bp['说明']&&bp['方式']!=='远程'?`<div class="mut">${esc(bp['说明'])}</div>`:''}
+      ${(bp['依据']||[]).length?`<div class="mut">依据：${bp['依据'].map(esc).join('；')}</div>`:''}
+      ${lc.length?`<details class="mut"><summary>开发会话里学到的编译命令（${lc.length}）</summary>${lc.map(c=>`<div><span class="mono">${esc(c['命令'])}</span> ×${c['次数']} · ${esc(c['最后']||'')} · ${esc((c['期']||[]).slice(-1)[0]||'')}</div>`).join('')}</details>`:''}</div>`:''}
+    <label class="row small" style="gap:4px"><input type="checkbox" id="drRem" style="width:auto;margin:0"> 记住到这个工程（模块、变体、编译方式；也可在「🗂 基础信息 → 工程设置」改）</label>
     <div><div class="small" style="margin-bottom:4px">手机 <span class="mut">（只装到能用的：本期占着的或空闲的；别的期 / 本人在用的不装）</span></div>${!o['adb']?'<div class="small" style="color:var(--warn)">本机找不到 adb：装好 Android SDK platform-tools 后再试</div>':ph.length?ph.map((x,i)=>`<label class="row small" style="gap:6px;color:${x['可装']?'var(--fg)':'var(--mut)'}"><input type="radio" name="drS" value="${esc(x['序列号'])}" ${x['序列号']===pick?'checked':''} ${x['可装']?'':'disabled'}>
       <b>${esc(x['型号']||'未知型号')}</b> <span class="mono">${esc(x['序列号'])}</span> · ${esc(x['说明'])}</label>`).join(''):'<div class="small mut">没有连着的手机</div>'}</div>
     <div class="row"><button class="pri" id="drGo" ${ph.some(x=>x['可装'])?'':'disabled'}>▶ 编译并运行</button></div>`}
@@ -96,7 +101,7 @@ async function runDlg(name,repo,serial){
   if(!$('#drGo'))return;
   $('#drGo').onclick=async()=>{const s=document.querySelector('input[name="drS"]:checked');if(!s)return toast('选一台手机');
     const b=$('#drGo');b.disabled=true;
-    try{const j=(await post('/api/devrun',{period:name,repo:r['路径'],serial:s.value,module:$('#drMod').value.trim(),variant:$('#drVar').value.trim(),remember:$('#drRem').checked})).job;drWatch(name,j)}
+    try{const j=(await post('/api/devrun',{period:name,repo:r['路径'],serial:s.value,module:$('#drMod').value.trim(),variant:$('#drVar').value.trim(),remember:$('#drRem').checked,build:$('#drBuild')?$('#drBuild').value:''})).job;drWatch(name,j)}
     catch(e){b.disabled=false;toast(e.message)}};
 }
 async function drWatch(name,jid){

@@ -47,7 +47,7 @@
  *   KB.api(url, opt)          fetch + JSON，出错抛 Error（e.need = 需要补的信息），401 跳登录；KB.post(url, body)：POST JSON
  *   KB.esc(s) KB.enc(s)       HTML 转义 / encodeURIComponent
  *   KB.toast(文字)            右下角提示；KB.openDlg(标题, html)：全局对话框（#dlg）；KB.confirm(文字, {ok,cancel,danger,title}) → Promise<bool>、KB.prompt(文字, 默认值, {title,ph}) → Promise<文字|null>：站内确认 / 填写框（不要用浏览器原生 confirm / prompt / alert）；KB.md(markdown, {base 相对路径按哪个目录找}) → {html, toc}（marked + DOMPurify，库没拉到前用内置轻量解析）；KB.mdInline(文字)
- *   KB.badge(状态)            状态徽章 html；KB.fileUrl(路径)；KB.readFile(路径, 起始行?)：对话框里预览文件（按扩展名选预览器）；KB.showImg(路径)：预览图片（带设计图说明）
+ *   KB.badge(状态)            状态徽章 html；KB.fileUrl(路径)；KB.readFile(路径, 起始行?)：对话框里预览文件（按扩展名选预览器）；KB.openDir(路径)：打开目录（本机在 Finder 打开，远端在网页列出）；KB.showImg(路径)：预览图片（带设计图说明）
  *   KB.preview                文件预览注册表：register({name, ext:['md',…], render(path, url, box, ctx)})（后注册的优先，ext '*' = 兜底）、find(路径)、list()、open(路径, 起始行)。
  *                             内置：md（marked + DOMPurify，mermaid / 代码高亮）、html（iframe sandbox，默认不执行脚本）、图片（缩放拖动，svg 用 img）、文字 / 代码（highlight.js，分段加载更多）、
  *                             pdf（浏览器阅读器）、docx（mammoth）、xlsx / xls / csv（SheetJS）、音视频、二进制（文件信息 + 下载）。ctx = {start, info{name,size,mtime,type}, note, bar 顶栏工具区}

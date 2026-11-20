@@ -5,10 +5,10 @@
   2. 检查：路径不存在 / 不是 git 仓库 → 报错停下。
   3. 仓库被占用（开发会话、修复会话、别的插件任务在用）→ 排队，空出来再继续；超过 QUEUE_MAX 秒放弃。
   4. 切分支：git fetch；本地有就 checkout + pull --ff-only；本地没有、远端有就建跟踪分支拉下来；都没有报错。
-     要切分支但有未提交改动 → 报错停下（不替你 stash）。
-  5. 运行插件；只提交插件改过的文件，推到远端；最后切回原来的分支。
+     要切分支但有未提交改动 → git stash 收起（说明写期名、时间、原分支），在那一期记一条待处理问题，不再停下。
+  5. 运行插件；只提交插件改过的文件，推到远端；切过去就留在目标分支（这一期明确要用的分支），不再切回原来的分支。
 svn 工作副本同样支持：分支填 trunk、branches/xxx 或分支名（自动找 branches/<名>）；svn switch 切过去、svn update 拉最新；
-  运行后新文件 svn add，只把插件改过的文件 svn commit（svn 提交就是推到服务器）；最后 switch 回原来的目录。
+  运行后新文件 svn add，只把插件改过的文件 svn commit（svn 提交就是推到服务器）；留在目标目录，不再 switch 回去。
 """
 import re
 import threading
@@ -174,18 +174,26 @@ def _run_locked(j, p, d, rp, cur, branch, remote, push):
         _step(j, f'git fetch {remote} {branch}')
         _git(rp, 'fetch', remote, branch, timeout=300)
     if branch != cur:
-        dirty = [x for x in _git(rp, 'status', '--porcelain').stdout.splitlines() if x.strip()]
-        if dirty:
-            raise KBError(f'仓库有 {len(dirty)} 个未提交的改动（在分支 {cur} 上），不能切到 {branch}；先提交或收起再运行')
+        from kblib.ai.branchswap import stash_for_switch
         local = _git(rp, 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}').returncode == 0
-        if local:
-            git('checkout', branch)
-            _step(j, f'切到本地分支 {branch}')
-        elif remote and _git(rp, 'rev-parse', '--verify', '--quiet', f'refs/remotes/{remote}/{branch}').returncode == 0:
-            git('checkout', '-b', branch, '--track', f'{remote}/{branch}')
-            _step(j, f'本地没有 {branch}，已从 {remote} 拉下来')
-        else:
+        track = not local and remote and _git(rp, 'rev-parse', '--verify', '--quiet', f'refs/remotes/{remote}/{branch}').returncode == 0
+        if not local and not track:
             raise KBError(f'本地和远端都没有分支 {branch}')
+        stashed = stash_for_switch(rp, branch, d, f'插件「{p["名称"]}」切分支')
+        if stashed:
+            _step(j, stashed['文字'] + (f'（已记待处理 {stashed["问题"]}）' if stashed['问题'] else ''))
+        try:
+            if local:
+                git('checkout', branch)
+                _step(j, f'切到本地分支 {branch}')
+            else:
+                git('checkout', '-b', branch, '--track', f'{remote}/{branch}')
+                _step(j, f'本地没有 {branch}，已从 {remote} 拉下来')
+        except KBError:
+            if stashed:
+                _git(rp, 'stash', 'pop')
+                _step(j, '切分支失败，收起的改动已还原')
+            raise
         switched = True
     try:
         if remote and _git(rp, 'rev-parse', '--abbrev-ref', '@{u}').returncode == 0:
@@ -219,10 +227,7 @@ def _run_locked(j, p, d, rp, cur, branch, remote, push):
         return f'完成：提交 {h}' + ('，已推送' if remote else '')
     finally:
         if switched and cur:
-            if _git(rp, 'status', '--porcelain').stdout.strip():
-                _step(j, f'仓库还有未提交改动，留在 {branch}，没有切回 {cur}')
-            elif _git(rp, 'checkout', cur).returncode == 0:
-                _step(j, f'已切回原来的分支 {cur}')
+            _step(j, f'留在 {branch}（这一期要用的分支），不切回原来的 {cur}')
 
 
 def _svn_branch(rp, name):
@@ -282,10 +287,7 @@ def _run_locked_svn(j, p, d, rp, cur, branch, push):
         return f'完成：svn 提交 r{rev}'
     finally:
         if switched and cur:
-            if hosts.svn_changes(loc)[0]:
-                _step(j, f'工作副本还有未提交改动，留在 {branch}，没有切回 {cur}')
-            elif hosts.svn(loc, 'switch', f'^/{cur}').returncode == 0:
-                _step(j, f'已 svn switch 回 {cur}')
+            _step(j, f'留在 {branch}，不 switch 回原来的 {cur}')
 
 
 def plugin_run_start(pid, target, repo='', push=True, by='用户（网页）'):

@@ -821,29 +821,30 @@ def _switch_pull(root):
     return pull_rebase(root) if timing.timing_policy('switch', str(root))[0] == timing.PULL else _fetch_now(root)
 
 
-def switch_branch(root, branch):
+def switch_branch(root, branch, d=None):
     """用户在网页上确认「切到开发分支」后执行：切换前在当前分支 git pull --rebase，切换后在新分支再 git pull --rebase。
-    已跟踪的文件有改动不切（未跟踪文件不影响）；本地没有的分支从 origin 拉；
+    已跟踪的文件有改动先 git stash 收起（说明写期名、时间、原分支），给了期 d 就记一条待处理问题，不再停下；本地没有的分支从 origin 拉；
     本地和远端都没有时不替用户新建（基线分支说不准），请用户自己建好或重新输入。返回每一步的结果。"""
     root = Path(root)
     if not re.fullmatch(r'[A-Za-z0-9][\w./-]*', branch or '') or '..' in branch:
         raise KBError(f'分支名不合法：{branch}')
-    dirty = [x for x in _git(root, 'status', '--porcelain', '--untracked-files=no').stdout.splitlines() if x.strip()]
-    if dirty:
-        raise KBError(f'{root.name} 有 {len(dirty)} 个未提交的改动，先提交或 stash 后再切分支：\n' + '\n'.join(dirty[:10]))
     local = _git(root, 'rev-parse', '--verify', '--quiet', f'refs/heads/{branch}').returncode == 0
     remote = not local and _git(root, 'ls-remote', '--exit-code', '--heads', 'origin', branch, timeout=30).returncode == 0
     if not local and not remote:
         raise KBError(f'{root.name} 本地和 origin 都没有分支「{branch}」。请先在仓库里从正确的基线分支建好（如 git switch -c {branch} origin/<基线>），'
                       '或重新输入分支名')
-    steps = ['切换前：' + _switch_pull(root)]
+    from kblib.ai.branchswap import stash_for_switch
+    stashed = stash_for_switch(root, branch, d, '开始开发切分支')
+    steps = ([stashed['文字']] if stashed else []) + ['切换前：' + _switch_pull(root)]
     if local:
         r = _git(root, 'switch', branch)
     else:
         f = _git(root, 'fetch', 'origin', f'{branch}:refs/remotes/origin/{branch}', timeout=120)
         r = f if f.returncode else _git(root, 'switch', '--track', f'origin/{branch}')
     if r.returncode:
-        raise KBError(f'切换分支失败：{(r.stderr or r.stdout).strip()[:500]}')
+        if stashed:
+            _git(root, 'stash', 'pop')
+        raise KBError(f'切换分支失败：{(r.stderr or r.stdout).strip()[:500]}' + ('（收起的改动已还原）' if stashed else ''))
     steps.append(f'已切换到 {branch}' + ('' if local else '（从 origin 拉取）'))
     steps.append('切换后：' + _switch_pull(root))
     return steps
@@ -881,7 +882,7 @@ def dev_start(period, note='', repo='', branch='', keep_branch=False):
     steps = []
     if branch or keep_branch:
         root = Path(repo) if repo else _sdd_repo(d, m, '', claim=True)
-        steps = switch_branch(root, branch) if branch else ['拉取：' + _switch_pull(root)]
+        steps = switch_branch(root, branch, d) if branch else ['拉取：' + _switch_pull(root)]
         cur = _git(root, 'branch', '--show-current').stdout.strip()
         repo = str(root)
         if branch and m.get('开发分支') and m['开发分支'] != cur:      # 网页切了分支：老分支记进分支历史，不直接覆盖

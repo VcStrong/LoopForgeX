@@ -15,7 +15,19 @@ def _get_api_devices(self, u, q):
 
 @get('/api/dev')
 def _get_api_dev(self, u, q):
-    return self._guard(lambda: {**kb.dev_overview(q.get('name', '')), **kb.stack_brief(q.get('name', '')), **kb.autopush_view(q.get('name', ''))})
+    return self._guard(lambda: {**kb.dev_overview(q.get('name', '')), **kb.stack_brief(q.get('name', '')), **kb.autopush_view(q.get('name', '')),
+                                '后台': kb.period_bg(q.get('name', ''))})
+
+
+@get('/api/period/bg')
+def _get_api_period_bg(self, u, q):
+    """这一期在跑的所有后台会话 / 插件任务（开发面板「会话」栏、删期确认框用）。"""
+    return self._guard(lambda: {'items': kb.period_bg(q.get('name', ''))})
+
+
+@post('/api/period/bg/stop', page_only=True)
+def _post_api_period_bg_stop(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.period_bg_stop(body.get('period', ''), body.get('key', ''))})
 
 
 @post('/api/dev/start', page_only=True)
@@ -101,7 +113,8 @@ def _get_api_devrun_job(self, u, q):
 @post('/api/devrun', page_only=True)
 def _post_api_devrun(self, u, n, body):
     return self._guard(lambda: {'job': kb.devrun_start(body.get('period', ''), body.get('repo', ''), body.get('serial', ''),
-                                                       body.get('module', ''), body.get('variant', ''), bool(body.get('remember')))})
+                                                       body.get('module', ''), body.get('variant', ''), bool(body.get('remember')),
+                                                       build=body.get('build', ''))})
 
 
 @post('/api/devrun/cancel', page_only=True)

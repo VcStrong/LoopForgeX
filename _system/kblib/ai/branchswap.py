@@ -57,6 +57,39 @@ def record_switch(m, old, new, end='', repo='', reason=''):
     return True
 
 
+def stash_for_switch(root, target, d=None, why='切分支'):
+    """切分支被未提交改动挡住时不再停下：git stash 收起（说明里写期名、时间、原分支），给了期就记一条非阻断问题
+    （stash 名、提交号、原分支、文件数、恢复命令），方便以后恢复。没有改动返回 None；stash 失败抛 KBError。
+    → {名称, 提交, 原分支, 文件数, 问题, 文字}"""
+    g = lambda *a, t=120: hosts.git(str(root), *a, timeout=t)
+    files = [x for x in g('status', '--porcelain', '--untracked-files=no').stdout.splitlines() if x.strip()]
+    if not files:
+        return None
+    old = g('branch', '--show-current').stdout.strip() or g('rev-parse', '--short', 'HEAD').stdout.strip() or '?'
+    name = d.name if d is not None else ''
+    label = f'kb: {name or "知识库"} {now()} 原分支 {old} → {target}（{why}）'
+    r = g('stash', 'push', '-m', label, t=300)
+    if r.returncode:
+        raise KBError(f'git stash 失败：{(r.stderr or r.stdout).strip()[-300:]}')
+    ref = g('rev-parse', '--short=10', 'stash@{0}').stdout.strip()
+    rp = Path(str(root)).name
+    text = (f'{rp} 原分支 {old} 有 {len(files)} 个未提交改动，已 git stash「{label}」（{ref}）；'
+            f'恢复：在 {old} 上 git stash apply {ref}')
+    iid = ''
+    if d is not None:
+        try:
+            from kblib.ai.devices import _add_issue
+            iid, _ = _add_issue(d, f'{rp}：{why}前收起了 {len(files)} 个未提交改动（原分支 {old}）',
+                                f'仓库：{root}\nstash：{label}\n提交号：{ref}\n原分支：{old}\n目标分支：{target}\n文件数：{len(files)}\n'
+                                + '\n'.join(files[:30]) + f'\n\n恢复：git -C {root} switch {old} && git stash apply {ref}（确认无用后 git stash drop）',
+                                '其他', '确认这些改动还要不要：要就切回原分支 git stash apply 恢复，不要就 git stash drop', source='知识库',
+                                key=f'stash:{ref}')
+            log(d, '收起改动', text + (f'（待处理 {iid}）' if iid else ''))
+        except Exception:      # noqa: BLE001 记录失败不耽误切分支
+            pass
+    return {'名称': label, '提交': ref, '原分支': old, '文件数': len(files), '问题': iid, '文字': text}
+
+
 def _check_name(b, what):
     if not _BR_RE.fullmatch(b or '') or '..' in b or b.endswith(('/', '.lock')):
         raise KBError(f'{what}不合法：{b}')
@@ -133,7 +166,7 @@ def swap_info(name):
 
 
 def branch_swap(period, new, base='', reason='', end='', by='用户（网页）', carry=False):
-    """网页「⇄ 换分支」：检查（没有会话在跑、工作区干净、老分支已推到远端）→ 建 / 切到新分支 → 老分支写进分支历史。
+    """网页「⇄ 换分支」：检查（没有会话在跑、老分支已推到远端；未提交改动自动 git stash 并记待处理）→ 建 / 切到新分支 → 老分支写进分支历史。
     base：从哪个分支拉出（默认老分支；可填 release-x 或 origin/release-x）。新分支已存在就直接切过去。
     Gerrit 仓库送审中（还没合进远端老分支）的提交算已推送；carry=True 把它们 cherry-pick 到新分支（不推送）。"""
     d = period_dir(period)
@@ -163,9 +196,6 @@ def branch_swap(period, new, base='', reason='', end='', by='用户（网页）'
         raise KBError('认不出现在的分支（仓库处在游离 HEAD）：先切回开发分支')
     if new == old:
         raise KBError(f'新分支和现在的分支一样：{new}')
-    dirty = [x for x in g('status', '--porcelain', '--untracked-files=no').stdout.splitlines() if x.strip()]
-    if dirty:
-        raise KBError(f'{Path(root).name} 有 {len(dirty)} 个未提交的改动，先提交或 stash 后再换分支：\n' + '\n'.join(dirty[:10]))
     remote = _remote(root)
     if not remote:
         raise KBError(f'{Path(root).name} 没有远端，没法确认老分支 {old} 已推送；老分支要先推到远端再换')
@@ -184,6 +214,7 @@ def branch_swap(period, new, base='', reason='', end='', by='用户（网页）'
     else:
         ahead, review = [], {}
     has = lambda ref: g('rev-parse', '--verify', '--quiet', ref).returncode == 0
+    stashed = stash_for_switch(root, new, d, '换分支')
     if has(f'refs/heads/{new}'):
         r, how = g('switch', new), f'切到已有的本地分支 {new}'
     elif has(f'refs/remotes/{remote}/{new}'):
@@ -198,7 +229,9 @@ def branch_swap(period, new, base='', reason='', end='', by='用户（网页）'
             start = f'{remote}/{old}'            # 老分支已核对和远端一致，从远端那份拉
         r, how = g('switch', '--no-track', '-c', new, start), f'从 {start} 新建 {new}'
     if r.returncode:
-        raise KBError(f'切换失败：{(r.stderr or r.stdout).strip()[:500]}')
+        if stashed:
+            g('stash', 'pop')
+        raise KBError(f'切换失败：{(r.stderr or r.stdout).strip()[:500]}' + ('（收起的改动已还原）' if stashed else ''))
     picked, skip, fail = [], [], ''
     if ahead:
         for sha in ahead:
@@ -237,6 +270,8 @@ def branch_swap(period, new, base='', reason='', end='', by='用户（网页）'
         extra.append(f'cherry-pick 停在 {fail}；没带过来的要手动处理')
     if pend and not carry:
         extra.append(f'老分支上送审中、还没合进去的提交没带过来：' + '、'.join(f'{x[:10]}（{review.get(x, "")}）' for x in pend))
+    if stashed:
+        extra.append(stashed['文字'] + (f'（已记待处理 {stashed["问题"]}）' if stashed['问题'] else ''))
     if extra:
         log(d, '换分支', '；'.join(extra))
     _rematch_builds(d.name)

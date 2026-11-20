@@ -278,7 +278,7 @@ def _upd_finish(name, code=None):
     _notify(f'知识库 · {d.name}', '来源条目已更新' if not left else f'还有 {len(left)} 条来源待更新')
 
 
-def claude_update(period):
+def claude_update(period, by='用户（网页）'):
     """网页「交给 Claude 更新」：后台启动 Claude 重新整理原文已变化的条目。不作为 MCP 工具提供。"""
     d = period_dir(period)
     s = update_session(d.name)
@@ -293,7 +293,7 @@ def claude_update(period):
     proc = engine_popen(eng, _update_prompt(d.name, sids), f'kb·更新·{d.name}', logf, ROOT)
     _UPD[d.name] = proc
     m = load_meta(d)
-    m['更新会话'] = {'pid': proc.pid, '状态': '运行中', '开始时间': now(), '来源': sids, '日志': str(logf)}
+    m['更新会话'] = {'pid': proc.pid, '状态': '运行中', '开始时间': now(), '来源': sids, '日志': str(logf), '发起': by}
     save_meta(d, m)
     log(d, '更新来源条目', f'后台会话 pid {proc.pid}：{"、".join(sids)}')
 

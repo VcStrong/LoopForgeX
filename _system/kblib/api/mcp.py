@@ -198,7 +198,7 @@ TOOLS = [
        serials={'type': 'array', 'items': {'type': 'string'}, 'description': '一般不填。点名的不可用时自动换成空闲手机'},
        strict={'type': 'boolean', 'description': '确实要特定那台（如 case 要求特定机型）才设 true：严格按 serials，不换'},
        reason=STR('用途，如「TASK-5 多人送礼：主持 + 2 个麦上用户」')), ['iteration']),
-    ('kb_run_on_device', '把某一期 / 事项的工程（当前工作区代码，不切分支、不拉代码）编译、装到手机并拉起启动页：用户说「把 xx 跑到手机上」'
+    ('kb_run_on_device', '把某一期 / 事项的工程（先切到本期分支、切过去就留在那；有未提交改动自动 git stash 并记待处理；工程被占用或切不了就用当前工作区；工程里有远程编译脚本如 remote_build.sh 就自动远程编译）编译、装到手机并拉起启动页：用户说「把 xx 跑到手机上」'
                          '「装到手机上看看」时用。现在只支持 Android（./gradlew <模块>:install<变体> → adb 拉起）；手机走占用机制，'
                          '没点名自动挑本期占着的或空闲的，别的期占着的不装；工程被别的会话占着时排队。默认等它结束并返回结果和错误摘要；'
                          'wait=false 只启动（任务是独立后台进程，网页开发面板「📱 手机」看实时日志）。',

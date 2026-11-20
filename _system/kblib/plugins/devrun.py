@@ -1,10 +1,17 @@
 """运行到手机：把某一期 / 事项的工程（当前工作区代码）编译、装到手机并拉起启动页（网页「▶ 运行到手机」、kb_run_on_device）。
 
-和「安装最新构建」（install.py，装 Jenkins 上的包）不同：这里用本机工作区现有代码编译，不切分支、不拉代码
-（时机「运行到手机前」默认不动，可在「⚙ 设置 → ⏱ 时机」或按工程改）。
+和「安装最新构建」（install.py，装 Jenkins 上的包）不同：这里用本机工程的代码编译；拉不拉代码按时机「运行到手机前」
+（默认不动，可在「⚙ 设置 → ⏱ 时机」或按工程改）。
+- 分支（plan_branch）：工程不在本期分支（全栈该端分支 / 开发会话分支 / 开发分支）上时先切过去再编译，切过去就留在那：
+  本期分支检出在同一仓库的别的 worktree 里（git 不让同一分支检出两处）→ 改用那份 worktree 编译，主工作区不动；
+  否则有未提交改动先 git stash（说明写期名、时间、原分支）并记一条待处理问题，再 git switch（本地没有从 origin 拉）。
+  工程被别的会话占着、分支本地和远端都没有、切换失败（失败时把收起的改动还原）→ 不切，照旧用当前工作区，弹框和记录里说明。
 
 - 平台：现在只做 Android（gradle：./gradlew <模块>:install<变体>，ANDROID_SERIAL 指定只装到选的那台 → adb 拉起启动页）；
   iOS（xcodebuild + devicectl）、鸿蒙（hvigor + hdc）先只识别出来，PLATFORMS 里留了位置，后续再做。
+- 编译方式（buildlearn.py）：自动 / 远程 / 本地。工程里有远程编译脚本（如 remote_build.sh：rsync 到编译机、远程 gradlew、拉回 apk）
+  就自动走远程，依据和开发会话里学到的编译命令显示在弹框；远程脚本安装步骤遇到多台手机会卡交互，这里用假 adb 让 `adb devices`
+  只列选中的那台，没装上就自己 adb -s 装；编译顺带改动的已跟踪文件（编译前是干净的）还原。
 - 模块 / 变体：默认自动识别 application 模块（build.gradle 里有 com.android.application，多个时 app 优先）、变体 debug；
   「🗂 基础信息 → 工程设置」或弹框里可指定（设置.json「工程」{路径: {运行模块, 运行变体, 运行参数}}）。
 - 手机：走现有占用（devlock）：没点名 → 本期占着的优先，再挑空闲的（最近最少用）；别的期 / 本人在用的不装。开工时记为本期占用，
@@ -32,6 +39,7 @@ from kblib.core.repos import repo_pref, save_repo_pref
 from kblib.infra import devlock, hosts, pool as _pool, timing
 from kblib.ai import devices as _dev
 from kblib.plugins import install as _ins
+from kblib.plugins import buildlearn as _bl
 
 DIR = SYS / 'cache' / 'devrun'
 KEEP = 30                      # 保留最近几个任务的状态和日志
@@ -174,6 +182,95 @@ def guess_module(cands, branch, line=''):
     return None
 
 
+def period_branch(m, end=''):
+    """这一期在这个工程上要用的分支：全栈该端的分支，否则开发会话分支 / 开发分支。"""
+    if end:
+        b = ((m.get('各端') or {}).get(end) or {}).get('分支', '')
+        if b:
+            return b
+    return (m.get('开发会话') or {}).get('分支') or m.get('开发分支', '')
+
+
+def _g(root, *a, timeout=120):
+    try:
+        return subprocess.run(['git', '-C', str(root), *a], capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(a, 124, '', str(e))
+
+
+def plan_branch(root, want, me=''):
+    """要不要 / 怎么切到本期分支 → {目标, 动作, 路径, 说明}。动作：
+    '' 已在这个分支或没登记分支；'切换' 在这份工作区 git switch；'副本' 分支检出在别的 worktree，改用那份编译；'不切' 照旧用当前工作区。
+    占用一律按「有会话在用就不切」（含本期自己的会话：会话正在这个分支上干活，不能从它脚下换分支）。"""
+    root = str(root)
+    out = {'目标': want or '', '动作': '', '路径': root, '说明': ''}
+    if not want or hosts.is_remote(root) or not (Path(root) / '.git').exists():
+        return out
+    cur = _g(root, 'branch', '--show-current').stdout.strip()
+    if cur == want:
+        return out
+    holder = _pool.branch_holder(root, want)
+    if holder and Path(holder).is_dir():
+        busy = _pool.pool_busy(holder)
+        if busy:
+            return dict(out, 动作='不切', 说明=f'本期分支 {want} 检出在 {holder}，{busy}：不切，照旧用当前工作区（{cur or "游离"}）编译')
+        return dict(out, 动作='副本', 路径=str(holder), 说明=f'本期分支 {want} 检出在 worktree {holder}，将用那份编译（主工作区不动）')
+    busy = _pool.pool_busy(root)
+    if busy:
+        return dict(out, 动作='不切', 说明=f'{busy}：不切分支，照旧用当前工作区（{cur or "游离"}）编译')
+    has = lambda ref: _g(root, 'rev-parse', '--verify', '--quiet', ref, timeout=30).returncode == 0
+    if not (has(f'refs/heads/{want}') or has(f'refs/remotes/origin/{want}')):
+        return dict(out, 动作='不切', 说明=f'本地和 origin 都没有分支 {want}（没 fetch 到？）：不切，照旧用当前工作区（{cur or "游离"}）编译')
+    st = [x for x in _g(root, 'status', '--porcelain', '--untracked-files=no').stdout.splitlines() if x.strip()]
+    return dict(out, 动作='切换', 说明=f'将切到 {want} 分支（现在在 {cur or "游离"}）' +
+                (f'；{len(st)} 个未提交改动先 git stash 收起，并记一条待处理' if st else '') + '，编完留在这个分支')
+
+
+def _copy_ignored(base, d):
+    try:
+        _pool._copy_ignored(base, d)
+    except Exception:      # noqa: BLE001 拷不过去就让 gradle 自己报
+        pass
+
+
+def switch_to_period_branch(j, d):
+    """编译前（已拿到工程锁）按 plan_branch 切分支；改 j 的 工程 / 分支说明，返回一句说明。"""
+    want = j.get('期分支') or ''
+    pl = plan_branch(j['工程'], want, j.get('me', ''))
+    act, root = pl['动作'], j['工程']
+    if act == '副本':
+        _copy_ignored(root, pl['路径'])
+        j['原工程'], j['工程'] = root, pl['路径']
+    elif act == '切换':
+        if not _g(root, 'rev-parse', '--verify', '--quiet', f'refs/heads/{want}').returncode == 0:
+            _g(root, 'fetch', 'origin', f'{want}:refs/remotes/origin/{want}', timeout=300)
+        from kblib.ai.branchswap import stash_for_switch
+        try:
+            stashed = stash_for_switch(root, want, d, '运行到手机切分支')
+        except KBError as e:
+            pl = dict(pl, 动作='不切', 说明=f'{e}：不切分支，照旧用当前工作区编译')
+            stashed = None
+        if pl['动作'] == '切换':
+            local = _g(root, 'rev-parse', '--verify', '--quiet', f'refs/heads/{want}').returncode == 0
+            r = _g(root, 'switch', want) if local else _g(root, 'switch', '--track', f'origin/{want}')
+            if r.returncode:
+                if stashed:
+                    _g(root, 'stash', 'pop')
+                pl = dict(pl, 动作='不切', 说明=f'切到 {want} 失败（{(r.stderr or r.stdout).strip()[-200:]}）'
+                          + ('，收起的改动已还原' if stashed else '') + '：照旧用当前工作区编译')
+            else:
+                pl['说明'] = f'已切到 {want}' + ('' if local else '（从 origin 拉下来）') + '，编完留在这个分支' + (
+                    f'；{stashed["文字"]}' + (f'（已记待处理 {stashed["问题"]}）' if stashed['问题'] else '') if stashed else '')
+                if stashed:
+                    j['收起'] = stashed
+    j['切分支'] = pl
+    _save(j)
+    if pl['说明']:
+        _say(j, pl['说明'])
+        log(d, '运行到手机', pl['说明'])
+    return pl['说明']
+
+
 def devrun_options(name, repo=''):
     """「▶ 运行到手机」弹框：工程（各带平台、模块候选、记住的模块 / 变体）、手机、当前分支、时机设置、这一期在跑的任务。"""
     d = period_dir(name)
@@ -204,12 +301,14 @@ def devrun_options(name, repo=''):
         # 优先级：这一期记住的 > 本机工程的设置 > 按分支所在的马甲线认出来的 > 远程仓库的工程设置 > 第一个候选
         r.update(记住模块=pm.get('模块') or ('' if pool_ else pf.get('运行模块', '')),
                  记住变体=pm.get('变体') or ('' if pool_ else pf.get('运行变体', '')), 运行参数=pf.get('运行参数', ''))
+        r['期分支'] = period_branch(m, r['端']) or want
         if r['路径'] == cur:
             r['模块候选'] = android_modules(r['路径']) if r['平台'] == 'Android' else []
             r.update(_git_info(r['路径']))
+            r['切分支'] = plan_branch(r['路径'], r['期分支'])
             r['代码更新'] = timing.timing_policy('run_device', r['路径'])[0]
             if not r['记住模块'] and r['模块候选']:
-                br = r.get('分支') if r.get('分支') not in ('', 'HEAD') else want
+                br = r['期分支'] if r['切分支']['动作'] in ('切换', '副本') else r.get('分支') if r.get('分支') not in ('', 'HEAD') else r['期分支']
                 g = guess_module(r['模块候选'], br, _pool.branch_base_line(r['路径'], br))
                 if g:
                     r.update(记住模块=g['模块'], 马甲线=g['马甲线'], 模块依据=g['依据'])
@@ -217,6 +316,14 @@ def devrun_options(name, repo=''):
                 r['记住模块'] = pf.get('运行模块', '')
             if not r['记住变体'] and pool_:
                 r['记住变体'] = pf.get('运行变体', '')
+            if r['平台'] == 'Android':
+                mod = r['记住模块'] or (r['模块候选'][0]['模块'] if r['模块候选'] else '')
+                try:
+                    r['编译'] = _bl.build_plan(r['切分支']['路径'] if r['切分支']['动作'] == '副本' else r['路径'], mod,
+                                             r['记住变体'] or 'debug')
+                except Exception as e:      # noqa: BLE001 识别失败照旧本地编译
+                    r['编译'] = {'方式': '本地', '设置': '自动', '说明': f'识别编译方式失败：{e}', '依据': [], '命令': []}
+    want = next((r['期分支'] for r in repos if r['路径'] == cur), want)
     return {'期': d.name, '工程': repos, '当前': cur, '期分支': want, '手机': _ins._phones(d.name) if _dev._adb() else [],
             'adb': bool(_dev._adb()), '在跑': next((j for j in devrun_jobs(d.name) if j['状态'] not in DONE), None),
             '上次': next((j for j in devrun_jobs(d.name) if j['状态'] in DONE), None), '平台支持': list(PLATFORMS)}
@@ -302,7 +409,7 @@ def _prune():
 
 
 # ---------------- 开始 / 取消
-def devrun_start(name, repo='', serial='', module='', variant='', remember=False, by='用户（网页）', me=''):
+def devrun_start(name, repo='', serial='', module='', variant='', remember=False, by='用户（网页）', me='', build=''):
     """开一个「运行到手机」后台任务，返回任务号。me：发起方自己的期名（开发会话里调用时，自己的会话不算占着工程）。"""
     d = period_dir(name)
     o = devrun_options(d.name, repo)
@@ -339,6 +446,9 @@ def devrun_start(name, repo='', serial='', module='', variant='', remember=False
             raise KBError('没有能用的手机：' + ('没连着手机' if not ph else '；'.join(f'{p["序列号"]} {p["说明"]}' for p in ph.values())))
     if remember and not _pool.copy_of(r['路径']):          # 本机工程：照旧记到工程设置（一个目录一个马甲）
         save_repo_pref(r['路径'], 运行模块=module, 运行变体='' if variant == 'debug' else variant)
+    build = build if build in _bl.MODES else ''
+    if remember and build:                                # 编译方式记在主工作区（它的 worktree 共用）
+        save_repo_pref(_bl.main_root(r['路径']), 运行编译='' if build == '自动' else build)
     if remember or _pool.copy_of(r['路径']):
         m = load_meta(d)                                  # 这一期记住自己跑的模块 / 变体：同一个远程仓库的别的期（别的马甲）不受影响
         m.setdefault('运行到手机', {})[_pool.canonical(r['路径'])] = {'模块': module, '变体': variant}
@@ -346,7 +456,7 @@ def devrun_start(name, repo='', serial='', module='', variant='', remember=False
     jid = uuid.uuid4().hex[:10]
     j = {'编号': jid, '期': d.name, '工程': r['路径'], '工程名': r['名称'], '平台': plat, '模块': module, '变体': variant,
          '参数': r.get('运行参数', ''), '序列号': serial, '型号': ph[serial]['型号'], '发起': by, 'me': me,
-         '状态': '排队中', '步骤': '准备', '开始': now(), '结束': '', '摘要': '', '可选变体': [], '提交': '', '分支': '', 'pid': 0}
+         '期分支': r.get('期分支', ''), '编译设置': build, '状态': '排队中', '步骤': '准备', '开始': now(), '结束': '', '摘要': '', '可选变体': [], '提交': '', '分支': '', 'pid': 0}
     # 先记为本期占用：编译要几分钟，别让别的期这时候把手机拿走
     with devlock.locked() as data:
         old = data.get(serial)
@@ -427,8 +537,16 @@ def _ref(j):
     return j['工程名'] + ''.join(f'@{x}' for x in (j.get('分支'), j.get('提交')) if x)
 
 
+def _how(j):
+    """这次怎么编的：远程编译写实际跑的脚本命令，本地写 gradle 安装任务。"""
+    b = j.get('编译') or {}
+    if b.get('方式') == '远程' and b.get('命令'):
+        return '远程编译 ' + ' '.join(b['命令'])
+    return gradle_install_task(j['模块'], j['变体'])
+
+
 def devrun_text(j):
-    head = f'{_ref(j)} {gradle_install_task(j["模块"], j["变体"])} → {j["型号"]}（{j["序列号"]}）'
+    head = f'{_ref(j)} {_how(j)} → {j["型号"]}（{j["序列号"]}）'
     if j['状态'] == '成功':
         return f'✓ 已装好并启动：{head}' + (f'\n{j["摘要"]}' if j.get('摘要') else '')
     if j['状态'] == '已取消':
@@ -564,7 +682,11 @@ def devrun_summary(text):
 def _gradle(j, g, env):
     cmd = ['./gradlew', gradle_install_task(j['模块'], j['变体'])] + (j.get('参数') or '').split()
     _say(j, '编译安装：' + ' '.join(cmd), '编译中')
-    env = dict(env, ANDROID_SERIAL=j['序列号'])
+    return _stream(j, cmd, g, dict(env, ANDROID_SERIAL=j['序列号']))
+
+
+def _stream(j, cmd, g, env):
+    """跑编译命令，输出写进任务日志，按 gradle 的「> Task」更新步骤；超时结束。→ (退出码, 输出)。"""
     buf, t0, last = [], time.time(), 0
     pr = subprocess.Popen(cmd, cwd=str(g), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           start_new_session=True)
@@ -589,6 +711,17 @@ def _gradle(j, g, env):
     pr.stdout.close()
     rc = pr.wait()
     return rc, '\n'.join(buf)
+
+
+def _apks(root):
+    """工程里所有 build/outputs/apk 下的 apk（远程编译拉回来的产物；脚本编译前会删旧 apk）。"""
+    try:
+        out = subprocess.run(['find', str(root), '-path', '*/build/outputs/apk/*', '-name', '*.apk', '-not', '-path', '*/.git/*'],
+                             capture_output=True, text=True, timeout=120).stdout.split('\n')
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    fs = [Path(x) for x in out if x.strip()]
+    return sorted((f for f in fs if f.is_file()), key=lambda f: f.stat().st_mtime, reverse=True)
 
 
 def _newest_apk(g, j, t0):
@@ -651,6 +784,13 @@ def _run_android(j):
     if not g:
         raise KBError(f'{root} 不是 gradle 工程（没有 gradlew + settings.gradle）')
     env = _login_env()
+    plan = _bl.build_plan(j['工程'], j['模块'], j['变体'], j.get('编译设置', ''))
+    j['编译'] = {k: plan[k] for k in ('方式', '设置', '说明', '命令', '依据')}
+    _save(j)
+    if plan['说明']:
+        print(f'编译方式：{plan["说明"]}' + (f'（依据：{"；".join(plan["依据"])}）' if plan['依据'] else ''), flush=True)
+    if plan['方式'] == '远程':
+        return _run_remote(j, root, plan, env)
     t0 = time.time()
     rc, text = _gradle(j, g, env)
     if _load(j['编号']).get('状态') == '已取消':
@@ -667,6 +807,78 @@ def _run_android(j):
     return ok
 
 
+def _adb_shim(j, real):
+    """假 adb：`adb devices` 只列这次选的手机（远程脚本的安装步骤遇到多台会 read 等输入），其余原样转给真 adb（ANDROID_SERIAL 定到这台）。"""
+    d = DIR / f'adbshim-{j["编号"]}'
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / 'adb'
+    f.write_text('#!/bin/sh\n'
+                 f'if [ "$1" = devices ]; then printf "List of devices attached\\n{j["序列号"]}\\tdevice\\n\\n"; exit 0; fi\n'
+                 f'exec "{real}" "$@"\n', 'utf-8')
+    f.chmod(0o755)
+    return d
+
+
+def _tracked_dirty(root):
+    st = _g(root, 'status', '--porcelain', '--untracked-files=no').stdout
+    return {ln[3:].split(' -> ')[-1].strip().strip('"') for ln in st.splitlines() if ln.strip()}
+
+
+def _run_remote(j, root, plan, env):
+    """远程编译：跑工程自己的远程脚本（同步代码 → 编译机 gradlew → 拉回 apk → 安装），装不上就自己 adb -s 装，再拉起。"""
+    import shutil
+    det, base = plan['识别'], Path(_bl.main_root(root))
+    for dep in det.get('依赖目录') or []:          # worktree 里没有被忽略的远程配置（.idea/.sync）：从主工作区拷过来
+        if not (root / dep).exists() and (base / dep).exists():
+            try:
+                (shutil.copytree if (base / dep).is_dir() else shutil.copy2)(base / dep, root / dep)
+                print(f'从主工作区拷来 {dep}（远程编译配置）', flush=True)
+            except OSError as e:
+                print(f'拷 {dep} 失败：{e}', flush=True)
+    if not (root / det['脚本']).is_file():
+        raise KBError(f'{root} 里没有 {det["脚本"]}')
+    adb = _dev._adb()
+    env = dict(env, ANDROID_SERIAL=j['序列号'], PATH=str(_adb_shim(j, adb)) + os.pathsep + env.get('PATH', ''))
+    before = _tracked_dirty(root)
+    _say(j, '远程编译：' + ' '.join(plan['命令']), '编译中')
+    try:
+        rc, text = _stream(j, ['/bin/zsh' if det['脚本'].endswith('.sh') else sys.executable] + plan['命令'], root, env)
+    finally:
+        shutil.rmtree(DIR / f'adbshim-{j["编号"]}', ignore_errors=True)
+        side = sorted(_tracked_dirty(root) - before)
+        if side:                                   # 编译顺带改的已跟踪文件（如自动生成的多语言 strings）：编译前是干净的，还原
+            _g(root, 'checkout', '--', *side)
+            j['还原'] = side
+            print(f'编译顺带改动了 {len(side)} 个已跟踪文件，已还原：' + '、'.join(side[:5]) + ('…' if len(side) > 5 else ''), flush=True)
+    if _load(j['编号']).get('状态') == '已取消':
+        return
+    built = re.search(r'BUILD SUCCESSFUL|远程构建成功|构建成功', text) and not re.search(r'BUILD FAILED|构建失败', text)
+    if not built:
+        j['摘要'], j['可选变体'] = devrun_summary(text)
+        if (root / '.build.log').is_file():
+            j['摘要'] += f'\n（远程编译日志：{root / ".build.log"}）'
+        raise KBError('远程编译失败')
+    apks = _apks(root)
+    mod = next((m for m in android_modules(root) if m['模块'] == j['模块']), None)
+    mine = [f for f in apks if mod and f'/{mod["目录"]}/' in str(f)] or apks
+    apk = mine[0] if mine else None
+    tail = text[text.rfind('步骤6'):] if '步骤6' in text else text[-3000:]
+    if not re.search(r'APK安装成功|Success', tail):
+        if not apk:
+            raise KBError('远程编译成功，但本地没找到拉回来的 apk')
+        _say(j, f'安装 {apk.name}', '安装中')
+        r = subprocess.run([adb, '-s', j['序列号'], 'install', '-r', '-t', '-d', str(apk)], capture_output=True, text=True, timeout=900)
+        out = (r.stdout + r.stderr).strip()
+        print(out[-2000:], flush=True)
+        if r.returncode or 'Success' not in out:
+            j['摘要'], _ = devrun_summary(out)
+            raise KBError('远程编译成功，安装到手机失败')
+    _say(j, '拉起启动页', '启动中')
+    ok, msg = _launch(j, apk, text)
+    j['摘要'] = msg + (f'；编译顺带改的 {len(j["还原"])} 个文件已还原' if j.get('还原') else '')
+    return ok
+
+
 def devrun_worker(jid):
     j = _load(jid)
     if not j:
@@ -677,6 +889,7 @@ def devrun_worker(jid):
     fh, lease = None, None
     try:
         fh = _wait_repo(j)
+        switch_to_period_branch(j, d)                                    # 先切到本期分支（或改用检出它的 worktree），切过去就留在那
         lease = _pool.pool_lease(j['工程'], f'「{j["期"]}」运行到手机')      # 编译期间这份副本算占用（工作副本池分配时跳过）
         lease.__enter__()
         _say(j, '按时机「运行到手机前」更新代码', '准备中')
@@ -695,7 +908,7 @@ def devrun_worker(jid):
             if c.get('期') == j['期']:
                 c.update(用途=f'运行到手机：{_ref(j)}', 最后使用=time.time())
         dirty = f'（含 {j["未提交"]} 个未提交改动）' if j.get('未提交') else ''
-        log(d, '运行到手机', f'{_ref(j)}{dirty} {gradle_install_task(j["模块"], j["变体"])} → '
+        log(d, '运行到手机', f'{_ref(j)}{dirty} {_how(j)} → '
                          f'{j["型号"] or "未知型号"}（{j["序列号"]}）· {j["摘要"]}（{j["发起"]}）')
         print(f'[{time.strftime("%H:%M:%S")}] ✓ 完成：{j["摘要"]}', flush=True)
     except Exception as e:      # noqa: BLE001 后台进程里的意外也要让网页看到

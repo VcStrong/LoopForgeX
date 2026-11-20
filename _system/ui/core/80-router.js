@@ -97,7 +97,7 @@ const KB={
   route,render,softRender,canRender,navRefresh,curHash,
   hooks:{afterRender:null,nav:null},
   on(kind,fn){(evSubs[kind]=evSubs[kind]||[]).push(fn);return()=>{evSubs[kind]=evSubs[kind].filter(f=>f!==fn)}},
-  api,post,esc,enc,toast,openDlg,confirm:kbConfirm,prompt:kbPrompt,md,mdInline,mdEnhance,badge,fileUrl,readFile,showImg,preview,loadVendor,since,when,size,
+  api,post,esc,enc,toast,openDlg,confirm:kbConfirm,prompt:kbPrompt,md,mdInline,mdEnhance,badge,fileUrl,readFile,openDir,showImg,preview,loadVendor,since,when,size,
   askOpen,addDlg,taskNav,logout,pickDir,PICK_OPT,   // pickDir(起始路径) → 选中的本地路径或 null；PICK_OPT 放进模板自己的仓库下拉框
   site:()=>api('/api/site').then(s=>(KB.siteCache=s)),siteCache:null,   // 最近一次 /api/site 的结果（模板在 afterRender 里可直接用）
   get briefOpts(){return briefOpts},   // 执行判断 / 交给管家 / 理解预览：配合 KBUI.judg、KBUI.bind 用

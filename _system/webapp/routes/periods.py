@@ -74,6 +74,67 @@ def _get_api_text(self, u, q):
     return self._guard(run)
 
 
+def _same_machine(h):
+    """浏览器和网页服务在同一台机器：直连 127.0.0.1 / ::1，且不是反向代理转进来的（有 X-Forwarded-For / X-Real-IP 说明真实用户在别处）。"""
+    ip = (h.client_address[0] if h.client_address else '') or ''
+    if ip.startswith('::ffff:'):
+        ip = ip[7:]
+    return ip in ('127.0.0.1', '::1') and not h.headers.get('X-Forwarded-For') and not h.headers.get('X-Real-IP')
+
+
+def _open_in_desktop(p: Path):
+    """在本机文件管理器里打开目录：macOS 用 open，Linux 有桌面时用 xdg-open。打开了返回 True。"""
+    import subprocess
+    if sys.platform == 'darwin':
+        cmd = ['open', str(p)]
+    elif sys.platform.startswith('linux') and (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')) \
+            and shutil.which('xdg-open'):
+        cmd = ['xdg-open', str(p)]
+    else:
+        return False
+    try:
+        return subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+DIR_LIST_MAX = 1000
+
+
+@post('/api/open_dir', page_only=True)
+def _post_api_open_dir(self, u, n, body):
+    """点资料里的目录：同一台机器就在 Finder / 文件管理器里打开；远端访问、打不开或 list=true 时返回目录内容，网页弹窗列出。
+    路径只限知识库和已登记仓库（kb._allowed，和文件预览同一个白名单）；列表跳过 . 开头的隐藏文件。"""
+    def run():
+        raw = str(body.get('path') or '')
+        if not raw:
+            raise kb.KBError('缺少目录路径')
+        p = Path(raw).expanduser().resolve()
+        if not kb._allowed(p):
+            raise kb.KBError('只能打开知识库和已登记仓库里的目录')
+        if not p.is_dir():
+            raise kb.KBError(f'目录不存在：{p}')
+        if not body.get('list') and _same_machine(self) and _open_in_desktop(p):
+            return {'opened': True, 'path': str(p), 'msg': f'已在{"Finder" if sys.platform == "darwin" else "文件管理器"}打开：{p.name}'}
+        items = []
+        for x in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+            if x.name.startswith('.'):
+                continue
+            try:
+                st = x.stat()
+                isdir = x.is_dir()
+            except OSError:
+                continue
+            items.append({'name': x.name, 'path': str(x), 'isDir': isdir, 'size': 0 if isdir else st.st_size, 'mtime': st.st_mtime})
+            if len(items) >= DIR_LIST_MAX:
+                break
+        parent = str(p.parent) if p.parent != p and kb._allowed(p.parent) else ''
+        return {'opened': False, 'path': str(p), 'name': p.name, 'parent': parent, 'items': items,
+                'truncated': len(items) >= DIR_LIST_MAX}
+    return self._guard(run)
+
+
 @post('/api/upload', raw=True)
 def _post_api_upload(self, u, n, body):
     period = unquote(self.headers.get('X-Period', ''))

@@ -3,15 +3,16 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 from pathlib import Path
 from kblib.core.common import KBError, PERIODS, ROOT, load_settings, now, read_text, safe_name, save_settings
-from kblib.core.periods import create_task, is_task, load_meta, log, period_dir, period_names, save_meta, set_status
+from kblib.core.periods import create_task, is_deleted, is_task, load_meta, log, period_dir, period_names, save_meta, set_status
 from kblib.core.notes import add_note
 from kblib.core.baseinfo import base_load, base_secret
-from kblib.infra import timing
+from kblib.infra import bgjobs, timing
 from kblib import lazy
 _devprep = lazy('kblib.ai.devprep')      # 上层模块：用到时才 import（不形成循环）
 _devsession = lazy('kblib.ai.devsession')      # 上层模块：用到时才 import（不形成循环）
@@ -271,6 +272,74 @@ def qa_case_hint(period=''):
             '卡在要人处理的地方（如平台缺 Confluence 凭据）用 kb_issue 记下后继续开发')
 
 
+QA_ASK = re.compile(r'(case|用例|agent-?test|agent-?json)', re.I)
+QA_DO = re.compile(r'(生成|拉回|拉取|补齐|跑一下|跑一遍)')
+_QA_RUNNING = set()          # 正在后台生成 QA 用例的期
+QA_ROUNDS = 6                # 「自动」一次最多等十几分钟；平台还在生成就再调，最多这么多轮（约 1 小时）
+
+
+def qa_case_wanted(text):
+    """期页面输入框的话是不是在要 QA 用例（如「用 case 生成平台生成本期 case」）。"""
+    t = text or ''
+    return bool(QA_ASK.search(t) and QA_DO.search(t))
+
+
+def qa_case_start(d, text='', by='用户（网页）'):
+    """不等开始开发，直接在后台用挂了「能力: QA用例」的插件给这一期跑「自动」（建需求 → 推进 → 等 → 拉回）。
+    话里带「本期资料」/ 资料=… 时透传 资料= 参数。没挂这类插件返回空串（调用方按原来的方式处理）。"""
+    p = next((x for x in tool_plugins() if x['启用'] and QA_CAP in (x.get('能力') or [])), None)
+    if not p:
+        return ''
+    if d.name in _QA_RUNNING:
+        return f'「{p["名称"]}」正在给这一期生成 QA 用例，进展看「最近动作」'
+    extra = []
+    m = re.search(r'资料\s*[=＝:：]\s*(\S+)', text or '')
+    if m:
+        extra.append(f'资料={m.group(1)}')
+    elif re.search(r'本期(现有|已有)?资料', text or ''):
+        extra.append('资料=本期')
+    _QA_RUNNING.add(d.name)
+    log(d, '插件', f'「{p["名称"]}」开始给本期生成 QA 用例（后台，{" ".join(["自动", d.name] + extra)}；{by}）')
+    args = ['自动', d.name] + extra
+
+    def go():
+        # 登记进后台任务表：开发面板「会话 / AI 动作」能看到、能停；删期时一并停掉
+        jid = bgjobs.job_start(d.name, by, f'插件「{p["名称"]}」生成 QA 用例', ' '.join(args))
+        status, res = '已结束', ''
+        try:
+            out = ''
+            for i in range(QA_ROUNDS):
+                if bgjobs.job_cancelled(jid) or not _period_alive(d):
+                    status, res = '已停止', '已停止' if bgjobs.job_cancelled(jid) else '这一期已删除'
+                    return
+                bgjobs.job_progress(jid, f'第 {i + 1}/{QA_ROUNDS} 轮：在平台上建需求 / 推进 / 等待生成')
+                try:
+                    out = call_plugin(p['id'], args, period=d.name, by=by)
+                except KBError as e:
+                    status, res = ('已停止', str(e)) if bgjobs.job_cancelled(jid) else ('失败', str(e)[-1500:])
+                    if status == '失败':
+                        _safe_log(d, '插件', f'「{p["名称"]}」生成 QA 用例没成：{res}')
+                    return
+                if '平台还在生成' not in out:
+                    break
+                _safe_log(d, '插件', f'「{p["名称"]}」第 {i + 1} 轮：平台还在生成，接着推进')
+            tail = '\n'.join(x for x in out.strip().splitlines()[-12:])
+            res = tail[-1500:]
+            _safe_log(d, '插件', f'「{p["名称"]}」QA 用例：{res}')
+        except Exception as e:  # noqa: BLE001 — 后台线程，什么错都记下给网页看
+            status, res = '失败', f'{type(e).__name__}: {e}'
+            _safe_log(d, '插件', f'「{p["名称"]}」生成 QA 用例出错：{res}')
+        finally:
+            _QA_RUNNING.discard(d.name)
+            bgjobs.job_end(jid, status, res)
+            if status == '已停止':
+                _safe_log(d, '插件', f'「{p["名称"]}」生成 QA 用例已停止')
+    import threading
+    threading.Thread(target=go, daemon=True, name=f'qa-case-{d.name}').start()
+    return (f'已在后台用「{p["名称"]}」给本期生成 QA 用例（不用等开始开发；有需求文档链接按链接，没有就按本期资料），'
+            '要十几分钟到几十分钟，进展和结果记在「最近动作」，产物拉回「其他资料/QA用例/」')
+
+
 def call_plugin(pid='', args=(), period='', by='Claude'):
     """按需调用「工具」插件（如按会话编号拉取外部系统的会话）。不带插件名时列出已挂载的工具插件。"""
     ts = tool_plugins()
@@ -293,18 +362,52 @@ def call_plugin(pid='', args=(), period='', by='Claude'):
         return plugin_call_now(p, d, args, by=by)
     env = _plugin_env(p, by, KB_EVENT='调用', KB_PERIOD=d.name if d else '', KB_PERIOD_DIR=str(d) if d else '')
     cmd = [sys.executable if x == '{python}' else x for x in p['命令']] + [str(a) for a in args]
+    # 带期名的调用登记成这一期的后台任务（已在某个任务里，如「自动」生成 QA 用例，就挂到那个任务上）：面板能看到、能停
+    own = bool(d) and not bgjobs.job_current()
+    jid = bgjobs.job_start(d.name, by, f'调用插件「{p["名称"]}」', ' '.join(map(str, args))) if own else bgjobs.job_current()
+    code, out, status = None, '', '失败'
     try:
-        r = subprocess.run(cmd, cwd=p['目录'], env=env, capture_output=True, text=True, timeout=int(p.get('超时') or 300))
-    except subprocess.TimeoutExpired:
-        raise KBError(f'插件「{p["名称"]}」超时（{p.get("超时") or 300} 秒）')
-    except OSError as e:
-        raise KBError(f'插件「{p["名称"]}」启动失败：{e}')
-    out = (r.stdout + ('\n' + r.stderr if r.stderr.strip() and r.returncode else '')).strip()
-    if d:
-        log(d, '插件', f'调用插件「{p["名称"]}」{" ".join(map(str, args))}：{"完成" if r.returncode == 0 else "失败"}')
-    if r.returncode:
-        raise KBError(f'插件「{p["名称"]}」失败（退出码 {r.returncode}）：{out[-3000:]}')
-    return out
+        if jid and bgjobs.job_cancelled(jid):
+            raise KBError(f'插件「{p["名称"]}」已停止')
+        try:
+            proc = subprocess.Popen(cmd, cwd=p['目录'], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                    start_new_session=True)
+        except OSError as e:
+            raise KBError(f'插件「{p["名称"]}」启动失败：{e}')
+        bgjobs.job_proc(proc.pid, jid)
+        if jid and bgjobs.job_cancelled(jid):     # 登记子进程前刚好点了停止：自己结束掉
+            bgjobs._killpg(proc.pid, 15)
+        try:
+            so, se = proc.communicate(timeout=int(p.get('超时') or 300))
+        except subprocess.TimeoutExpired:
+            bgjobs._killpg(proc.pid, 9)
+            proc.communicate()
+            raise KBError(f'插件「{p["名称"]}」超时（{p.get("超时") or 300} 秒）')
+        finally:
+            bgjobs.job_proc(proc.pid, jid, add=False)
+        code = proc.returncode
+        out = (so + ('\n' + se if se.strip() and code else '')).strip()
+        if jid and bgjobs.job_cancelled(jid):
+            raise KBError(f'插件「{p["名称"]}」已停止')
+        if d:
+            _safe_log(d, '插件', f'调用插件「{p["名称"]}」{" ".join(map(str, args))}：{"完成" if code == 0 else "失败"}')
+        if code:
+            raise KBError(f'插件「{p["名称"]}」失败（退出码 {code}）：{out[-3000:]}')
+        status = '已结束'
+        return out
+    finally:
+        if own:
+            bgjobs.job_end(jid, status, out.strip().splitlines()[-1][-300:] if out.strip() else '')
+
+
+def _period_alive(d):
+    """期还在（没被删）：删期后后台任务不再往里写，免得把目录又建回来。"""
+    return (d / '期信息.json').exists() and not is_deleted(d.name)
+
+
+def _safe_log(d, action, content):
+    if _period_alive(d):
+        log(d, action, content)
 
 
 # ---- 工具插件的网页入口（plugin.json 写了「入口」）：输入 → 候选列表 → 加入事项；事项页实时展示原始内容

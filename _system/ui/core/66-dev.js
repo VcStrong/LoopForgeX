@@ -77,7 +77,8 @@ async function devBox(name){
   const s=v['会话'],run=s&&s['状态']==='运行中',SP=!!v['全栈期'],legacy=s&&s['类型']!=='复测',pg=SP&&!legacy?null:v['进度'];
   const pend=v['待确认'].filter(q=>q['状态']==='待回答'),done=v['待确认'].filter(q=>q['状态']!=='待回答').reverse();
   const spRun=SP?((v['在跑']||[]).length?`<a id="dvToStack" title="到「全栈」看各端进度">${v['在跑'].map(x=>`<span class="badge st-开发中">● ${esc(x)}</span>`).join(' ')}</a>`:'<span class="mut">现在没有 AI 在跑</span>'):'';
-  const sess=SP&&!run&&!legacy?spRun:!s?'<span class="mut">还没有启动过后台开发</span>':run?`<span class="badge st-开发中">● 后台${s['类型']==='复测'?'复测':'开发'}中</span> <span class="small mut">已运行 <span data-since="${esc(s['开始时间'])}">${since(s['开始时间'])}</span> · ${esc((s['仓库']||'').split('/').pop())} · ${esc(s['分支']||'')} · ${esc(s['权限']||'')}${s['续跑次数']?' · 已自动续跑 '+s['续跑次数']+' 次':''}</span>`
+  const bg=(v['后台']||[]).filter(x=>x['键']!=='dev');   // 开发会话以外的后台会话 / 插件任务（插件、管家、整理资料、出方案…）
+  const sess=SP&&!run&&!legacy?spRun:!s?(bg.length?`<span class="badge st-开发中">● ${bg.length} 个后台任务在跑</span> <span class="small mut">还没有启动过后台开发</span>`:'<span class="mut">还没有启动过后台开发</span>'):run?`<span class="badge st-开发中">● 后台${s['类型']==='复测'?'复测':'开发'}中</span> <span class="small mut">已运行 <span data-since="${esc(s['开始时间'])}">${since(s['开始时间'])}</span> · ${esc((s['仓库']||'').split('/').pop())} · ${esc(s['分支']||'')} · ${esc(s['权限']||'')}${s['续跑次数']?' · 已自动续跑 '+s['续跑次数']+' 次':''}</span>`
     :`<span class="badge st-${s['状态']==='已结束'&&!s['出错']&&!s['退出码']?'已完成':'已暂停'}">${esc(s['状态'])}</span> <span class="small mut">${esc(s['结束时间']||'')}${s['退出码']?' · 退出码 '+s['退出码']:''}${s['费用']?' · $'+(+s['费用']).toFixed(2):''}${s['续跑次数']?' · 自动续跑 '+s['续跑次数']+' 次':''}</span>${s['参与']?` <span class="small" title="这次会话派过的角色团专家">${esc(s['参与'])}</span>`:''}${s['未续跑原因']?`<div class="small" style="color:var(--warn)">${esc(s['未续跑原因'])}</div>`:''}${s['状态']==='中断待续'?intrHtml(s['中断']):''}`;
   const can=!['已完成'].includes(v['状态']);
   const rt=v['复测']||{},ts2=rt['测试'],plan=rt['待复测'],phones=v['设备'];
@@ -154,10 +155,15 @@ async function devBox(name){
    u['合计']?` <span title="${esc(Object.entries(u['按角色']||{}).map(([k,n])=>k+' '+n).join('、'))}">本期已派 ${u['合计']} 次</span>`:''}</label>`)(v['角色调用']||{合计:0})}
     ${SP?'':`<span class="small mut" title="开发流程跟着端和仓库走：在「全栈 → 各端」里给每个端选">流程 ${(v['各端流程']||[]).length?v['各端流程'].map(x=>`${esc(x['端'])} <b>${esc(x['流程'])}</b>`).join('，'):`<b>${esc(v['当前流程'])}</b>`}${v['流程']?' <span class="badge" title="老的期在这里统一指定过流程">整期统一</span> <a id="dvFlowEnd" title="取消整期统一的流程，改为在「全栈 → 各端」按端选">改为按端</a>':''} · <a id="dvFlowGo">按端选 →</a></span>`}
     ${apSw(v,'dvPush')}<span class="sw ${v['免打扰']?'on':''}" id="dvDnd" title="整期生效：出方案、完善需求、各端开发、单端开发的提问都由 AI 按自己的建议决策并记录"><i></i>🌙 免打扰（整期）</span>${btn}</div>
+    ${bg.length?`<div class="bglist small" style="margin:4px 0">${bg.map(x=>`<div class="row" style="gap:6px;padding:2px 0;align-items:center"><span class="badge st-开发中">● ${esc(x['名称'])}</span>
+      <span class="mut">${esc(x['发起']||'后台')} 起 · ${esc(String(x['开始']||'').slice(5,16))} 开始 · 已运行 <span data-since="${esc(x['开始'])}">${since(x['开始'])}</span>${x['进度']?' · '+esc(x['进度']):''}</span>${x['内容']?` <span class="mut" title="${esc(x['内容'])}">· ${esc(x['内容'].length>40?x['内容'].slice(0,40)+'…':x['内容'])}</span>`:''}
+      <span class="sp"></span>${x['可停止']?`<button class="danger small" data-bgstop="${esc(x['键'])}" data-bgname="${esc(x['名称'])}">■ 停止</button>`:''}</div>`).join('')}</div>`:''}
     ${v['代码基线']&&!SP?`<div class="small mut mono" title="${esc(v['代码基线详情']||'')}">📍 代码：${esc(v['代码基线'])}${v['推送状态']?' · '+esc(v['推送状态']):''}${v['工作副本']?` · <span title="工作副本池开工时分配的副本">🗂 ${esc(v['工作副本'])}</span>`:''}</div>`:''}
     ${v['免打扰']?`<div class="small mut" style="margin-top:4px">免打扰已开启（整期）：需要确认的地方由 AI 按自己的建议决策，结果记在「${SP?'确认与问题':'开发'}」里的「已处理的确认」和记录里。</div>`:''}`;
   const bar=$('#sessBar');if(bar&&bar.innerHTML!==barHtml)bar.innerHTML=barHtml;
   if(bar)bindIntr(bar,()=>devBox(name));
+  if(bar)bar.querySelectorAll('[data-bgstop]').forEach(b=>b.onclick=async()=>{if(!await kbConfirm(`停止「${b.dataset.bgname}」？`))return;
+    b.disabled=true;try{toast((await post('/api/period/bg/stop',{period:name,key:b.dataset.bgstop})).msg)}catch(e){toast(e.message)}devBox(name);talkBox(name)});
   const autoHtml=autoQsHtml(v['待确認'.replace('認','认')]);
   const doneHtml=done.length?`<details data-k="done" style="margin-top:8px"><summary class="small"><b>已处理的确认</b>（${done.length}）</summary>${done.map(q=>`<div class="small" style="padding:6px 0;border-bottom:1px solid var(--soft)"><span class="mut">${esc(q['编号'])} · ${esc(q['回答时间']||q['时间'])} · ${esc(q['回答人']||q['状态'])}</span><br><b>${esc(q['问题'])}</b><br>→ ${esc(q['回答']||q['状态'])}</div>`).join('')}</details>`:'';
   const side=`${issHtml?`<div class="card2 issbox"><div class="bd">${issHtml}</div></div>`:''}
@@ -249,10 +255,10 @@ function needDlg(body,n){
   }else{
     const dirty=n['未提交数']||0;
     h=`<p>仓库 <code>${esc(n['仓库'])}</code> 当前在分支 <b>${esc(n['当前分支']||'（游离）')}</b>，本期登记的开发分支是 <b>${esc(n['分支'].join('、'))}</b>。SDD 文档目录按分支名生成，请确认：</p>
-      ${n['分支'].map((b,i)=>radio('sw:'+b,`切换到 <b>${esc(b)}</b>　<span class="mut small">切换前在当前分支、切换后在新分支各执行一次 <code>git pull --rebase</code>；本地没有会从 origin 拉取，两边都没有会提示你先建好</span>`,dirty>0,i===0&&!dirty)).join('')}
-      ${radio('sw:*','切换到其他分支　<input type="text" id="ndB" style="width:340px" placeholder="分支名">',dirty>0,false)}
+      ${n['分支'].map((b,i)=>radio('sw:'+b,`切换到 <b>${esc(b)}</b>　<span class="mut small">切换前在当前分支、切换后在新分支各执行一次 <code>git pull --rebase</code>；本地没有会从 origin 拉取，两边都没有会提示你先建好</span>`,false,i===0)).join('')}
+      ${radio('sw:*','切换到其他分支　<input type="text" id="ndB" style="width:340px" placeholder="分支名">',false,false)}
       ${radio('keep','就用当前分支 <b>'+esc(n['当前分支'])+'</b> 开发　<span class="mut small">先执行一次 <code>git pull --rebase</code></span>',!!dirty,false)}
-      ${dirty?`<div class="notice small" style="display:block">已跟踪的文件有 ${dirty} 处未提交的改动，<code>git pull --rebase</code> 拉不了代码，也不能切分支。请先在仓库里提交或 stash，再回来点「开始开发」：<pre style="margin:6px 0 0">${esc(n['未提交'].join('\n'))}</pre></div>`:''}`;
+      ${dirty?`<div class="notice small" style="display:block">已跟踪的文件有 ${dirty} 处未提交的改动：切分支时知识库会先 <code>git stash</code> 收起（说明里写期名、时间、原分支），并在本期记一条待处理问题（stash 名、原分支、文件数、恢复命令）；「就用当前分支」要先拉代码，有改动时不能选：<pre style="margin:6px 0 0">${esc(n['未提交'].join('\n'))}</pre></div>`:''}`;
   }
   openDlg(n['需要']==='仓库'?'选择开发仓库':'确认开发分支',`<div>${h}<div class="row" style="margin-top:10px"><button class="pri" id="ndGo">继续开始开发</button><button onclick="dlg.close()">取消</button></div></div>`);
   $('#dlgB').querySelectorAll('input[type=text]').forEach(t=>t.onfocus=()=>{t.closest('label').querySelector('input[type=radio]').checked=true});

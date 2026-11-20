@@ -281,6 +281,11 @@ def dev_tick():
             kb.stack_tick()              # 全栈各端：收尾、按名额启动排队的端和审查
         except Exception as e:
             print('stack_tick:', repr(e), flush=True)
+        try:
+            for n in kb.tomb_sweep():    # 删掉的期被后台写回来了：收走（墓碑见 periods.tomb_sweep）
+                print(f'tomb_sweep: 「{n}」删除后又被写回，已移到废纸篓', flush=True)
+        except Exception as e:
+            print('tomb_sweep:', repr(e), flush=True)
 
 
 def health_auto():

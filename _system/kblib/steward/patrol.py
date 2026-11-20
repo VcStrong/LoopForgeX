@@ -456,7 +456,7 @@ def _act(go, st):
         done[d['键']] = now()
         _save_state(st)
         try:
-            msg, res = _refresh.claude_update(d['对象']), '已开始'
+            msg, res = _refresh.claude_update(d['对象'], by='管家（自动）'), '已开始'
         except Exception as e:
             msg, res = str(e), '失败'
         out.append(_record(方式='自动', 动作='来源整理', 对象=d['对象'], 数量=1, 结果=res, 说明=msg, 依据=d['依据'],
@@ -707,7 +707,7 @@ def steward_answer(cid, value, by='用户（网页）', repo='', branch=''):
             from kblib.steward.intake import link_task
             msg = '归到事项「' + link_task([x for o in objs for x in (o if isinstance(o, list) else [o])], by=by) + '」，确认工程就能推动'
         else:
-            msg = '\n'.join(_refresh.claude_update(o) for o in objs)
+            msg = '\n'.join(_refresh.claude_update(o, by=f'管家（{by}）') for o in objs)
         _mark_done(act, objs)
         _record(方式='手动', 动作=act, 对象=objs, 数量=len(objs), 结果='已开始', 说明=msg, 回答人=by)
         return msg

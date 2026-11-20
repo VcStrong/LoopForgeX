@@ -29,6 +29,7 @@ _search = lazy('kblib.core.search')      # 上层模块：用到时才 import（
 _plugins = lazy('kblib.plugins.registry')      # 上层模块：用到时才 import（不形成循环）
 _devprep = lazy('kblib.ai.devprep')      # 上层模块：用到时才 import（不形成循环）
 _devsession = lazy('kblib.ai.devsession')      # 上层模块：用到时才 import（不形成循环）
+_talk = lazy('kblib.ai.talk')      # 上层模块：删期时列出 / 停掉这一期在跑的后台会话
 _bug_index = lazy('kblib.bugs.index')      # 上层模块：用到时才 import（不形成循环）
 _anr_store = lazy('kblib.anr.store')      # 上层模块：用到时才 import（不形成循环）
 
@@ -41,10 +42,48 @@ def init():
     _search.db().close()
 
 
+# 已删除的期（墓碑）：删期后后台任务（插件回写、管家巡检、资料整理）晚到的写入可能把目录又建出来，
+# 列表里不再认它，tomb_sweep 把重建出来的目录收走；用同名新建一期时清掉墓碑。
+TOMB = SYS / '已删除期.json'
+
+
+def _tombs():
+    try:
+        return json.loads(TOMB.read_text('utf-8')) if TOMB.exists() else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_tombs(t):
+    SYS.mkdir(parents=True, exist_ok=True)
+    TOMB.write_text(json.dumps(t, ensure_ascii=False, indent=1), 'utf-8')
+
+
+def is_deleted(name):
+    return bool(name) and name in _tombs()
+
+
+def tomb_sweep():
+    """删掉的期又被后台写回来了（目录重新出现）：移到废纸篓，并记一笔。网页后台循环定时跑。"""
+    out = []
+    for n, x in _tombs().items():
+        d = PERIODS / n
+        if d.is_dir():
+            dest = Path.home() / '.Trash' / f'{n}（删除后被后台写回 {time.strftime("%Y%m%d-%H%M%S")}）'
+            try:
+                dest.parent.mkdir(exist_ok=True)
+                shutil.move(str(d), str(dest))
+            except OSError:
+                shutil.rmtree(d, ignore_errors=True)
+            out.append(n)
+    return out
+
+
 def period_names():
     if not PERIODS.exists():
         return []
-    ds = [p for p in PERIODS.iterdir() if p.is_dir()]
+    tomb = _tombs()
+    ds = [p for p in PERIODS.iterdir() if p.is_dir() and p.name not in tomb]
     return [p.name for p in sorted(ds, key=lambda p: load_meta(p).get('创建时间', ''))]
 
 
@@ -52,6 +91,8 @@ def period_dir(name):
     if not name:
         raise KBError('请指定期名')
     d = PERIODS / safe_name(name)
+    if d.name in _tombs():
+        raise KBError(f'「{d.name}」已删除')
     if d.is_dir():
         return d
     cands = [n for n in period_names() if name in n]
@@ -75,6 +116,8 @@ def save_meta(d, m):
 
 
 def log(d, action, content):
+    if not d.is_dir():           # 期已删除：后台晚到的记录不写（写了会把目录又建出来）
+        return
     f = d / '记录.md'
     if not f.exists():
         f.write_text(f'# {d.name} · 记录\n\n> 知识库自动追加：本期所有材料变动、状态变化、开发中的关键决定。\n\n', 'utf-8')
@@ -85,6 +128,11 @@ def log(d, action, content):
 def create_period(name, summary=''):
     init()
     d = PERIODS / safe_name(name)
+    t = _tombs()
+    if d.name in t:              # 同名重新建：先收走删除后被写回的残留目录，再去掉墓碑
+        tomb_sweep()
+        t.pop(d.name, None)
+        _save_tombs(t)
     if d.exists():
         raise KBError(f'已存在：{d.name}')
     for c in CATS:
@@ -143,12 +191,16 @@ def create_task(name, summary='', kind='', source='', priority='', bugs=None, by
 def delete_period(name, by='用户（网页）'):
     """网页「删除」：把没用的期 / 事项从知识库里整个去掉（只有用户本人在网页上能做，不作为 MCP 工具）。
     目录移到系统废纸篓（误删还能从废纸篓找回），并清掉别处对它的引用：归到它的 Bug 回到待归纳、关联的 ANR 问题取消关联、
-    它占着的手机释放、检索索引里它的文档移除。后台会话在跑时不让删。"""
+    它占着的手机释放、检索索引里它的文档移除。还在跑的后台会话 / 插件任务一并停掉；删后留墓碑，
+    后台任务晚到的写入不会再把这一期建回来（见 tomb_sweep）。"""
     d = period_dir(name)
-    s = _devsession.dev_session(d.name)
-    if s and s.get('状态') == '运行中':
-        raise KBError(f'「{d.name}」的后台会话还在运行，先停止再删除')
     out = []
+    stopped = _talk.period_bg_stop_all(d.name, by=by)
+    if stopped:
+        out.append(f'停掉了在跑的 {"、".join(stopped)}')
+    t = _tombs()                 # 先立墓碑再挪目录：挪的过程中后台写入也不会被当成一期
+    t[d.name] = {'时间': now(), '删除人': by}
+    _save_tombs(t)
     n = 0
     data = _bug_index.zt_load()                     # 保存时按条目合并，和同步同时进行也不会互相覆盖
     for e in (data.get('Bug') or {}).values():

@@ -23,11 +23,13 @@ from kblib.ai import team
 from kblib.ai import supervise as _sup
 from kblib.ai.devsession import DEV_DIR, PUSH_RULE, _NO_BG, _alive, _deliver_now, _dev_env, _dev_spawn, _head, _notify, _session_id, _session_push, dev_chat, dev_session
 from kblib.bugs.index import zt_load
-from kblib.infra import timing
+from kblib.infra import bgjobs as _bgjobs, timing
 from kblib.infra.autopush import push_tip
 from kblib.bugs.analysis import _an_load, _an_save, an_sessions
 from kblib import lazy
 _stackdev = lazy('kblib.stack.dev')      # 上层模块：用到时才 import
+_registry = lazy('kblib.plugins.registry')
+_devsession = lazy('kblib.ai.devsession')
 
 DEV_KIND = {'复测': '复测会话', '跟进': '跟进会话'}
 
@@ -64,6 +66,139 @@ def period_sessions(name):
     return out
 
 
+# ---- 这一期所有后台会话 / 任务：开发面板「会话」栏统一列出（谁起的、在做什么、开始时间、进度）并能停止；删期时一并停掉
+_launch = lazy('kblib.stack.launch')
+_plan = lazy('kblib.stack.plan')
+_refresh = lazy('kblib.sources.refresh')
+
+
+def _who(x, default='用户'):
+    by = str(x.get('发起') or x.get('发起人') or '')
+    if x.get('自动发起') or '管家' in by:
+        return '管家'
+    return by or default
+
+
+def period_bg(name):
+    """[{键, 名称, 发起, 内容, 开始, 进度, 可停止}]：开发 / 复测 / 跟进、另起的新会话、全栈各端、出方案、完善需求 / 发布、
+    建工程、来源整理、Bug 分析修复，以及插件在后台跑的任务（bgjobs）。"""
+    d = period_dir(name)
+    m = load_meta(d)
+    out = []
+    s = dev_session(d.name)
+    if s and s.get('状态') == '运行中':
+        out.append({'键': 'dev', '名称': DEV_KIND.get(s.get('类型'), '开发会话'), '发起': _who(s), '内容': s.get('备注') or s.get('流程') or '',
+                    '开始': s.get('开始时间', ''), '进度': f'第 {s.get("续跑次数", 0) + 1} 轮' if s.get('续跑次数') else '运行中', '可停止': True})
+    for x in _px_list(d):
+        out.append({'键': 'px:' + x['编号'], '名称': '新会话', '发起': _who(x), '内容': x.get('内容', '')[:200],
+                    '开始': x['开始时间'], '进度': '运行中', '可停止': True})
+    for e, x in (m.get('各端开发') or {}).items():
+        if x.get('状态') in _stackdev.RUNNING and _alive(x.get('pid', 0)):
+            out.append({'键': 'end:' + e, '名称': f'{e}{"审查" if x["状态"] == "审查中" else "开发"}', '发起': _who(x), '内容': '',
+                        '开始': x.get('开始时间', ''), '进度': x['状态'], '可停止': True})
+    x = m.get('全栈会话') or {}
+    if x.get('状态') == '运行中' and _alive(x.get('pid', 0)):
+        out.append({'键': 'plan', '名称': '出方案', '发起': _who(x), '内容': x.get('意见', ''), '开始': x.get('开始时间', ''),
+                    '进度': (m.get('全栈') or {}).get('状态', '运行中'), '可停止': True})
+    for k, x in (m.get('新产品会话') or {}).items():
+        if x.get('状态') == '运行中' and _alive(x.get('pid', 0)):
+            out.append({'键': 'launch:' + k, '名称': {'需求': '完善需求', '发布': '发布清单'}.get(k, k + '会话'), '发起': _who(x),
+                        '内容': '', '开始': x.get('开始时间', ''), '进度': '运行中', '可停止': True})
+    for e, x in (m.get('建工程') or {}).items():
+        if x.get('状态') == '生成脚手架中' and _alive(x.get('pid', 0)):
+            out.append({'键': 'scaffold:' + e, '名称': f'建工程 · {e}', '发起': _who(x), '内容': '', '开始': x.get('开始时间', ''),
+                        '进度': '生成脚手架中', '可停止': True})
+    x = m.get('更新会话') or {}
+    if x.get('状态') == '运行中' and _alive(x.get('pid', 0)):
+        out.append({'键': 'upd', '名称': '整理资料（来源条目更新）', '发起': _who(x), '内容': '、'.join(x.get('来源') or []),
+                    '开始': x.get('开始时间', ''), '进度': '运行中', '可停止': True})
+    for x in _period_an(d.name):
+        if x.get('状态') == '运行中':
+            out.append({'键': 'an:' + x['编号'], '名称': _an_name(x), '发起': _who(x), '内容': '', '开始': x.get('开始时间', ''),
+                        '进度': '运行中', '可停止': True})
+    for x in _bgjobs.jobs_of(d.name, running=True):
+        out.append({'键': 'job:' + x['编号'], '名称': x['名称'], '发起': x.get('发起') or '', '内容': x.get('内容', ''),
+                    '开始': x['开始时间'], '进度': '停止中' if x.get('停止') else x.get('进度', ''), '可停止': not x.get('停止')})
+    return out
+
+
+def _kill_pid(pid, wait=5):
+    import signal
+    import time as _t
+    try:
+        os.killpg(int(pid), signal.SIGTERM)
+    except (OSError, ValueError, TypeError):
+        return
+    for _ in range(wait * 5):
+        if not _alive(pid):
+            return
+        _t.sleep(0.2)
+    try:
+        os.killpg(int(pid), signal.SIGKILL)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def period_bg_stop(name, key, by='用户（网页）'):
+    """开发面板「■ 停止」：按键停掉这一期的某个后台会话 / 任务。"""
+    d = period_dir(name)
+    m = load_meta(d)
+    kind, _, k = key.partition(':')
+    if kind == 'dev':
+        return _devsession.dev_stop(d.name, by=by)
+    if kind == 'end':
+        return _stackdev.stack_dev_stop(d.name, k, by=by)
+    if kind == 'job':
+        x = _bgjobs.job_stop(k, by)
+        if not x:
+            raise KBError('这个后台任务已经结束了')
+        log(d, '停止', f'{x["名称"]}（{by}）')
+        return f'已停止：{x["名称"]}'
+    if kind == 'px':
+        x = next((x for x in m.get('并行会话') or [] if x['编号'] == k), None)
+        pid, label, done = (x or {}).get('pid'), '新会话', lambda: _px_list(d)
+    elif kind == 'plan':
+        x = m.get('全栈会话') or {}
+        pid, label, done = x.get('pid'), '出方案会话', lambda: _plan._plan_finish(d.name, -15)
+    elif kind == 'launch':
+        x = (m.get('新产品会话') or {}).get(k) or {}
+        pid, label, done = x.get('pid'), f'{k}会话', lambda: _launch._sess_finish(d.name, k, -15)
+    elif kind == 'scaffold':
+        x = (m.get('建工程') or {}).get(k) or {}
+        pid, label, done = x.get('pid'), f'建工程 · {k}', lambda: _launch._scaffold_finish(d.name, k, -15)
+    elif kind == 'upd':
+        x = m.get('更新会话') or {}
+        pid, label, done = x.get('pid'), '整理资料会话', lambda: _refresh._upd_finish(d.name, -15)
+    elif kind == 'an':
+        x = next((x for x in an_sessions() if x.get('编号') == k), None)
+        pid, label, done = (x or {}).get('pid'), _an_name(x or {}), lambda: None
+    else:
+        raise KBError(f'不认识的会话：{key}')
+    if not pid or not _alive(pid):
+        raise KBError(f'{label}已经结束了')
+    _kill_pid(pid)
+    try:
+        done()               # 收尾函数都按「状态还是运行中」判断，等待线程先收过尾的话这里什么都不做
+    except Exception:  # noqa: BLE001 — 收尾失败不影响「已停止」
+        pass
+    log(d, '停止', f'{label}（pid {pid}，{by}）')
+    return f'已停止：{label}'
+
+
+def period_bg_stop_all(name, by='用户（网页）'):
+    """删期前：停掉这一期在跑的所有后台会话和插件任务，返回停掉的名称。Bug 分析 / 修复会话可能管着别的期的 Bug，不停。"""
+    out = []
+    for x in period_bg(name):
+        if x['键'].startswith('an:') or not x['可停止']:
+            continue
+        try:
+            period_bg_stop(name, x['键'], by=by)
+            out.append(x['名称'])
+        except KBError:
+            pass
+    return out
+
+
 def _stem_time(stem):
     mm = re.search(r'(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)', stem)
     return f'{mm[1]}-{mm[2]}-{mm[3]} {mm[4]}:{mm[5]}:{mm[6]}' if mm else ''
@@ -85,10 +220,18 @@ def period_activity(name, groups=8, per=20):
     for x in _period_an(d.name):
         out.append({'时间': x.get('开始时间', ''), '名称': _an_name(x), '运行中': x.get('状态') == '运行中', '日志': x.get('日志', ''),
                     '参与': x.get('参与', '')})
+    for x in _bgjobs.jobs_of(d.name)[:groups]:          # 插件在后台跑的任务：步骤当动作
+        acts = [{'类型': '文字', '内容': f'{t[11:16]} {txt}'} for t, txt in x.get('步骤') or []]
+        if x['状态'] != '运行中':
+            acts.append({'类型': '结束', '内容': f'{x["状态"]}' + (f'：{x["结果"][-300:]}' if x.get('结果') else ''),
+                         '出错': x['状态'] == '失败'})
+        out.append({'时间': x['开始时间'], '名称': f'{x["名称"]}（{x.get("发起") or "后台"}）', '运行中': x['状态'] == '运行中',
+                    '日志': '', '参与': '', '动作': acts[-per:]})
     out.sort(key=lambda g: (g['运行中'], g['时间']), reverse=True)      # 在跑的放最前面
     res = []
     for g in out:
-        acts = dev_activity(g.pop('日志'), per)
+        f = g.pop('日志')
+        acts = g.pop('动作', None) or dev_activity(f, per)
         if acts:
             g['动作'] = acts
             res.append(g)
@@ -190,6 +333,10 @@ def _push(d, m, text, by):
         log(d, '推动解决', f'{"接着上次的会话" if sid else "新开会话"}（pid {proc.pid}）：{text[:100]}（{by}）')
         return '已' + ('接着上次的会话（保留上下文）' if sid else '新开会话') + '交给 AI，进展看下面的动作'
     if m.get('状态') == '收集中':
+        if _registry.qa_case_wanted(text):          # 要 QA 用例不用等开始开发：直接在后台跑 case 生成插件
+            r = _registry.qa_case_start(d, text, by=by)
+            if r:
+                return r
         add_note(d.name, text, '需求', '文字', source=by)
         return '这一期还在收集中，已记进「需求」文字资料；开始开发时会一起处理'
     s = dev_session(d.name) or {}

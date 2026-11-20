@@ -98,7 +98,7 @@ async function period(name){
     if(whole){const p=app.querySelector(`[data-pane="${k}"]`);if(p)p.scrollIntoView({behavior:'smooth',block:'start'})}else{const a=app.querySelector(`[data-tab="${k}"]`);if(a)a.click()}};
   liveBox(d.name);livePopBind(d.name);devBox(d.name);talkBind(d.name);termBind(d.name);buildBox(d.name);stackBox(d.name);
   bindBugs(app);
-  app.querySelectorAll('[data-read]').forEach(a=>a.onclick=()=>a.dataset.dir?toast('目录：请在 Finder 或让 Claude 查看'):readFile(a.dataset.read));
+  app.querySelectorAll('[data-read]').forEach(a=>a.onclick=()=>a.dataset.dir?openDir(a.dataset.read):readFile(a.dataset.read));
   app.querySelectorAll('[data-img]').forEach(a=>a.onclick=()=>showImg(a.dataset.img,d));
   app.querySelectorAll('[data-hist]').forEach(a=>a.onclick=()=>{const c=a.dataset.hist;openDlg(c+' · 历史版本',`<ul class="files">${d.history[c].map(f=>`<li><a onclick="readFile('${esc(f.path).replace(/'/g,"\\'")}')">${esc(f.name)}</a><span class="mut small">${when(f.mtime)}</span></li>`).join('')}</ul>`)});
   app.querySelectorAll('.drop').forEach(z=>bindDrop(z,d.name,z.dataset.cat));

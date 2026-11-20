@@ -37,6 +37,20 @@ async function addDlg(tab){
 function openDlg(t,h){$('#dlgT').textContent=t;$('#dlgB').innerHTML=h;$('#dlgB').onkeydown=null;dlg.classList.remove('pvw','pvfull');if(!dlg.open)dlg.showModal()}
 // 看文件：按扩展名选预览器（md 渲染、html 沙箱、图片缩放、pdf / docx / xlsx / 音视频……，见 62-preview.js）；start = 从第几行看文字
 function readFile(p,start){return previewOpen(p,start).catch(e=>toast(e.message))}
+// 点目录：同一台机器上直接在 Finder / 文件管理器打开；远端访问或打不开时，在网页弹窗列出目录内容（子目录可进、文件可预览 / 下载）
+async function openDir(p,list){
+  let r;try{r=await post('/api/open_dir',{path:p,list:!!list})}catch(e){toast(e.message);return}
+  if(r.opened){toast(r.msg);return}
+  const row=f=>`<li>${f.isDir?`<a data-od="${esc(f.path)}">📁 ${esc(f.name)}/</a>`:`<a data-of="${esc(f.path)}">${esc(f.name)}</a>`}
+    <span class="mut small">${f.isDir?'':size(f.size)+' · '}${when(f.mtime)}${f.isDir?'':`　<a href="${esc(fileUrl(f.path))}&dl=1" title="下载到本机">⬇</a>`}</span></li>`;
+  openDlg('目录 · '+r.name,`<div class="mut small mono" style="margin-bottom:6px">${esc(r.path)}</div>
+    ${r.parent?`<p style="margin:0 0 6px"><a data-od="${esc(r.parent)}">⬆ 上一级</a></p>`:''}
+    ${r.items.length?`<ul class="files">${r.items.map(row).join('')}</ul>`:'<p class="mut">空目录（隐藏文件不显示）</p>'}
+    ${r.truncated?'<p class="mut small">只列出前 1000 项</p>':''}`);
+  const b=$('#dlgB');
+  b.querySelectorAll('[data-od]').forEach(a=>a.onclick=()=>openDir(a.dataset.od,true));
+  b.querySelectorAll('[data-of]').forEach(a=>a.onclick=()=>readFile(a.dataset.of));
+}
 function showImg(p){
   const el=[...document.querySelectorAll('[data-img]')].find(x=>x.dataset.img===p);
   const note=el?.dataset.note||el?.querySelector('div')?.title||'';

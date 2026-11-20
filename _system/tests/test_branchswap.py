@@ -53,22 +53,24 @@ class BranchSwap(unittest.TestCase):
         kb.save_meta(d, m)
         cls.d = d
 
-    def test_1_refuse_unpushed_and_dirty(self):
+    def test_1_refuse_unpushed(self):
         (self.repo / 'a.txt').write_text('2')
         git(self.repo, 'commit', '-qam', 'local only')
         with self.assertRaisesRegex(kb.KBError, '还没推到'):
             bs.branch_swap('换分支测试', 'feature-x-v2')
         git(self.repo, 'push', '-q')
-        (self.repo / 'a.txt').write_text('dirty')
-        with self.assertRaisesRegex(kb.KBError, '未提交'):
-            bs.branch_swap('换分支测试', 'feature-x-v2')
-        git(self.repo, 'checkout', '--', 'a.txt')
 
     def test_2_swap(self):
+        (self.repo / 'a.txt').write_text('dirty')                 # 未提交改动不再挡住：自动 stash 并记待处理
         msg = bs.branch_swap('换分支测试', 'feature-x-v2', reason='已合入 release-1')
         self.assertIn('feature-x-v2', msg)
+        self.assertIn('git stash', msg)
         self.assertEqual(git(self.repo, 'branch', '--show-current'), 'feature-x-v2')
+        self.assertIn('原分支 feature-x-v1', git(self.repo, 'stash', 'list'))
         m = kb.load_meta(self.d)
+        q = [x for x in m.get('非阻断问题') or [] if '收起了' in x['标题']]
+        self.assertEqual(len(q), 1)
+        self.assertIn('git stash apply', q[0]['详情'])
         self.assertEqual(m['开发分支'], 'feature-x-v2')
         self.assertEqual(m['开发会话']['分支'], 'feature-x-v2')
         self.assertEqual([x['分支'] for x in m['分支历史']], ['feature-x-v1'])

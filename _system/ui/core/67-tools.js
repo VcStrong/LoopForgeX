@@ -5,9 +5,12 @@ function delPeriod(name,isTask){
   const k=isTask?'事项':'期';
   openDlg(`删除${k} · ${name}`,`<div class="form"><p style="margin:0">把这个${k}从知识库里<b>整个删掉</b>：资料、文字资料、记录、开发会话记录都不再出现在知识库里，也搜不到。</p>
     <ul class="small" style="margin:6px 0 0;padding-left:18px"><li>归到它的禅道 Bug 回到「待归纳」；关联的 ANR / 崩溃问题取消关联；它占着的手机释放</li>
-    <li>目录移到系统<b>废纸篓</b>，真删错了还能从废纸篓找回；代码仓库里的代码和提交不动</li><li>后台会话在跑时不能删，先停止</li></ul>
+    <li>目录移到系统<b>废纸篓</b>，真删错了还能从废纸篓找回；代码仓库里的代码和提交不动</li><li>还在跑的后台会话、插件任务会<b>一并停掉</b>；删掉后后台任务不会再把它写回来</li></ul>
+    <div id="dpBg" class="small" style="margin-top:6px"></div>
     <label>输入${k}名称确认<input type="text" id="dpC" placeholder="${esc(name)}"></label>
     <div class="row"><button class="danger" id="dpGo">🗑 删除</button><button onclick="dlg.close()">取消</button></div></div>`);
+  api('/api/period/bg?name='+enc(name)).then(v=>{const xs=v.items||[],el=$('#dpBg');if(!el||!xs.length)return;
+    el.innerHTML=`<b style="color:var(--warn)">⚠ 这一${k}还有 ${xs.length} 个后台会话 / 插件在跑，删除时一并停掉：</b><ul style="margin:4px 0 0;padding-left:18px">${xs.map(x=>`<li>${esc(x['名称'])}（${esc(x['发起']||'后台')} 起，${esc(String(x['开始']||'').slice(5,16))} 开始${x['进度']?'，'+esc(x['进度']):''}）${x['键'].startsWith('an:')?' <span class="mut">Bug 会话管着多期的 Bug，不停</span>':''}</li>`).join('')}</ul>`}).catch(()=>{});
   $('#dpGo').onclick=async()=>{try{const r=await post('/api/period/delete',{period:name,confirm:$('#dpC').value});dlg.close();toast(r.msg);location.hash='#/'}catch(e){toast(e.message)}};
 }
 function rawGroups(ms){   // 连续几条只有工具调用、没有文字的，合成一条折叠

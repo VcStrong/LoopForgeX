@@ -18,7 +18,7 @@ function plDlg(d,p,mount){
 async function plRunDlg(d,p){
   let T={期:[],仓库:[]};try{T=await api('/api/plugin/targets')}catch(e){toast(e.message)}
   const pi=x=>`<div class="ddi" data-pt="${esc(x['名称'])}"><b>${esc(x['名称'])}</b> ${x['状态']==='已完成'?badge('已完成'):''}<div class="small mut">${esc(x['分支']||'分支未写')} · ${esc(x['仓库']?x['仓库'].split('/').pop():'未定仓库')}</div></div>`;
-  openDlg(`运行一次 · ${p['名称']}`,`<div class="form" style="min-width:min(560px,86vw)"><div class="small mut">选一期或直接输分支：知识库会切到这个分支（本地没有就从远端拉）、拉最新代码，运行后把改动提交并推送，再切回原来的分支。仓库被占用时自动排队。</div>
+  openDlg(`运行一次 · ${p['名称']}`,`<div class="form" style="min-width:min(560px,86vw)"><div class="small mut">选一期或直接输分支：知识库会切到这个分支（本地没有就从远端拉）、拉最新代码，运行后把改动提交并推送，之后留在这个分支（不切回原来的分支）；有未提交的改动会先 git stash 收起并在那一期记一条待处理。仓库被占用时自动排队。</div>
     <label>期 / 分支<div class="combo"><input type="text" id="prT" placeholder="期名，或分支名如 feature-xxx-stable" autocomplete="off"><button type="button" id="prDd" title="选一期" style="width:44px;font-size:12px;line-height:1">▼</button>
       <div class="dd" id="prL" hidden>${T['期'].map(pi).join('')||'<div class="small mut" style="padding:8px">没有进行中的期</div>'}</div></div></label>
     <div class="small" id="prInfo"></div>
