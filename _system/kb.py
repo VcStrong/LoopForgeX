@@ -68,14 +68,19 @@ _MODULES = [   # 按依赖从下往上：后面的可以用前面的；分包说
     'api.cli',
 ]
 _OWNER = {}
+_AMBIGUOUS = set()   # 多个模块各有一个同名的下划线函数：kb._xxx 指不清是哪个，合并完删掉，用到时直接 AttributeError
 for _name in _MODULES:
     _m = importlib.import_module(f'kblib.{_name}')
-    for _k, _v in vars(_m).items():       # 两个模块定义了同名的公开函数，后一个会悄悄覆盖前一个：直接报错，别让网页出怪问题
-        if callable(_v) and not _k.startswith('_') and getattr(_v, '__module__', '') == _m.__name__:
+    for _k, _v in vars(_m).items():       # 两个模块定义了同名函数，后一个会悄悄覆盖前一个（曾让 kb._allowed 指到 doctor 的同名函数，预览全挂）
+        if callable(_v) and not _k.startswith('__') and getattr(_v, '__module__', '') == _m.__name__:
             if _k in _OWNER and _OWNER[_k] != _m.__name__:
-                raise ImportError(f'{_m.__name__}.{_k} 和 {_OWNER[_k]}.{_k} 重名，kb.{_k} 会被覆盖：请给其中一个改名')
+                if not _k.startswith('_'):    # 不带下划线的重名：直接报错，别让网页出怪问题
+                    raise ImportError(f'{_m.__name__}.{_k} 和 {_OWNER[_k]}.{_k} 重名，kb.{_k} 会被覆盖：请给其中一个改名')
+                _AMBIGUOUS.add(_k)
             _OWNER[_k] = _m.__name__
     globals().update({k: v for k, v in vars(_m).items() if not k.startswith('__') and not isinstance(v, _Lazy)})
+for _k in _AMBIGUOUS:
+    globals().pop(_k, None)
 from kblib.infra import devlock, fetch  # noqa: E402,F401
 from kblib.anr import parse as anr  # noqa: E402,F401
 from kblib.bugs import adapters as bugsrc  # noqa: E402,F401

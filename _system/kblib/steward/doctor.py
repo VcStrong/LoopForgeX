@@ -39,7 +39,7 @@ def _user_settings():
     return d, p
 
 
-def _allowed(d):
+def _kb_tools_allowed(d):
     allow = ((d or {}).get('permissions') or {}).get('allow') or []
     deny = ((d or {}).get('permissions') or {}).get('deny') or []
     ok = any(a in (ALLOW, ALLOW + '__*') for a in allow)
@@ -52,7 +52,7 @@ def allow_kb_tools():
     d, p = _user_settings()
     if d is None:
         raise KBError(f'{p} 不是合法的 JSON，没有改；请先修好这个文件')
-    if _allowed(d)[0]:
+    if _kb_tools_allowed(d)[0]:
         return f'{p} 已放行 kb 工具'
     perm = d.setdefault('permissions', {})
     perm['allow'] = list(perm.get('allow') or []) + [ALLOW]
@@ -209,10 +209,10 @@ def doctor(probe=True):
         '改成团队默认' if diff else '')
 
     d, p = _user_settings()
-    ok, blocked = _allowed(d)
+    ok, blocked = _kb_tools_allowed(d)
     try:                                                    # settings.local.json 里放行的也算
         lp = _claude_dir() / 'settings.local.json'
-        lo, lb = _allowed(json.loads(read_text(lp) or '{}')) if lp.is_file() else (False, [])
+        lo, lb = _kb_tools_allowed(json.loads(read_text(lp) or '{}')) if lp.is_file() else (False, [])
         ok, blocked = ok or lo, blocked + lb
     except (OSError, ValueError):
         pass
