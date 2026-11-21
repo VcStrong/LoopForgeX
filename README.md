@@ -87,7 +87,7 @@ docker compose up -d --build
 ### 远程部署（服务器原生安装）
 
 ```sh
-git clone https://github.com/VcStrong/knowledge-base-public.git ~/knowledge-base
+git clone https://github.com/VcStrong/LoopForgeX.git ~/knowledge-base
 cd ~/knowledge-base && ./install.sh --server --autostart
 ```
 
@@ -98,7 +98,7 @@ cd ~/knowledge-base && ./install.sh --server --autostart
 需要 macOS 或 Linux、Python 3.9+、git，以及已登录的 [Claude Code](https://claude.com/claude-code)。
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/VcStrong/knowledge-base-public/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/VcStrong/LoopForgeX/main/install.sh | bash
 ```
 
 装完自动打开浏览器，首页「👋 三步上手」带你走一遍：检测 AI 引擎 → 勾选本机代码仓库 → 放进第一个需求。单机模式免登录，本机用户就是管理员。

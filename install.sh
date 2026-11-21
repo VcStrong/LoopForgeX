@@ -4,12 +4,12 @@
 # 用法：./install.sh [--autostart] [--host 0.0.0.0] [--port 11555（写进 _system/web.json，之后 kb port set 可改）] [--no-mcp] [--no-alias] [--no-open]
 #       ./install.sh --server                                  控制面（团队服务器：听 0.0.0.0、开机自启，提示 kb user add 建管理员）
 #       ./install.sh --runner --url <控制面地址> --token <注册令牌> [--name 名称] [--ca 证书]   执行机（只出站，常驻 kb runner）
-# 一行安装（还没下载程序时）：curl -fsSL https://raw.githubusercontent.com/VcStrong/knowledge-base-public/main/install.sh | bash
+# 一行安装（还没下载程序时）：curl -fsSL https://raw.githubusercontent.com/VcStrong/LoopForgeX/main/install.sh | bash
 set -euo pipefail
 
 DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd || pwd)
 if [ ! -f "${DIR}/_system/kb.py" ]; then          # 通过 curl | bash 运行：先把程序下载到 ~/knowledge-base（或 KB_DIR）
-  REPO_URL="${KB_REPO:-https://github.com/VcStrong/knowledge-base-public.git}"
+  REPO_URL="${KB_REPO:-https://github.com/VcStrong/LoopForgeX.git}"
   DEST="${KB_DIR:-${HOME}/knowledge-base}"
   command -v git >/dev/null || { echo "需要 git（macOS：xcode-select --install；Linux：apt install git）" >&2; exit 1; }
   if [ -d "${DEST}/.git" ]; then git -C "${DEST}" pull -q --ff-only || true
