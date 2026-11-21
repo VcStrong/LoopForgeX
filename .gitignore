@@ -2,6 +2,8 @@
 /*
 !/.gitignore
 !/README.md
+!/README.zh-CN.md
+!/assets/
 !/kb
 !/install.sh
 !/使用说明.md

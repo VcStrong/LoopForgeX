@@ -285,8 +285,8 @@ def ui_dir(name_or_dir):
 
 def ui_template():
     from kblib.core.common import load_settings
-    t = load_settings().get('界面模板') or '经典'
-    return t if ui_dir(t) else '经典'
+    t = load_settings().get('界面模板') or '画布'
+    return t if ui_dir(t) else '画布'
 
 
 def set_ui_template(name):

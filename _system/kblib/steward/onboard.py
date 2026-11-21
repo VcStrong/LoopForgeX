@@ -20,7 +20,7 @@ from kblib.core.notes import add_note
 from kblib.core.common import PERIODS, SYS
 
 _SKIP = {'Library', 'Applications', 'Movies', 'Music', 'Pictures', 'Public', 'node_modules', 'build', 'Pods', 'dist', 'out',
-         'target', 'venv', '.venv', 'DerivedData', 'Caches', 'site-packages', 'vendor', 'knowledge-base', 'knowledge-base-public'}
+         'target', 'venv', '.venv', 'DerivedData', 'Caches', 'site-packages', 'vendor', 'knowledge-base', 'LoopForgeX'}
 _ADDING = {}
 
 

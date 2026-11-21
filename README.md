@@ -1,106 +1,181 @@
-# KB 知识库 · AI 研发工作台
+<p align="center">
+  <picture>
+    <img src="assets/hero-en.png" alt="LoopForgeX — One person assigns. An AI team delivers full stack." width="100%">
+  </picture>
+</p>
 
-> **一个人下发任务，一支 AI 团队交付全栈；一套控制面，多台执行机，全团队共用。**
->
-> 需求、设计稿、接口文档集中在一处。人只负责下发和拍板；出方案、写代码、互相审查、修 Bug，交给按角色分工的不同 AI。远程部署后，网页、任务队列和执行机分开跑——AI 会话在执行机上做，控制面只管调度与验收。
+<p align="center">
+  <a href="assets/LoopForgeX-Product-Demo-EN.mp4"><b>▶ Watch the 96-second product tour (English, narrated)</b></a>
+  · <a href="assets/demo-en.srt">Subtitles</a>
+</p>
 
-`远程部署 · 多用户协作`　`控制面 + 执行机`　`PostgreSQL / MySQL / SQLite`　`Docker 一键起`　`Claude / Codex / Hermes / 自定义`　`Git 与 SVN`　`开源`
+<p align="center">
+  <a href="https://github.com/VcStrong/LoopForgeX/actions"><img alt="CI" src="https://img.shields.io/badge/CI-passing-2ea043?style=flat-square"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
+  <img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-Docker-2496ED?style=flat-square">
+  <a href="https://github.com/VcStrong/LoopForgeX/stargazers"><img alt="stars" src="https://img.shields.io/github/stars/VcStrong/LoopForgeX?style=flat-square"></a>
+</p>
 
-![KB 本地知识库介绍](介绍.png)
+<p align="center">
+  <b>English</b> · <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-怎么用见 [使用说明](使用说明.md)，Docker 部署细节见 [DOCKER.md](DOCKER.md)。
+<p align="center">
+  <a href="#two-ways-to-work">Two ways to work</a> · <a href="#why-loopforgex">Why LoopForgeX</a> · <a href="#quick-start">Quick start</a> · <a href="#how-a-flow-works">How a flow works</a> · <a href="#features">Features</a> · <a href="#faq">FAQ</a> · <a href="#documentation">Docs</a>
+</p>
 
-## 从一句需求到代码上服务器，只有三处要你点
+**LoopForgeX** (Local Knowledge Base · AI R&D workspace) is a self-hosted software delivery workspace. Bring specs, designs and API docs onto one project canvas; hand work to the **Steward** in chat. It opens a sandbox, delegates to project roles, runs checks, pauses at human gates for your call, and ships the code.
 
-| 步骤 | 做什么 | 谁做 |
+When a way of working proves itself, save it as a reusable **flow**: the next requirement is delivered the same way, with review and approval built in. Coding agents do the work; LoopForgeX adds the roles, sandboxes, gates, evidence and history around them — all on your own machine.
+
+<p align="center">
+  <img src="assets/canvas-en.png" alt="Canvas: the whole site is a project map, five lanes from intake to shipping" width="100%">
+  <sub>The canvas: a zoomable project map. Click any node to see details in the right-hand drawer.</sub>
+</p>
+
+## Two ways to work
+
+Both paths track the same requirements. Use them separately or mix them.
+
+| | Chat with the Steward | Run a flow |
 |---|---|---|
-| 📥 下发 | 丢进需求、设计稿、接口文档 | 🟡 人 |
-| 🧭 出方案 | 需求规格、设计对照、接口契约 | 🟣 方案 AI |
-| ✅ 拍板 | 看方案，锁定接口契约 | 🟡 人 |
-| ⚙️ 并行开发 | 各端一个 AI，接口没好先按契约 mock；任务进队列，由空闲执行机领走 | 🟣 开发 AI |
-| 🔍 独立审查 | 另一个 AI 对照需求挑错，最多打回 2 轮 | 🟣 审查 AI |
-| 📦 看证据验收 | 需求 × 各端完成度、审查结论、执行机回传的截图与日志 | 🟡 人 |
-| 🚀 上服务器 | Git 推送开发分支，SVN 只提交本次改动 | 🟢 自动 |
+| **Best for** | Exploring, quick fixes, iterating with the agent | Repeatable delivery with fixed stages and sign-off |
+| **How it runs** | The Steward opens a conversation workspace (a sandbox with your repos) on demand and calls project roles as subagents | The engine runs Agent, Script, Human-gate and sub-flow nodes in order, each in its own sandbox |
+| **You stay in control by** | Steering messages mid-reply, pausing, resuming or taking over a running flow | Approving at human gates, sending work back to a chosen step, retrying or rerunning from any node |
+| **Delivers** | Changed code + conversation record | Code + per-node artifact snapshots + approval record |
 
-🔁 **做到一半发现别的端也得改？** 开发 AI 自己提变更 → 出增量方案 → 你拍板 → 受影响的端自动补做。流程可以反复，不用推倒重来。
+Both paths share the same **requirement tracking**: every change, whether made in chat or by a flow, links back to what was asked for and counts toward delivery and cost reports.
 
-## 远程部署后多了什么
+## Why LoopForgeX
 
-| 能力 | 说明 |
+Ask a coding agent to "fix this bug" and the result depends on that run. It might skip the plan, forget the tests, review its own code, or stop halfway without anyone noticing.
+
+That's fine for a demo, but it isn't how a team ships.
+
+- **Repeatable.** Same flow, same stages, same checks for every requirement.
+- **Separated roles.** Planning, implementation, review and testing each get their own prompt, executor, model and rules; review never uses the same role as development.
+- **Human on the loop.** Agents run on their own; you only approve, start and accept at the key nodes — the AI cannot click those three for you.
+- **Observable and resumable.** Node status, tool traces, logs and artifacts in one place; resume from a checkpoint after an interruption.
+- **Your stack, your servers.** Code, materials and keys never leave your Mac or server. MIT licensed.
+
+## Quick start
+
+```sh
+git clone https://github.com/VcStrong/LoopForgeX.git ~/loopforgex
+cd ~/loopforgex && ./install.sh
+# Deploy on a server: ./install.sh --host 0.0.0.0 --autostart
+```
+
+The browser opens after install. Three steps on the home page walk you through: **detect an AI engine → pick a local repo → add your first request**. Want something ready-made? Click "See a sample"; need help? Ask the Steward at the bottom right.
+
+**What you need**
+
+| I want to… | You need |
 |---|---|
-| 👥 **账号与项目权限** | 网页要登录，管理员建账号；系统角色分管理员 / 普通，项目角色分负责人 / 成员 / 只读。拍板、开工、验收、删除只能由负责人本人在网页上点 |
-| 🖥 **控制面 + 执行机** | 控制面跑网页、任务队列、MCP 和定时任务；执行机只出站领活，不开端口。插 USB 手机的 Mac 可作为执行机接进来 |
-| ☰ **任务队列** | 排队位置、等待原因、派到哪台执行机、为什么派它、重试与证据回传；执行机掉线任务自动回队列 |
-| 📦 **资源池** | 手机、测试账号、引擎名额统一占用与排队，超时自动释放；管理员可强制释放并留审计 |
-| 🤖 **AI 账号池** | 个人账号 / 项目共享账号、限流冷却、备用引擎、日 / 月预算与超额排队或降级 |
-| 🗄 **三种元数据库** | 本机零配置 SQLite，服务器 / Docker 默认 PostgreSQL，也支持已有 MySQL 8；跨库整库复制与搬家 |
-| 🔐 **审计与总览看板** | 机密读取、账号操作、资源强制释放都有记录；管理员看板汇总全员进度、执行机、AI 用量、队列与安全 |
-| 🗂 **基础信息公共 / 私有 / 模板** | 公共条目全员可见；个人账号、token 放私有，只有本人和管理员能看；管理员建模板，新同事「从模板复制」只填自己的字段 |
+| Try the built-in script + human-gate demo | Git, Python 3, Docker (the installer guides you through setup) |
+| Chat with the Steward, generate docs or a new project | The above + a signed-in coding agent CLI |
+| Change a real repository and open a PR | The above + repo access (per-host SSH key) and model credentials |
 
-## 团队里常见的四个难题
+<details>
+<summary><b>More setup details</b>: executors, credentials, sandboxes, access model</summary>
 
-| 难题 | 知识库怎么解决 |
+- **Executors**: multiple coding agent CLIs are supported; pick any. Each role has its own prompt, model and rules. Keys stay on your own machine.
+- **Sandboxes**: runs are isolated in Docker; this requires access to the host Docker socket. This is a self-hosted setup for trusted teams, not a tenant-isolation boundary for public multi-tenant use.
+- **Access model**: a fresh install listens on all interfaces and enables sign-up by default. Before exposing it, disable sign-up, configure HTTPS and restrict network reachability.
+- **Git & SVN**: both are supported; the repo updates automatically before development, push and branch switches, and stops on conflicts.
+
+</details>
+
+## How a flow works
+
+A **flow** is the path a delivery follows. Agents, scripts and people take part in the same run:
+
+| Node | What it does |
 |---|---|
-| 资料散在聊天、文档、设计工具里，AI 拿不全上下文 | 按「期」集中，全文检索，AI 通过 MCP 直接读取 |
-| AI 写的代码没人审，直接混进主干 | 换一个 AI 独立审查；你验收后才推送或提交 |
-| 多端联调靠喊，接口一改各端都乱 | 先锁接口契约，各端并行；服务端通过后自动排联调 |
-| 人多以后谁改了什么、用了哪个账号说不清 | 角色权限 + 审计 + 任务队列 + 资源池，每一步都有记录 |
+| **Agent** | A project role (prompt + executor + model + rules + tools) that designs, implements, reviews or tests. |
+| **Script** | A deterministic shell step: build, test, lint, generate a report. No AI where AI is not needed. |
+| **Human gate** | Pauses the run until someone checks the artifacts and approves, or sends the work back to a step. |
+| **Sub-flow** | Runs another flow as a sub-workflow. |
 
-## 3 次点击，掌控全程
+Each node declares its artifacts and dependencies; the engine starts each step once its dependencies complete.
 
-1. **拍板方案**：需求规格、设计对照、接口契约，一次看完。
-2. **各端开工**：点了才算批准开发，AI（包括管家）不能替你点。
-3. **看证据包验收**：验收后才推送或提交到服务器。
+<p align="center">
+  <img src="assets/plan-en.png" alt="Plans hang on the node; open the drawer to review" width="100%">
+  <sub>Planning: spec, design check, platform changes and API contract hang on the node. Open the drawer, review, then approve.</sub>
+</p>
 
-AI 拿不准的会在网页上问你；开了「免打扰」，它就按自己的建议继续做。
+<p align="center">
+  <img src="assets/dev-en.png" alt="One agent per platform in parallel, a second agent reviews independently" width="100%">
+  <sub>After approval: one agent per platform works in parallel, a second agent reviews independently, and issues are sent back automatically (up to two rounds).</sub>
+</p>
 
-## 能力
+Halfway through and another platform needs a change? The development agent proposes it → an incremental plan is produced → you approve → the affected platforms catch up automatically. Flows can loop; you never start over.
 
-- 🧩 **全栈五端**：一期需求覆盖多个仓库、多台机器，各端并行开发，互不阻塞。
-- 🤖 **按角色分配 AI**：方案、开发、审查、Bug 分析、修复各选一个引擎（Claude Code、Codex、Hermes、自定义命令），还能按端指定；审查不跟开发用同一个。
-- 🐞 **Bug 闭环**：同步多个 Bug 平台（禅道、Jira、崩溃平台），自动归到对应的期；AI 只读分析，你审核后进修复队列。
-- 💥 **ANR / 崩溃归并**：用 mapping 自动还原堆栈，按问题归并成批次推进；修完又出现会自动提醒。
-- 🎨 **设计稿对照**：出方案时，AI 逐页核对设计稿（Figma、蓝湖、PSD）和需求，不一致的地方先指出来。
-- 🌿 **Git 与 SVN 都支持**：开发前、推代码前、切分支前、分析前自动更新代码；冲突就撤销，停下来提示。支持本机仓库和远程机器。
-- 🔌 **插件扩展**：把已有系统做成插件接进来（Jenkins 构建、外部会话拉取、工作统计、群机器人通知等），本体保持通用。
-- 📊 **工作统计与看板**：在总览看各期进度、解决的 Bug 和 ANR 数量、AI 跑了多少次；管理员另有一张全团队的总览看板。
+<p align="center">
+  <img src="assets/accept-en.png" alt="Evidence pack: progress and review results per requirement" width="100%">
+  <sub>Evidence pack: progress and review results for every requirement at a glance; code is pushed only after you accept.</sub>
+</p>
 
-## 安全
+## Features
 
-- 🔒 **数据留在自己手里**：装在你的服务器或 Mac 上，资料不经过第三方平台。
-- 👁️ **Bug 平台只读**：只从平台拉数据，从不回写；修复状态只记在知识库里。
-- 🗝️ **密码不落明文**：Mac 用钥匙串，服务器用加密文件；网页要登录，远程连接用一次性生成的个人令牌，主密钥与数据分开保存。
-- ✋ **关键决定只能你做**：拍板、开工、验收只能由负责人在网页上点，AI 不能代点；只读账号连修改按钮都是灰的。
-- 📝 **谁动过查得到**：机密读取、令牌、账号变更、资源强制释放都写审计，项目负责人和管理员可按项目、人、时间筛选。
+| Area | What you get |
+|---|---|
+| **Canvas workspace** | A zoomable project map; five lanes carry intake → planning → development → verification → shipping. Click a node for the drawer. |
+| **Two ways to work** | Chat with the Steward or run a flow; both share requirement tracking. |
+| **Roles** | Reusable role definitions: prompt, executor, model, rules, Skills, MCP tools, artifacts and gates. |
+| **Requirement → delivery** | End-to-end tracking, PR/MR status and merge detection; Git and SVN both supported. |
+| **Runs & approvals** | Live node status, tool traces, per-node artifact snapshots; approve, send back, or rerun from any node. |
+| **Bugs & crashes** | Read-only multi-platform sync, automatic grouping; mapping-based stack rebuild and recurrence alerts. |
+| **Design check** | Each design page is compared with the spec during planning; mismatches are flagged first. |
+| **Work stats** | Progress, issues solved and agent runs, summed up automatically. |
+| **Plugins** | Connect external systems as plugins; the core stays generic. |
+| **Team-ready** | Data stays on your server; the key decisions can only be made by a human. |
 
-## 快速开始
+## Security
 
-### 远程部署（团队用，Docker 一条命令）
+- 🔒 **Data stays with you**: installed on your Mac or server; materials never pass through third-party platforms.
+- 👁️ **Bug platforms are read-only**: data is pulled, never written back; fix status is kept locally.
+- 🗝️ **No plaintext secrets**: Mac keychain, encrypted file on servers; the web app requires login, remote connections use tokens.
+- ✋ **Key decisions are yours**: approve, start and accept can only be clicked by you in the web app — the AI cannot do it for you.
 
-```sh
-cp docker.env.example .env     # 改 KB_DB_PASSWORD；管理员默认 admin / admin123
-docker compose up -d --build
-```
+> Note: the default install is meant for **trusted internal teams**. Docker sandboxes run through the host Docker socket, which is effectively host daemon access. Don't expose it to a public multi-tenant environment. Before going live, disable sign-up, configure HTTPS and restrict network reachability.
 
-打开 `http://<服务器>:11555`，用 `admin` / `admin123` 登录并**立即改密码**，进「👥 成员」建账号、「🗂 项目」拉人、「🤖 AI 账号」配引擎、「🖥 执行机」接机器。详见 [DOCKER.md](DOCKER.md)。
+## FAQ
 
-### 远程部署（服务器原生安装）
+**Do I need a model API key to try it?**
+No — the built-in script + human-gate demo runs without one, right after install. To have agents do real work, configure one coding agent CLI's credentials.
 
-```sh
-git clone https://github.com/VcStrong/LoopForgeX.git ~/knowledge-base
-cd ~/knowledge-base && ./install.sh --server --autostart
-```
+**Do I need GitHub?**
+Not for the demo or for generating docs. Yes if you want to change a real repo and open a PR; other Git services and SVN are supported too.
 
-`--server` 监听 `0.0.0.0`、开开机自启并先建管理员账号；公网前面请加 HTTPS 反向代理。
+**Should I chat or run a flow?**
+Chat for exploration and one-off fixes. Turn a process into a flow when you'll repeat it many times and want the same checks and sign-off each time.
 
-### 本机（Mac / Linux 单机试用）
+**How is this different from Dify, n8n or Flowise?**
+Those are general-purpose automation / AI workflow builders. LoopForgeX is built for **software delivery with coding agents**: implementer and reviewer roles, sandboxes with real repositories, code-hosting delivery, human acceptance gates and run evidence.
 
-需要 macOS 或 Linux、Python 3.9+、git，以及已登录的 [Claude Code](https://claude.com/claude-code)。
+**How is this different from using Claude Code or Codex directly?**
+It doesn't replace them; it orchestrates them. Each agent step and each chat turn runs one of those CLIs. LoopForgeX adds what surrounds it: who does what, in which sandbox, in which order, with which checks, and who signs off.
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/VcStrong/LoopForgeX/main/install.sh | bash
-```
+**Is it safe to expose on the internet?**
+Not with the default settings. Follow the security notes above.
 
-装完自动打开浏览器，首页「👋 三步上手」带你走一遍：检测 AI 引擎 → 勾选本机代码仓库 → 放进第一个需求。单机模式免登录，本机用户就是管理员。
+## Documentation
 
-安装脚本的完整选项、`kb` 命令、数据搬家与故障演练见 [使用说明 · 安装和部署](使用说明.md#安装和部署)。
+| I want to… | Start here |
+|---|---|
+| Install and ship my first request | [User guide](使用说明.md) (Chinese) |
+| Learn about UI templates and the canvas | [User guide](使用说明.md) (Chinese) |
+| 看中文版 | [README.zh-CN.md](README.zh-CN.md) |
+
+## Community
+
+Issues and PRs are welcome. Help us define how software gets delivered in the age of AI.
+
+## Contributing
+
+Issues and PRs are welcome. Please report security issues privately rather than opening a public issue.
+
+## License
+
+MIT. Third-party components retain their own licenses.
