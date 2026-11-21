@@ -5,7 +5,11 @@
 !/kb
 !/install.sh
 !/使用说明.md
+!/DOCKER.md
+!/docker-compose.yml
+!/docker.env.example
 !/介绍.png
+!/docs/
 !/插件/
 !/_system/
 /_system/*
@@ -18,11 +22,20 @@
 !/_system/ui-preview.html
 !/_system/ui/
 !/_system/requirements.txt
+!/_system/requirements-db.txt
 !/_system/团队默认.json
 !/_system/bin/
+!/_system/Dockerfile
+!/_system/Dockerfile.dockerignore
+!/_system/Dockerfile.runner
+!/_system/Dockerfile.runner.dockerignore
+!/_system/docker-entrypoint.sh
 !/_system/tests/
 !/tools/
 /tools/*
 !/tools/make-public.py
 !/tools/check-arch.py
 __pycache__/
+
+# Docker 部署：本地密码（.env）不进仓库
+.env

@@ -13,7 +13,7 @@ def _get_api_settings(self, u, q):
                                 'plugins': kb.plugins(), 'pluginEvents': kb.PLUGIN_EVENTS, 'timings': kb.timings(), 'policies': kb.POLICY_TEXT,
                                 'pluginEnv': kb.PLUGIN_ENV, 'pluginDir': str(kb.PLUGIN_DIR),
                                 'baseEntries': [{'编号': e['编号'], '名称': e['名称'], '类型': e.get('类型', '')}
-                                                for e in kb.base_load()['条目']]})
+                                                for e in kb.base_visible()]})
 
 
 @get('/api/settings/commands')
@@ -145,7 +145,13 @@ from kblib.infra import pool as _wcpool  # noqa: E402
 
 @get('/api/pool')
 def _get_api_pool(self, u, q):
-    return self._guard(lambda: _wcpool.pool_status())
+    def run():
+        from kblib.core import queue as _q
+        st = _wcpool.pool_status()
+        mine = [dict(c, 仓库=r['名称'], 占用会话=(c.get('占用') or None) and str(c.get('占用'))) for r in st['仓库'] for c in r['副本']]
+        st['items'] = [{'执行机': '本机', 'id': _q.LOCAL_ID, '副本': mine}] + _q.runner_groups('副本')   # 按执行机分组（REQ-015）
+        return st
+    return self._guard(run)
 
 
 @post('/api/pool/settings', page_only=True)
@@ -158,6 +164,48 @@ def _post_api_pool_add(self, u, n, body):
     return self._guard(lambda: {'msg': kb.add_repo(body.get('url', ''), body.get('name') or None, body.get('post', ''), background=True)})
 
 
+@post('/api/pool/remove', page_only=True)
+def _post_api_pool_remove(self, u, n, body):
+    return self._guard(lambda: {'msg': kb.remove_repo(body.get('name', ''))})
+
+
 @post('/api/pool/cleanup', page_only=True)
 def _post_api_pool_cleanup(self, u, n, body):
     return self._guard(lambda: {'msg': _wcpool.pool_cleanup()['说明']})
+
+
+# ---------------------------------------------------------------- 网页端口（启动后在平台里改并重启；补充接口，契约外，只给本端网页用）
+@get('/api/web/port')
+def _get_api_web_port(self, u, q):
+    from kblib.infra import webport
+    return self._guard(lambda: webport.status(webport.RUNNING['port'] or None))
+
+
+@post('/api/web/port', page_only=True)
+def _post_api_web_port(self, u, n, body):
+    import sys as _sys
+    from kblib.core import authz as _az, db as _kdb, queue as _q
+    from kblib.infra import webport
+
+    def run():
+        me = (getattr(self, 'ident', None) or {}).get('user', '')
+        if not _az.is_admin(me):
+            raise _az.Denied('只有管理员能改网页端口')
+        cur = webport.RUNNING['port']
+        st = webport.status(cur)
+        if not st['可在线修改']:
+            raise kb.KBError(st['不能改的原因'])
+        p = webport.check_new(body.get('port'), cur)
+        webport.save(p, by=me)
+        online = [r['id'] for r in _q.remote_online()]
+        webport.begin_move(p, cur, online)
+        webport.restart_after_notify(webport.strip_port_args([_sys.executable, *_sys.argv]), wait=20 if online else 0)
+        _kdb.audit('设置', me, '网页端口', '', '成功', f'{cur} → {p}')
+        host = (self.headers.get('Host') or f'127.0.0.1:{cur}').rsplit(':', 1)[0] if not (self.headers.get('Host') or '').startswith('[') \
+            else self.headers.get('Host').rsplit(':', 1)[0]
+        url = f'{"https" if self._https() else "http"}://{host}:{p}/'
+        tips = [f'{len(online)} 台在线执行机会在下一次心跳时自动改连 {p}（经反向代理接入的不受影响）'] if online else []
+        tips.append('kb token 接入的远程 Claude Code 要把地址里的端口改成 ' + str(p) + '；本机 Claude Code 走 stdio 不受影响')
+        return {'msg': f'网页端口改成 {p}，正在重启' + ('（先等执行机拿到新端口，最多 20 秒）' if online else ''), 'port': p, 'url': url,
+                '提示': tips}
+    return self._guard(run)

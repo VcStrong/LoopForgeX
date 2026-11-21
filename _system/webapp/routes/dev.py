@@ -1,6 +1,11 @@
 """接口 · 开发会话、手机、复测、问题、免打扰、回答 AI 的提问。每个接口一个函数，用 @get / @post 注册（见 webapp/router.py）。"""
 from webapp.router import get, post  # noqa: F401
 from webapp.shared import *  # noqa: F401,F403
+from kblib.core import queue as _q
+
+
+def _jid(j):
+    return j.get('编号') or j.get('id') if isinstance(j, dict) else j
 
 
 @get('/api/dev/activity')
@@ -10,7 +15,12 @@ def _get_api_dev_activity(self, u, q):
 
 @get('/api/devices')
 def _get_api_devices(self, u, q):
-    return self._guard(lambda: {'items': kb.devices() if kb._adb() else None})
+    def run():
+        local = kb.devices() if kb._adb() else None
+        groups = [{'执行机': '本机', 'id': _q.LOCAL_ID, '手机': local or []}] + _q.runner_groups('手机')
+        # items 按执行机分组（契约 REQ-016）；本机 = 原来的平铺列表（手机页沿用）
+        return {'items': groups, '本机': local}
+    return self._guard(run)
 
 
 @get('/api/dev')
@@ -35,8 +45,10 @@ def _post_api_dev_start(self, u, n, body):
     def run():
         if body.get('confirm', '').strip() != kb.period_dir(body.get('period', '')).name:
             raise kb.KBError('输入的期名不一致，已取消')
-        return {'msg': kb.dev_start(body.get('period', ''), body.get('note', ''), body.get('repo', ''),
-                                    body.get('branch', ''), bool(body.get('keepBranch')))}
+        p, note = body.get('period', ''), body.get('note', '')
+        r = _q.launch('开发', p, lambda: kb.dev_start(p, note, body.get('repo', ''), body.get('branch', ''), bool(body.get('keepBranch'))),
+                      check={'kind': 'dev'}, remote=lambda: _q.remote_dev_payload(p, note, body.get('repo', ''), body.get('branch', '')))
+        return {'msg': _q.launch_msg(r), 'task': r['task']}      # 建任务进队列（REQ-013）；单机模式由本机执行机立即执行（REQ-026）
     return self._guard(run)
 
 
@@ -112,9 +124,12 @@ def _get_api_devrun_job(self, u, q):
 
 @post('/api/devrun', page_only=True)
 def _post_api_devrun(self, u, n, body):
-    return self._guard(lambda: {'job': kb.devrun_start(body.get('period', ''), body.get('repo', ''), body.get('serial', ''),
-                                                       body.get('module', ''), body.get('variant', ''), bool(body.get('remember')),
-                                                       build=body.get('build', ''))})
+    def run():
+        r = _q.launch('运行到手机', body.get('period', ''), lambda: kb.devrun_start(
+            body.get('period', ''), body.get('repo', ''), body.get('serial', ''), body.get('module', ''), body.get('variant', ''),
+            bool(body.get('remember')), build=body.get('build', '')), check=lambda j: {'kind': 'devrun', 'job': _jid(j)})
+        return {'job': r['result'], 'task': r['task'], 'msg': _q.launch_msg(r, '已开始运行到手机')}
+    return self._guard(run)
 
 
 @post('/api/devrun/cancel', page_only=True)

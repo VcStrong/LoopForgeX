@@ -12,6 +12,7 @@ from kblib.core.periods import (
     create_period,
     create_task,
     init,
+    period_dir,
     set_status,
     write_doc,
 )
@@ -23,7 +24,7 @@ from kblib.plugins.registry import call_plugin
 from kblib.api.overview import dev_package, overview, period_detail
 from kblib.ai.devprep import dev_prepare
 from kblib.ai.devsession import ask, set_dnd, wait_answer
-from kblib.ai.devices import ISSUE_KINDS, add_issue, device_claim, device_release, devices_text, test_report
+from kblib.ai.devices import ISSUE_KINDS, account_claim, account_release, add_issue, device_claim, device_release, devices_text, test_report
 from kblib.sources.urlimport import fetch_url, import_design, import_url
 from kblib.sources.refresh import refresh_sources, take_notices
 from kblib.sources.fixlink import _conflict_hint, fix_link
@@ -170,7 +171,8 @@ TOOLS = [
                'items': {'type': 'object', 'properties': {'名': {'type': 'string'}, '值': {'type': 'string'},
                                                            '机密': {'type': 'boolean'}}, 'required': ['名']}},
        note=STR('备注（Markdown）'), file=STR('附件文件绝对路径（如 VPN 配置文件），会复制到 基础/附件/'),
-       delete={'type': 'boolean', 'description': 'true 表示删除这条'}), []),
+       delete={'type': 'boolean', 'description': 'true 表示删除这条'},
+       private={'type': 'boolean', 'description': 'true = 私有：只有发起人和管理员能看到（个人的平台账号、密码、token 用这个）'}), []),
     ('kb_base_secret', '读取基础知识库里某个机密字段的明文（会记录读取）。只在真正执行时用（如测试时登录），'
                        '读到的值不要写进代码、文档、提交、日志或回复。',
      S(id=STR('编号，如 B001'), field=STR('字段名，如「密码」'), purpose=STR('用途，如「设备测试登录」')), ['id', 'field']),
@@ -197,7 +199,20 @@ TOOLS = [
      S(iteration=STR('期名'), count={'type': 'integer', 'description': '要几台，默认 1（多台场景一次申请够）'},
        serials={'type': 'array', 'items': {'type': 'string'}, 'description': '一般不填。点名的不可用时自动换成空闲手机'},
        strict={'type': 'boolean', 'description': '确实要特定那台（如 case 要求特定机型）才设 true：严格按 serials，不换'},
-       reason=STR('用途，如「TASK-5 多人送礼：主持 + 2 个麦上用户」')), ['iteration']),
+       reason=STR('用途，如「TASK-5 多人送礼：主持 + 2 个麦上用户」'),
+       os=STR('系统：Android / iOS / 鸿蒙，一般不填'),
+       version_range={'type': 'array', 'items': {'type': 'string'}, 'description': '系统版本范围 [最低, 最高]，如 ["12", "14"]'},
+       brand=STR('品牌，如 Xiaomi'), model=STR('机型（包含匹配），如 Pixel'),
+       runner=STR('所在执行机编号，一般不填'), provider=STR('设备提供方：local / runner / mock 等，一般不填'),
+       wait={'type': 'boolean', 'description': '都被占时是否排队（默认 true：返回第 N 位，过一会儿同样参数再调领取）'}), ['iteration']),
+    ('kb_account_claim', '申请测试账号（按项目 + 环境 + 标签，不点名）：按账号的「允许同时使用数」发放，满了排队返回第 N 位；'
+                         '避免两个会话用同一账号互相踢下线。线上环境默认不给 AI。用完 kb_account_release。',
+     S(iteration=STR('期名'), env={'type': 'string', 'enum': ['测试', '预发', '线上'], 'description': '环境，默认 测试'},
+       tags={'type': 'array', 'items': {'type': 'string'}, 'description': '要的标签，如 ["VIP"]'},
+       count={'type': 'integer', 'description': '要几个，默认 1'}, project=STR('项目，空 = 本期所属项目')), ['iteration']),
+    ('kb_account_release', '释放这一期占着的测试账号。',
+     S(iteration=STR('期名'), ids={'type': 'array', 'items': {'type': 'string'}, 'description': '只释放这些测试账号编号；空 = 全部'}),
+     ['iteration']),
     ('kb_run_on_device', '把某一期 / 事项的工程（先切到本期分支、切过去就留在那；有未提交改动自动 git stash 并记待处理；工程被占用或切不了就用当前工作区；工程里有远程编译脚本如 remote_build.sh 就自动远程编译）编译、装到手机并拉起启动页：用户说「把 xx 跑到手机上」'
                          '「装到手机上看看」时用。现在只支持 Android（./gradlew <模块>:install<变体> → adb 拉起）；手机走占用机制，'
                          '没点名自动挑本期占着的或空闲的，别的期占着的不装；工程被别的会话占着时排队。默认等它结束并返回结果和错误摘要；'
@@ -362,14 +377,60 @@ TOOLS = [
 _NOTICED = ('kb_dev_package', 'kb_wait_answer', 'kb_log')   # 这几个自己带上了提醒
 
 
+READ_TOOLS = {'kb_search', 'kb_read', 'kb_iteration', 'kb_overview', 'kb_base', 'kb_bugs', 'kb_bug_get', 'kb_repo_read', 'kb_anr',
+              'kb_devices', 'kb_builds', 'kb_fetch_url', 'kb_wait_answer', 'kb_dev_package', 'kb_base_secret', 'kb_plugin_call'}
+
+
+def _authorize(name, a):
+    """按当前用户 / 会话判权限（REQ-005）：看别的项目的期 → 没有这个项目的权限；会话写别的期 → 拒绝。"""
+    from kblib.core.common import current_ctx
+    from kblib.core import authz
+    c = current_ctx()
+    if c.get('via') != 'AI':
+        return
+    per = a.get('iteration') or a.get('period') or ''
+    if not per:
+        return
+    try:
+        per = period_dir(per).name                 # period_dir 自己会拦别的项目（没有这个项目的权限）
+    except KBError:
+        raise
+    authz.check(c, '看' if name in READ_TOOLS else '加资料', per)
+
+
 def call_tool(name, a):
     """调用工具；带期名的，结果后面附上这一期的提醒（需求来源更新、用户在网页发来的消息）。"""
+    _authorize(name, a)
     res = _call_tool(name, a)
     if a.get('iteration') and name not in _NOTICED and isinstance(res, str):
         res += take_notices(a['iteration'])
     if isinstance(res, str):
         res += take_session_msgs()          # Bug 分析 / 修复会话：用户在期页面发给它的消息
     return res
+
+
+def _stdio_holder():
+    """本机 Claude Code 经 stdio 调用（没有登录人 / 会话上下文）时，私有条目归本机用户（单机模式的身份），
+    不然「所有人」是空串、连管理员都读不到机密明文（审查第 1 轮）。有上下文时由 baseinfo 按发起人定，返回 None。"""
+    import os
+    from kblib.core.common import current_ctx
+    from kblib.core import db as _kdb
+    if current_ctx().get('via'):
+        return None
+    who = os.environ.get('KB_USER', '').strip()       # 网页发起的本机后台会话：_dev_env 带上发起人
+    if who and _kdb.user_get(who):
+        return who
+    from kblib.core.users import local_user
+    return local_user()
+
+
+def _has_holder(bid):
+    """已有条目且已有所有人：沿用原所有人，不能经 stdio 悄悄转给本机用户（审查第 2 轮）。新建 / 公共改私有才按发起人定。"""
+    if not bid:
+        return False
+    from kblib.core.baseinfo import base_load
+    e = next((x for x in base_load()['条目'] if x['编号'] == bid), None)
+    return bool(e and e.get('所有人'))
 
 
 def _call_tool(name, a):
@@ -410,7 +471,8 @@ def _call_tool(name, a):
         return base_list(g('query') or '', g('category') or '')
     if name == 'kb_base_save':
         return base_save(g('id') or '', g('category') or '', g('name'), g('fields'), g('scope'), g('note'),
-                         g('file') or '', bool(g('delete')))
+                         g('file') or '', bool(g('delete')), visibility=('私有' if g('private') else None),
+                         holder=_stdio_holder() if g('private') and not _has_holder(g('id')) else None)
     if name == 'kb_base_secret':
         return base_secret(g('id'), g('field'), purpose=g('purpose') or '')
     if name == 'kb_ask':
@@ -422,7 +484,14 @@ def _call_tool(name, a):
     if name == 'kb_devices':
         return devices_text(g('iteration'))
     if name == 'kb_device_claim':
-        return device_claim(g('iteration'), g('count') or 1, g('serials'), g('reason') or '', bool(g('strict')))
+        cond = {'系统': g('os'), '版本范围': g('version_range'), '品牌': g('brand'), '机型': g('model'), '执行机': g('runner'),
+                '提供方': g('provider')}
+        return device_claim(g('iteration'), g('count') or 1, g('serials'), g('reason') or '', bool(g('strict')), cond,
+                            g('wait') is not False)
+    if name == 'kb_account_claim':
+        return account_claim(g('iteration'), g('env') or '测试', g('tags'), g('project') or '', g('count') or 1)
+    if name == 'kb_account_release':
+        return account_release(g('iteration'), g('ids'))
     if name == 'kb_run_on_device':
         return devrun_mcp(g('iteration'), g('repo') or '', g('serial') or '', g('module') or '', g('variant') or '',
                           g('wait') is not False, g('job') or '')

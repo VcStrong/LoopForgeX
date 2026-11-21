@@ -3,7 +3,7 @@
 //   path 文件绝对路径；url = fileUrl(path)；box 预览区容器（往里写内容）；ctx = {start 起始行, info {name,size,mtime,type}, note 图片说明, bar 顶栏左侧容器}。
 //   render 抛错 → 退回文字预览。ext 写 '*' = 兜底（内置的是文字 / 代码）。
 // 第三方库在 /ui/vendor/（不走 CDN，内网也能用），loadVendor('名字' 或 '/ui/vendor/x.js') 第一次用到才加载，之后复用。
-const VENDOR={marked:'/ui/vendor/marked.min.js',purify:'/ui/vendor/purify.min.js',hljs:'/ui/vendor/hljs/highlight.min.js',
+const VENDOR={echarts:'/ui/vendor/echarts.min.js',marked:'/ui/vendor/marked.min.js',purify:'/ui/vendor/purify.min.js',hljs:'/ui/vendor/hljs/highlight.min.js',
   mermaid:'/ui/vendor/mermaid.min.js',mammoth:'/ui/vendor/mammoth.min.js',xlsx:'/ui/vendor/xlsx.full.min.js',idiomorph:'/ui/vendor/idiomorph.min.js'};
 const _vend={};
 function loadVendor(...names){return Promise.all(names.map(n=>_vend[n]||(_vend[n]=new Promise((ok,no)=>{

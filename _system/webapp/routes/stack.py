@@ -1,6 +1,7 @@
 """接口 · 全栈：各端仓库、出方案、拍板、开工、变更、验收。每个接口一个函数，用 @get / @post 注册（见 webapp/router.py）。"""
 from webapp.router import get, post  # noqa: F401
 from webapp.shared import *  # noqa: F401,F403
+from kblib.core import queue as _q
 
 
 @get('/api/stack')
@@ -55,7 +56,12 @@ def _post_api_stack_accept(self, u, n, body):
 
 @post('/api/stack/dev', page_only=True)
 def _post_api_stack_dev(self, u, n, body):
-    return self._guard(lambda: {'msg': kb.stack_dev_start(body.get('period', ''), body.get('end', ''))})
+    def run():
+        p, end = body.get('period', ''), body.get('end', '')
+        r = _q.launch('全栈端', p, lambda: kb.stack_dev_start(p, end), check={'kind': 'stack', 'end': end},
+                      remote=(lambda: _q.remote_dev_payload(p, kind='全栈端', end=end)) if end else None)
+        return {'msg': _q.launch_msg(r), 'task': r['task']}
+    return self._guard(run)
 
 
 @post('/api/stack/stop', page_only=True)

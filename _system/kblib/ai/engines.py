@@ -316,10 +316,24 @@ def set_role_engine(role, eid):
 _CLEAN_ENV = ('CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT')
 
 
-def engine_popen(e, prompt, title, logf, cwd, resume_id='', env_extra=None, extra_args=None, scene='', period=None, auto=False, end=''):
-    """后台启动引擎，输出写进日志文件（第一行记下用的引擎和输出格式，解析日志时用）。"""
-    cmd = engine_cmd(e, prompt, title, resume_id, scene, period, auto, end) + list(extra_args or [])
+def session_env(home='', account=''):
+    """会话私有 HOME（REQ-039）：HOME 和各引擎的配置目录都指到这个会话自己的目录，两个会话互相读不到对方的登录态和 git 凭据。"""
     env = {k: v for k, v in os.environ.items() if k not in _CLEAN_ENV}
+    if home:
+        h = str(Path(home))
+        env.update(HOME=h, CLAUDE_CONFIG_DIR=str(Path(h) / '.claude'), CODEX_HOME=str(Path(h) / '.codex'),
+                   XDG_CONFIG_HOME=str(Path(h) / '.config'), GIT_CONFIG_GLOBAL=str(Path(h) / '.gitconfig'))
+    if account:
+        env['KB_ENGINE_ACCOUNT'] = account
+    return env
+
+
+def engine_popen(e, prompt, title, logf, cwd, resume_id='', env_extra=None, extra_args=None, scene='', period=None, auto=False, end='',
+                 home='', account=''):
+    """后台启动引擎，输出写进日志文件（第一行记下用的引擎和输出格式，解析日志时用）。
+    home：会话私有 HOME（执行机上每个会话一个，只放该账号的登录态）；account：引擎账号编号（健康按账号记）。"""
+    cmd = engine_cmd(e, prompt, title, resume_id, scene, period, auto, end) + list(extra_args or [])
+    env = session_env(home, account)
     env.update(env_extra or {})
     with open(logf, 'ab') as fh:
         fh.write((json.dumps({'type': 'kb.engine', 'engine': e['id'], 'format': e.get('输出格式')}, ensure_ascii=False)
@@ -327,13 +341,14 @@ def engine_popen(e, prompt, title, logf, cwd, resume_id='', env_extra=None, extr
         fh.flush()
         proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
                                 start_new_session=True, env=env)
-    _watch_health(e, proc, logf)
+    _watch_health(e, proc, logf, account)
     return proc
 
 
-def engine_run(e, prompt, cwd, timeout=300, extra_args=None, title='kb·单次', scene='', period=None, env_extra=None, auto=False, end=''):
+def engine_run(e, prompt, cwd, timeout=300, extra_args=None, title='kb·单次', scene='', period=None, env_extra=None, auto=False, end='',
+               home='', account=''):
     """前台跑一次，返回 (退出码, 解析出的结果)；结果里带「角色」（这次派过的角色团专家，没派不带）。"""
-    env = {k: v for k, v in os.environ.items() if k not in _CLEAN_ENV}
+    env = session_env(home, account)
     env.update(env_extra or {})
     try:
         r = subprocess.run(engine_cmd(e, prompt, title, '', scene, period, auto, end) + list(extra_args or []), cwd=cwd, capture_output=True, text=True, errors='replace', timeout=timeout,
@@ -347,7 +362,7 @@ def engine_run(e, prompt, cwd, timeout=300, extra_args=None, title='kb·单次',
         got = team.team_count_text(r.stdout)
         if got:
             res['角色'] = got
-    health_from_run(e, r.returncode, res, (r.stdout or '') + '\n' + (r.stderr or ''), '会话')
+    health_from_run(e, r.returncode, res, (r.stdout or '') + '\n' + (r.stderr or ''), '会话', account)
     return r.returncode, res
 
 
@@ -369,27 +384,56 @@ _BAD = [(r'invalid api key|invalid x-api-key|api key|apikey|authentication_error
 
 
 def _health_load():
+    """引擎健康（按引擎；按账号的在 engine_accounts 表）：存数据库 kv「引擎健康」，cache/引擎状态.json 是导出视图（REQ-041）。"""
+    try:
+        from kblib.core import db as _kdb
+        v, _ = _kdb.kv_get('引擎健康', None)
+        if v is not None:
+            return v
+    except Exception:  # noqa: BLE001 数据库不可用时退回文件
+        pass
     try:
         return json.loads(HEALTH_FILE.read_text('utf-8'))
     except (OSError, ValueError):
         return {}
 
 
-def _health_set(eid, ok, why='', src='会话', name=''):
-    """记一次结果；从可用 / 未检测 变成不可用时发一次通知。"""
+def _health_save(h):
+    try:
+        from kblib.core import db as _kdb
+        _kdb.kv_set('引擎健康', h, by='引擎健康')
+    except Exception as x:  # noqa: BLE001
+        print('引擎健康写库失败：', repr(x), flush=True)
+    HEALTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = HEALTH_FILE.with_suffix('.tmp')
+    tmp.write_text(json.dumps(h, ensure_ascii=False, indent=1), 'utf-8')
+    tmp.replace(HEALTH_FILE)
+
+
+STREAK = 3          # 会话里同一引擎连续 3 次同类失败才标不可用（自检 / 测试是专门的检查，一次就算）
+
+
+def _health_set(eid, ok, why='', src='会话', name='', kind=''):
+    """记一次结果；从可用 / 未检测 变成不可用时发一次通知。会话来源的失败要连续 STREAK 次同类才改状态。"""
     with _HEALTH_LOCK:
         h = _health_load()
         old = h.get(eid) or {}
         st = '可用' if ok else '不可用'
+        if not ok and src == '会话':
+            same = old.get('失败类') == (kind or why[:20])
+            n = (old.get('连续失败') or 0) + 1 if same else 1
+            if n < STREAK and old.get('状态') != '不可用':
+                h[eid] = dict(old, 连续失败=n, 失败类=kind or why[:20], 名称=name or old.get('名称', eid))
+                _health_save(h)
+                return
         x = {'状态': st, '原因': '' if ok else (why or '')[:300], '时间': time.strftime('%Y-%m-%d %H:%M:%S'), '来源': src,
              'ts': time.time(), '名称': name or old.get('名称', eid)}
+        if not ok:
+            x.update(连续失败=(old.get('连续失败') or 0) + 1, 失败类=kind or why[:20])
         if ok:
             x['上次失败'] = old.get('原因') if old.get('状态') == '不可用' else old.get('上次失败', '')
         h[eid] = x
-        HEALTH_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = HEALTH_FILE.with_suffix('.tmp')
-        tmp.write_text(json.dumps(h, ensure_ascii=False, indent=1), 'utf-8')
-        tmp.replace(HEALTH_FILE)
+        _health_save(h)
     if not ok and old.get('状态') != '不可用':
         try:
             _devsession._notify('知识库 · AI 引擎不可用', f'{x["名称"]}：{x["原因"]}（网页右上角「AI」看详情）')
@@ -400,6 +444,42 @@ def _health_set(eid, ok, why='', src='会话', name=''):
             _devsession._notify('知识库 · AI 引擎恢复', f'{x["名称"]} 又能用了')
         except Exception:
             pass
+
+
+# 引擎输出里的结构化错误（stream-json / JSONL 里的错误对象）→ 错误码；任务文本不参与（REQ-041）
+_ERR_TYPES = {'rate_limit_error': '429', 'overloaded_error': '529', 'authentication_error': '401', 'permission_error': '403',
+              'not_found_error': 'model_not_found', 'billing_error': 'billing', 'invalid_request_error': '',
+              'insufficient_quota': 'quota', 'api_error': '503'}
+
+
+def structured_code(text):
+    """从输出的 JSON 行里找错误码：status / status_code / api_error_status 数字，或 error.type。找不到返回 ''。"""
+    for ln in reversed((text or '').splitlines()[-300:]):
+        ln = ln.strip()
+        if not ln.startswith('{'):
+            continue
+        try:
+            o = json.loads(ln)
+        except ValueError:
+            continue
+        if not isinstance(o, dict):
+            continue
+        for k in ('api_error_status', 'status_code', 'status'):
+            v = o.get(k)
+            if isinstance(v, int) and v >= 400:
+                return str(v)
+        err = o.get('error')
+        if isinstance(err, dict):
+            t = err.get('type') or err.get('code') or ''
+            if isinstance(err.get('status'), int) and err['status'] >= 400:
+                return str(err['status'])
+            if t in _ERR_TYPES and _ERR_TYPES[t]:
+                return _ERR_TYPES[t]
+        if o.get('type') == 'error' and isinstance(o.get('message'), str):
+            m = re.search(r'\b(401|403|429|503|529)\b', o['message'])
+            if m:
+                return m.group(1)
+    return ''
 
 
 def _classify(code, res, text):
@@ -422,18 +502,42 @@ def _classify(code, res, text):
     return True
 
 
-def health_from_run(e, code, res, text='', src='会话'):
+def error_class(code, res, text):
+    """三类（REQ-041）：长期 / 暂时 / 模型级；先看结构化错误码，再看报错行；看不出返回 None。"""
+    from kblib.ai import accounts
+    sc = structured_code(text)
+    if sc:
+        return accounts.classify(sc), sc
+    c = _classify(code, res, text)
+    if c is True:
+        return '正常', 'ok'
+    if not c:
+        return None, ''
+    why = c[1]
+    for k, cls, sc in (('登录', '长期', '401'), ('额度', '长期', 'quota'), ('限流', '暂时', '429'), ('过载', '暂时', '529'),
+                       ('网络', '暂时', 'network'), ('模型不可用', '模型级', '403')):
+        if k in why:
+            return cls, sc
+    return None, ''
+
+
+def health_from_run(e, code, res, text='', src='会话', account=''):
+    """会话 / 单次运行结束记健康：有引擎账号的按账号记（REQ-041），同时按引擎记（网页右上角「AI」）。"""
     try:
         r = _classify(code, res, text)
+        cls, sc = error_class(code, res, text) if (account or r is not True) else ('正常', 'ok')
         if r is True:
             _health_set(e['id'], True, src=src, name=e.get('名称'))
         elif r:
-            _health_set(e['id'], False, r[1], src=src, name=e.get('名称'))
+            _health_set(e['id'], False, r[1], src=src, name=e.get('名称'), kind=cls or '')
+        if account and cls:
+            from kblib.ai import accounts
+            accounts.report_error(account, sc, (r[1] if isinstance(r, tuple) else ''), (res or {}).get('模型') or '')
     except Exception as x:              # 记状态出错不能影响会话本身
         print('engine health:', repr(x), flush=True)
 
 
-def _watch_health(e, proc, logf):
+def _watch_health(e, proc, logf, account=''):
     def run():
         code = proc.wait()
         try:
@@ -442,7 +546,7 @@ def _watch_health(e, proc, logf):
                 tail = fh.read().decode('utf-8', 'ignore')
         except OSError:
             tail = ''
-        health_from_run(e, code, _devsession._result_of(tail, e.get('输出格式')), tail)
+        health_from_run(e, code, _devsession._result_of(tail, e.get('输出格式')), tail, '会话', account)
     threading.Thread(target=run, daemon=True).start()
 
 
@@ -458,13 +562,13 @@ def engines_in_use():
     return [x for i, x in enumerate(ids) if x in known and x not in ids[:i]]
 
 
-def engine_probe(eid, src='自检'):
-    """极短的自检：只回复 OK，不调工具。→ 这次的状态。"""
+def engine_probe(eid, src='自检', account='', home=''):
+    """极短的自检：只回复 OK，不调工具。→ 这次的状态。account / home：探测某个引擎账号（用它的私有 HOME，REQ-042）。"""
     e = get_engine(eid)
     t0 = time.time()
     try:
         engine_bin(e)
-        env = {k: v for k, v in os.environ.items() if k not in _CLEAN_ENV}
+        env = session_env(home, account)
         r = subprocess.run(engine_cmd(e, '这是连通性自检。不要调用任何工具，只回复两个字母：OK', 'kb·自检'), cwd=str(ROOT),
                            capture_output=True, text=True, errors='replace', timeout=120, env=env, stdin=subprocess.DEVNULL)
         res = _devsession._result_of(r.stdout, e.get('输出格式'))
@@ -496,8 +600,15 @@ def engine_health():
     items = [dict(engine_health_one(e, h), 在用=e['id'] in use) for e in engines()]
     dft = next((x for x in items if x['默认']), items[0] if items else {})
     bad = [x for x in items if x['在用'] and x['状态'] == '不可用']
+    accs = []
+    try:                                        # 登记了引擎账号的：右上角「AI」按账号显示（REQ-041）
+        from kblib.ai import accounts
+        accs = [{k: v for k, v in accounts.view(a).items() if k in ('id', '名称', '引擎', '类型', '项目', '状态', '冷却到', '原因', '模型不可用')}
+                for a in accounts.all_accounts() if a.get('kind') != '个人']
+    except Exception as x:  # noqa: BLE001
+        print('引擎账号健康：', repr(x), flush=True)
     return {'总体': '不可用' if dft.get('状态') == '不可用' else '部分不可用' if bad else dft.get('状态', '未检测'),
-            '默认': dft.get('名称', ''), '引擎': items}
+            '默认': dft.get('名称', ''), '引擎': items, '账号': accs}
 
 
 def health_tick(force=False):

@@ -1,6 +1,7 @@
 """接口 · 插件、构建、工作统计。每个接口一个函数，用 @get / @post 注册（见 webapp/router.py）。"""
 from webapp.router import get, post  # noqa: F401
 from webapp.shared import *  # noqa: F401,F403
+from kblib.core import queue as _q
 
 
 @get('/api/stats')
@@ -64,7 +65,11 @@ def _post_api_plugin_run2(self, u, n, body):
 
 @post('/api/plugin/run', page_only=True)
 def _post_api_plugin_run(self, u, n, body):
-    return self._guard(lambda: {'msg': kb.plugin_run_sync(body.get('id', ''), body.get('period', ''), push=False, by='用户（网页）')})
+    def run():
+        r = _q.launch('插件', body.get('period', ''), lambda: kb.plugin_run_sync(body.get('id', ''), body.get('period', ''), push=False,
+                                                                                by='用户（网页）'), payload={'插件': body.get('id', '')})
+        return {'msg': _q.launch_msg(r), 'task': r['task']}
+    return self._guard(run)
 
 
 @post('/api/period/builds', page_only=True)
@@ -95,5 +100,9 @@ def _get_api_build_install_job(self, u, q):
 
 @post('/api/build/install', page_only=True)
 def _post_api_build_install(self, u, n, body):
-    return self._guard(lambda: {'job': kb.install_start(body.get('period', ''), body.get('build', ''), body.get('path', ''),
-                                                        body.get('serial', ''), bool(body.get('force')), bool(body.get('uninstall')))})
+    def run():
+        r = _q.launch('构建安装', body.get('period', ''), lambda: kb.install_start(
+            body.get('period', ''), body.get('build', ''), body.get('path', ''), body.get('serial', ''), bool(body.get('force')),
+            bool(body.get('uninstall'))), check=lambda j: {'kind': 'install', 'job': j.get('编号') if isinstance(j, dict) else j})
+        return {'job': r['result'], 'task': r['task'], 'msg': _q.launch_msg(r, '已开始安装')}
+    return self._guard(run)

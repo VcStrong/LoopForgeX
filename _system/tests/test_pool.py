@@ -239,6 +239,80 @@ class RealBusy(unittest.TestCase):
         st = pool.pool_status()
         self.assertEqual(st['仓库'][0]['名称'], 'app')
 
+    def test_free_text_platform(self):
+        """基础信息里平台类型手填成自由文本（如「其他（Python + Web）」）：能认出的归一，认不出留空，不拖垮整个仓库下拉。"""
+        from kblib.stack import plan
+        self.assertEqual(plan.end_guess('其他（Python + Web）'), ['Web'])
+        self.assertEqual(plan.end_guess('android 客户端'), ['Android'])
+        self.assertEqual(plan.end_guess('Unity'), ['Unity'])
+        self.assertEqual(plan.end_guess('乱 七 八 糟'), [])
+        self.assertEqual(plan.end_guess(''), [])
+        fake = [{'编号': 'B901', '名称': 'x', '克隆地址': 'file:///nope.git', '基线分支': 'main', '平台类型': '其他（a b c）'},
+                {'编号': 'B902', '名称': 'y', '克隆地址': 'file:///nope2.git', '基线分支': 'main', '平台类型': 'Android 客户端'}]
+        with mock.patch.object(pool, 'remote_entries', lambda: fake):
+            rows = {r.get('远程仓库'): r for r in plan.stack_repos() if r.get('远程仓库')}
+        self.assertEqual(rows['B901']['端'], [])
+        self.assertEqual(rows['B902']['端'], ['Android'])
+
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PoolZAddRemove(unittest.TestCase):    # 排在最后：自己建远端，不碰 Pool 的仓库
+    """kb_add_repo 按克隆地址登记：成功建基础信息「远程仓库」条目；失败不留登记；remove_repo 能移除。"""
+    def test_clone_fail_rolls_back(self):
+        bad = 'file://' + str(TMP / 'no-such.git')
+        with self.assertRaises(kb.KBError) as cm:
+            repos.add_repo(bad, 'broken')
+        self.assertIn('没有登记', str(cm.exception))
+        self.assertNotIn('broken', repos.load_repos())
+        self.assertFalse((pool.POOL / 'broken').exists(), '工作区/<名> 不留空目录')
+        self.assertFalse(any(e['克隆地址'] == bad for e in pool.remote_entries()))
+
+    def test_clone_fail_background_rolls_back(self):
+        bad = 'file://' + str(TMP / 'no-such-bg.git')
+        import threading
+        ts = []
+        real = threading.Thread
+        with mock.patch.object(threading, 'Thread', lambda *a, **k: ts.append(real(*a, **k)) or ts[-1]):
+            repos.add_repo(bad, 'broken-bg', background=True)
+        for t in ts:
+            t.join(60)
+        self.assertNotIn('broken-bg', repos.load_repos())
+
+    def test_success_creates_entry_then_remove(self):
+        from kblib.stack import plan
+        remote = TMP / 'second.git'
+        subprocess.run(['git', 'init', '-q', '--bare', '-b', 'dev-master', str(remote)], check=True)
+        src = TMP / 'src2'
+        subprocess.run(['git', 'init', '-q', '-b', 'dev-master', str(src)], check=True)
+        for k, v in (('user.email', 't@t'), ('user.name', 't')):
+            git(src, 'config', k, v)
+        (src / 'b.txt').write_text('b')
+        git(src, 'add', '.')
+        git(src, 'commit', '-qm', 'init')
+        git(src, 'push', '-q', str(remote), 'dev-master')
+        url = 'file://' + str(remote)
+        msg = repos.add_repo(url, 'second')
+        self.assertIn('远程仓库」条目 second', msg)
+        e = next(x for x in pool.remote_entries() if x['克隆地址'] == url)
+        self.assertEqual(e['基线分支'], 'dev-master')
+        self.assertEqual(e['仓库'], 'second')
+        row = next(r for r in plan.repo_settings() if r.get('远程仓库') == 'second')
+        self.assertTrue(row['有条目'])
+        self.assertNotIn('远程仓库」条目', repos.add_repo(url, 'second'), '已有条目不再建')
+        self.assertEqual(sum(1 for x in pool.remote_entries() if x['克隆地址'] == url), 1, '再登记不重复建条目')
+        with mock.patch.object(pool, 'pool_busy', lambda path, me='': ''):
+            (pool.POOL / 'second' / '1' / 'dirty.txt').write_text('x')
+            with self.assertRaises(kb.KBError):
+                repos.remove_repo('second')
+            (pool.POOL / 'second' / '1' / 'dirty.txt').unlink()
+            out = repos.remove_repo('second')
+        self.assertIn('已移除远程工程「second」', out)
+        self.assertIn('条目还在', out)
+        self.assertNotIn('second', repos.load_repos())
+        self.assertFalse((pool.POOL / 'second').exists())
+        self.assertFalse(any(r.get('远程仓库') == 'second' for r in plan.repo_settings()))
+        with self.assertRaises(kb.KBError):
+            repos.remove_repo('nope')

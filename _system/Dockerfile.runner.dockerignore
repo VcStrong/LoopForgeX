@@ -1,0 +1,9 @@
+**/.venv
+**/__pycache__
+**/.git
+工作区
+期
+_system/cache
+**/.DS_Store
+**/node_modules
+.env

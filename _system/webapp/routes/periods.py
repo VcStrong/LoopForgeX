@@ -10,12 +10,27 @@ def _get_api_events(self, u, q):
 
 @get('/api/overview')
 def _get_api_overview(self, u, q):
-    return self._guard(api_overview)
+    def run():
+        if q.get('project'):
+            from kblib.core import authz
+            if q['project'] not in authz.visible_projects(self.ident.get('user', '')):
+                raise authz.Denied(authz.MSG_PROJ)
+            self.ident['project'] = q['project']
+        v = api_overview()
+        v['project'] = self.ident.get('project', '')
+        return v
+    return self._guard(run)
 
 
 @get('/api/period')
 def _get_api_period(self, u, q):
-    return self._guard(lambda: api_period(q.get('name', '')))
+    def run():
+        from kblib.core import authz
+        v = api_period(q.get('name', ''))
+        v.update(kb.period_info(v['name']))                       # 负责人 / 项目 / 版本号（REQ-002 REQ-003 REQ-030）
+        v['can'] = authz.period_can(self.ident, v['name'])
+        return v
+    return self._guard(run)
 
 
 @get('/api/adds')

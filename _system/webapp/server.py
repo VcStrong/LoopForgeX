@@ -5,9 +5,13 @@ import selectors
 import socket
 
 from webapp.shared import *  # noqa: F401,F403
-from webapp import router
+from webapp import router, policy
+from kblib.core import authz, db as kbdb
+from kblib.core.common import set_user_ctx, _USER_CTX
 
-ROUTE_MODULES = ['static', 'periods', 'dev', 'stack', 'term', 'bugs', 'anr', 'plugins', 'settings', 'base', 'steward', 'update']
+ROUTE_MODULES = ['static', 'periods', 'dev', 'stack', 'term', 'bugs', 'anr', 'plugins', 'settings', 'base', 'steward', 'update',
+                 'users', 'runners', 'resources', 'admin']
+
 for _m in ROUTE_MODULES:
     importlib.import_module(f'webapp.routes.{_m}')
 
@@ -31,10 +35,14 @@ class H(BaseHTTPRequestHandler):
     def _guard(self, fn):
         try:
             self._send(200, fn())
+        except authz.Denied as e:
+            self._send(403, {'error': str(e)})
         except kb.KBNeed as e:
             self._send(409, {'error': str(e), 'need': e.data})
         except kb.KBError as e:
             self._send(400, {'error': str(e)})
+        except kbdb.DBBusy:
+            self._send(500, {'error': '数据库忙，稍后重试'})
         except Exception as e:
             self._send(500, {'error': repr(e)})
 
@@ -49,9 +57,14 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'retry: 3000\n\n')
             self.wfile.flush()
+            proj = self.ident.get('project', '') if getattr(self, 'ident', None) else ''
             while True:
                 try:
                     ev = q.get(timeout=20)
+                    if proj and ev.get('period') and kb.period_project(ev['period']) != proj:
+                        continue                  # SSE 按项目过滤（REQ-031）
+                    if proj and ev.get('project') and ev['project'] != proj:
+                        continue
                     self.wfile.write(f'data: {json.dumps(ev, ensure_ascii=False)}\n\n'.encode())
                 except queue.Empty:
                     self.wfile.write(b': ping\n\n')     # 保活，也用来发现浏览器已关闭
@@ -67,26 +80,45 @@ class H(BaseHTTPRequestHandler):
         origin = self.headers.get('Origin', '')
         return bool(origin) and origin.endswith('//' + self.headers.get('Host', ''))
 
-    def _mcp(self, n):
+    def _bearer(self):
         auth = self.headers.get('Authorization', '')
-        tok = auth[7:] if auth.startswith('Bearer ') else ''
-        sess = kb.remote_session(tok) if tok else None
-        if not sess and kb.check_token(tok):
-            sess = {}                                   # kb token 生成的令牌：普通用户身份，不属于某个后台会话
-        if sess is None:
-            return self._send(401, {'error': '令牌无效：远处的 Claude Code 用 kb token add 生成的令牌；'
-                                             '各端远程会话的令牌在网页服务重启后失效，到期页面重新开工这个端'})
+        return auth[7:].strip() if auth.startswith('Bearer ') else ''
+
+    def _mcp(self, n):
+        """/mcp：按令牌解析人 / 项目 / 会话，注入上下文；工具处理函数按当前用户判权限（REQ-005）。"""
+        tok = self._bearer()
+        sess = kb.remote_session(tok) if tok else None           # 旧的 ssh 远程会话令牌（进程内）
+        ident = None if sess else kb.token_identity(tok)
+        if ident and ident['kind'] not in ('个人', '会话'):
+            ident = None
+        if sess is None and ident is None:
+            return self._send(401, {'error': '令牌无效：到网页「我的 → 令牌」生成个人令牌；会话令牌在会话结束后失效', 'login': True})
         try:
             msg = json.loads(self.rfile.read(n) or b'{}')
         except ValueError:
             return self._send(400, {'error': 'bad json'})
         from kblib.api import mcp as _m
-        from kblib.core.common import with_sess_env
-        env = {'KB_PERIOD': sess['KB_PERIOD'], 'KB_SESSION': sess['KB_SESSION']} if sess else {'KB_SESSION': '', 'KB_PERIOD': ''}
-        if isinstance(msg, list):
-            out = [r for r in (with_sess_env(env, _m.handle, x) for x in msg) if r is not None]
+        from kblib.core.common import with_sess_env, with_user
+        if sess:
+            env = {'KB_PERIOD': sess['KB_PERIOD'], 'KB_SESSION': sess['KB_SESSION']}
+            ctx = {'via': 'AI', 'user': sess.get('发起人') or kb.local_user(), 'project': kb.period_project(sess['KB_PERIOD']),
+                   'period': sess['KB_PERIOD'], 'session': sess['KB_SESSION'], 'engine': 'claude'}
+        elif ident['kind'] == '会话':
+            env = {'KB_PERIOD': ident['period'], 'KB_SESSION': ident['session']}
+            ctx = {'via': 'AI', 'user': ident['user'], 'project': ident['project'], 'period': ident['period'],
+                   'session': ident['session'], 'engine': ident['engine'] or '引擎'}
         else:
-            out = with_sess_env(env, _m.handle, msg)
+            env = {'KB_SESSION': '', 'KB_PERIOD': ''}
+            prof = kb.profile_get(ident['user'])
+            ctx = {'via': 'AI', 'user': ident['user'], 'project': '', 'engine': ident['name'] or '个人令牌',
+                   'scope_project': prof.get('当前项目', '')}
+
+        def run(x):
+            return with_user(ctx, with_sess_env, env, _m.handle, x)
+        if isinstance(msg, list):
+            out = [r for r in (run(x) for x in msg) if r is not None]
+        else:
+            out = run(msg)
         if out is None or out == []:
             self.send_response(202)
             self.send_header('Content-Length', '0')
@@ -143,8 +175,41 @@ class H(BaseHTTPRequestHandler):
         c = SimpleCookie(self.headers.get('Cookie', ''))
         return c['kb_s'].value if 'kb_s' in c else ''
 
+    def _identity(self):
+        """当前用户 = f(请求)（REQ-022：以后接 SSO 只换这一处）。返回上下文字典或 None（没登录）。
+        单机模式（只听本机、没有带密码的账号）免登录，以本机用户（管理员）身份。"""
+        if kb.single_mode():
+            u = kb.local_user()
+            prof = kb.profile_get(u)
+            return {'user': u, 'via': '网页', 'project': kb.current_project_for(u, prof.get('当前项目', '')), 'single': True,
+                    'status': '正常'}
+        u = kb.check_session(self._cookie())
+        if not u:
+            return None
+        prof = u.get('profile') or {}
+        return {'user': u['name'], 'via': '网页', 'project': kb.current_project_for(u['name'], prof.get('当前项目', '')),
+                'status': u.get('status') or '正常'}
+
     def _authed(self):
-        return not kb.auth_required() or kb.check_session(self._cookie())
+        self.ident = self._identity()
+        if self.ident:
+            self._ctx_tok = set_user_ctx(self.ident)
+        return bool(self.ident)
+
+    def _must_change(self, path):
+        return self.ident and self.ident.get('status') == '待改密码' and path not in policy.MUST_CHANGE_OK and not path.startswith('/ui/')
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        finally:
+            tok = getattr(self, '_ctx_tok', None)
+            if tok is not None:
+                try:
+                    _USER_CTX.reset(tok)
+                except ValueError:
+                    pass
+                self._ctx_tok = None
 
     def _https(self):
         return self.headers.get('X-Forwarded-Proto', '') == 'https'
@@ -154,6 +219,11 @@ class H(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         if u.path == '/login':
             return self._send(200, LOGIN_PAGE, 'text/html; charset=utf-8')
+        if u.path == '/api/web/whoami':                  # 启动时判断「占着端口的是不是这个知识库」用，不要登录、不带隐私
+            from kblib.infra import webport as _wp
+            return self._send(200, {'kb': True, 'root': _wp.root_id()})
+        if u.path == '/api/artifact/download' and self._bearer().startswith('kbr_'):    # 执行机拉产物（REQ-049）
+            return self.do_GET_runner(u, q)
         if not self._authed():
             if u.path == '/':
                 self.send_response(302)
@@ -162,40 +232,75 @@ class H(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             return self._send(401, {'error': '要先登录', 'login': True})
+        if self._must_change(u.path):
+            return self._send(403, {'error': kb.MUST_CHANGE, 'mustChangePassword': True})
         if u.path.startswith('/term/'):                  # 网页终端：转发给这个终端的 ttyd（含 WebSocket）
             return self._term_proxy(u)
         if u.path.startswith('/ui/'):                    # 共用功能层和各套界面模板的静态文件
             r = ui_file(u.path[4:])
             return self._send(200, *r) if r else self._send(404, {'error': 'not found'})
         if u.path.startswith('/fs/'):                    # 资料文件按路径下发：html 预览里的相对资源（img/a.png）能找到
+            why = self._path_denied(unquote(u.path[3:]))
+            if why:
+                return self._send(403, {'error': why})
             return send_file(self, unquote(u.path[3:]), q)
+        for k in ('path', 'file'):                      # /file?path=、/api/read?path= 这类按路径读的也查项目（REQ-003）
+            if q.get(k):
+                why = self._path_denied(q[k])
+                if why:
+                    return self._send(403, {'error': why})
+        if q.get('name') and u.path in ('/api/period', '/api/period/talk', '/api/period/live', '/api/task/memo') or \
+                (q.get('period') and u.path.startswith('/api/')):
+            pn = q.get('name') if u.path in ('/api/period', '/api/period/talk', '/api/period/live', '/api/task/memo') else q.get('period')
+            if pn and (kb.PERIODS / pn).is_dir() and not authz.can(self.ident, '看', pn)[0]:
+                return self._send(403, {'error': authz.MSG_PROJ})
         r = router.find('GET', u.path)
         if not r:
             return self._send(404, {'error': 'not found'})
         return r.fn(self, u, q)
 
+    def _path_denied(self, p):
+        """按路径访问期目录里的文件：不是自己项目的期返回原因（REQ-003）。"""
+        try:
+            rp = Path(p).expanduser().resolve()
+            base = kb.PERIODS.resolve()
+        except (OSError, ValueError):
+            return ''
+        if base in rp.parents:
+            name = rp.relative_to(base).parts[0]
+            if not authz.can(self.ident, '看', name)[0]:
+                return authz.MSG_PROJ
+        return ''
+
+    def _login(self, n):
+        try:
+            b = json.loads(self.rfile.read(n) or b'{}') or {}
+            t, must = kb.web_login(b.get('username', ''), b.get('password', ''))
+        except (ValueError, kb.KBError) as e:
+            return self._send(403, {'error': str(e) if isinstance(e, kb.KBError) else 'bad json'})
+        body = json.dumps({'msg': '已登录', 'mustChangePassword': must}, ensure_ascii=False).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Set-Cookie', f'kb_s={t}; Path=/; HttpOnly; SameSite=Strict; Max-Age={kb.SESS_DAYS * 86400}'
+                         + ('; Secure' if self._https() else ''))
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):
-        if not self._local_only():
-            return self._send(403, {'error': 'forbidden'})
         u = urlparse(self.path)
         n = int(self.headers.get('Content-Length') or 0)
-        if u.path == '/mcp':           # 远程机器上的会话（开工时发的令牌）、远处的 Claude Code（kb token 生成的令牌）
+        if u.path.startswith('/api/runner/'):           # 执行机：Bearer 执行机令牌，绕过 Cookie（REQ-011）
+            r = router.find('POST', u.path)
+            if not r:
+                return self._send(404, {'error': 'not found'})
+            return r.fn(self, u, n, None)
+        if not self._local_only():
+            return self._send(403, {'error': 'forbidden'})
+        if u.path == '/mcp':           # 个人令牌 kb_、会话令牌 kbs_（REQ-005）
             return self._mcp(n)
         if u.path == '/api/login':
-            try:
-                pw = (json.loads(self.rfile.read(n) or b'{}') or {}).get('password', '')
-                t = kb.web_login(pw)
-            except (ValueError, kb.KBError) as e:
-                return self._send(403, {'error': str(e) if isinstance(e, kb.KBError) else 'bad json'})
-            body = json.dumps({'msg': '已登录'}).encode()
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.send_header('Set-Cookie', f'kb_s={t}; Path=/; HttpOnly; SameSite=Strict; Max-Age={kb.SESS_DAYS * 86400}'
-                             + ('; Secure' if self._https() else ''))
-            self.send_header('Content-Length', str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
+            return self._login(n)
         if u.path == '/api/logout':
             kb.web_logout(self._cookie())
             self.send_response(200)
@@ -205,6 +310,8 @@ class H(BaseHTTPRequestHandler):
             return
         if not self._authed():
             return self._send(401, {'error': '要先登录', 'login': True})
+        if self._must_change(u.path):
+            return self._send(403, {'error': kb.MUST_CHANGE, 'mustChangePassword': True})
         r = router.find('POST', u.path)
         if not r:
             return self._send(404, {'error': 'not found'})
@@ -216,12 +323,37 @@ class H(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n) or b'{}')
         except ValueError:
             return self._send(400, {'error': '请求体不是 JSON'})
+        act = policy.action_for(u.path, body if isinstance(body, dict) else {})
+        if act:                                         # 登录人 + 角色权限（REQ-002）
+            pn = policy.period_of(body if isinstance(body, dict) else {})
+            pn = pn if pn and (kb.PERIODS / pn).is_dir() else None
+            ok, why = authz.can(self.ident, act, pn, None if pn else (self.ident.get('project') if act != '管理' else None))
+            if not ok:
+                return self._send(403, {'error': why})
         return r.fn(self, u, n, body)
 
+    def do_GET_runner(self, u, q):
+        r = router.find('GET', u.path)
+        return r.fn(self, u, q) if r else self._send(404, {'error': 'not found'})
 
-def main(port=11555, host=''):
+
+def main(port=None, host=''):
     kb.init()
     host = host or os.environ.get('KB_HOST') or '127.0.0.1'
+    from kblib.infra import webport as _wp        # 端口：--port > KB_PORT > _system/web.json > 11555；被占自动顺延
+    want, source = _wp.resolve(port)
+    try:
+        port, note = _wp.pick(host, want)
+    except kb.KBError as e:
+        print(f'没有启动：{e}', flush=True)
+        sys.exit(0 if '已经在' in str(e) else 2)
+    if note:
+        print(f'！{note}', flush=True)
+    _wp.record_actual(port, want, source, note)
+    _wp.RUNNING.update(port=port, host=host)
+    msg = kb.ensure_migrated()                   # 升级后第一次启动：自动迁移到数据库（REQ-027）
+    if msg:
+        print(msg, flush=True)
     try:
         kb.check_bind(host)
     except kb.KBError as e:
@@ -230,7 +362,7 @@ def main(port=11555, host=''):
     os.environ['KB_WEB_PORT'] = str(port)        # 各端远程会话的 ssh 反向通道连这个端口
     kb.stackdev_port(port)
     srv = ThreadingHTTPServer((host, port), H)
-    print(f'知识库网页：http://{host}:{port}' + ('（已开启访问密码）' if kb.auth_required() else ''), flush=True)
+    print(f'知识库网页：http://{host}:{port}' + ('（团队模式：要登录）' if kb.auth_required() else '（单机模式：免登录）'), flush=True)
     kb.dev_reattach()
     from kblib.steward import update as _upd     # 程序更新：记下网页进程能重启自己；刚更新完的做一次自检，守护进程据此决定要不要退回
     threading.Thread(target=_upd.update_startup, args=(port, [sys.executable, *sys.argv], lambda: (api_overview(), kb.steward_view())),
@@ -238,6 +370,8 @@ def main(port=11555, host=''):
     threading.Thread(target=watcher, daemon=True).start()
     threading.Thread(target=dev_tick, daemon=True).start()
     threading.Thread(target=health_auto, daemon=True).start()
+    from kblib.core import queue as _queue        # 任务队列 / 执行机掉线 / 资源池 / 监控：每 5 秒，租约保证只跑一份（REQ-009 REQ-013）
+    threading.Thread(target=_queue.tick_loop, daemon=True).start()
     if kb.ZT_HOURS > 0:
         kb.ZT_STATE['next'] = time.strftime('%Y-%m-%d %H:%M', time.localtime(time.time() + 120))
         threading.Thread(target=zentao_auto, daemon=True).start()

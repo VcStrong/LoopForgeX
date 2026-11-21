@@ -197,13 +197,38 @@ def _zt_match(e, pers):
 
 
 def _zt_people(c, me):
-    """同步范围里的人：我的 → 自己；指定人 → 设置里填的账号；全部 → 空（不按人筛）。"""
+    """同步范围里的人：我的 → 自己 + 各成员在「我的 → 平台账号」填的账号（REQ-006）；指定人 → 设置里填的账号；全部 → 空（不按人筛）。"""
     sc = c.get('范围') or '我的'
     if sc == '全部':
         return set()
+    members = set(platform_accounts(c))
     if sc == '指定人':
-        return {x.strip() for x in c.get('人员') or [] if x.strip()} or {me}
-    return {me}
+        return ({x.strip() for x in c.get('人员') or [] if x.strip()} | members) or {me}
+    return {me} | members
+
+
+def platform_accounts(c):
+    """平台账号 → 知识库用户名：成员在「我的 → 平台账号」填的（按来源 ID 或适配器名）。"""
+    from kblib.core import db as _kdb
+    out = {}
+    for u in _kdb.user_list():
+        if u.get('status') == '停用':
+            continue
+        acc = (u.get('profile') or {}).get('平台账号') or {}
+        a = acc.get(c.get('ID', '')) or acc.get(c.get('适配器', ''))
+        if a:
+            out[a] = u['name']
+    return out
+
+
+def bug_owner(e):
+    """Bug 所属人：平台上的指派人对应的知识库用户（没对上的是空）。"""
+    c = {'ID': e.get('来源') or '禅道', '适配器': e.get('来源') or '禅道'}
+    try:
+        c = bug_source_conf(c['ID'])
+    except Exception:
+        pass
+    return platform_accounts(c).get(e.get('指派账号') or '', '')
 
 
 def _zt_mine(e, people):
@@ -708,10 +733,18 @@ def save_zentao_settings(platform=None, enabled=None, entry=None, scope=None, pe
     return save_bug_source(c['ID'], 平台=platform, 启用=enabled, 账号条目=entry, 范围=scope, 人员=people)
 
 
-def zentao_bugs_json(period='', owner=''):
-    """网页用：Bug 列表（含已关闭，前端自己筛）。"""
+def zentao_bugs_json(period='', owner='', mine_of='', project=''):
+    """网页用：Bug 列表（含已关闭，前端自己筛）。每条带 所属人（REQ-006）；mine_of 给了只要所属人是他的；project 给了只要归到该项目期的。"""
     _bug_analysis._fx_heal()
     es = list(zt_load()['Bug'].values())
+    owners = {}
+    for e in es:
+        owners[e['编号']] = bug_owner(e)
+    if mine_of:
+        es = [e for e in es if owners.get(e['编号']) == mine_of]
+    if project:
+        from kblib.core.periods import period_project
+        es = [e for e in es if (e.get('归属') or {}).get('类型') not in ('期', '事项') or period_project((e.get('归属') or {}).get('名称', '')) == project]
     if period:
         es = [e for e in es if (e.get('归属') or {}).get('名称') == period]
     if owner:
@@ -726,6 +759,7 @@ def zentao_bugs_json(period='', owner=''):
         x['分析中'] = e['编号'] in run
         f = e.get('修复')
         x['修复'] = {k: f.get(k) for k in ('状态', '时间', '提交', '说明', '标记', '等待', '阻塞', '待提交')} if f else None
+        x['所属人'] = owners.get(e['编号'], '')
         out.append(x)
     return out
 

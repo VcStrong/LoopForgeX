@@ -50,6 +50,129 @@ def approve(name):
     return set_status(d.name, '已批准开发', note or '用户批准', by_human=True)
 
 
+def _ask_pw(prompt, given=''):
+    import getpass
+    if given:
+        return given
+    p1 = getpass.getpass(prompt)
+    if getpass.getpass('再输一次：') != p1:
+        raise KBError('两次不一样')
+    return p1
+
+
+def _user_cmd(a):
+    """kb user add / list / passwd（REQ-001）。"""
+    from kblib.core import users
+    try:
+        if a.op == 'list':
+            xs = users.users_list()
+            print('\n'.join(f'- {u["用户名"]}（{u["系统角色"]}，{u["状态"]}）' + ('　本机用户' if u.get('本机用户') else '')
+                            + (f'　最近登录 {u["最近登录"]}' if u['最近登录'] else '') for u in xs) or '还没有账号')
+            return 0
+        if not a.name:
+            raise KBError(f'用法：kb user {a.op} <用户名>')
+        if a.op == 'add':
+            pw = _ask_pw(f'{a.name} 的初始密码（至少 8 位，首次登录要改）：', a.password)
+            print(users.user_create_strict(a.name, pw, '管理员' if a.admin else '普通', by='终端'))
+        else:
+            pw = _ask_pw(f'{a.name} 的新密码（至少 8 位，下次登录要改）：', a.password)
+            print(users.user_save(a.name, pw, by='终端'))
+        return 0
+    except KBError as x:
+        print(f'✗ {x}', file=sys.stderr)
+        return 1
+
+
+def _port_cmd(a):
+    """kb port / set / reset：启动前改网页端口（启动后改在网页「⚙ 设置 → 🌐 网页端口」）。"""
+    from kblib.infra import webport
+    try:
+        if a.op == 'set':
+            p = webport.save(a.port, by='终端')
+            run = webport.actual()
+            tip = '' if run.get('已停止') or not run else f'\n正在运行的网页还在 {run.get("端口")}：重启 kb web（或网页里改，自动重启）后生效'
+            print(f'网页端口改成 {p}（写在 _system/web.json，开机自启也按它）{tip}\n'
+                  '已接入的执行机：kb runner --server http://<地址>:' + str(p) + ' --rebind；kb token 接入的远程 Claude Code 也要改地址')
+            return 0
+        if a.op == 'reset':
+            print(f'已恢复默认端口 {webport.reset()}（重启 kb web 生效）')
+            return 0
+        st = webport.status()
+        run = webport.actual()
+        print(f"配置端口：{st['配置端口']}（来源：{st['来源']}）")
+        if run and not run.get('已停止'):
+            print(f"正在运行：http://127.0.0.1:{run['端口']}" + (f"　{run['提示']}" if run.get('提示') else ''))
+        else:
+            print('网页没在运行')
+        if st['不能改的原因']:
+            print(st['不能改的原因'])
+        return 0
+    except KBError as x:
+        print(f'✗ {x}', file=sys.stderr)
+        return 1
+
+
+def _db_cmd(a):
+    """kb db status / use / copy（REQ-021：SQLite / PostgreSQL / MySQL 按场景选驱动）。"""
+    from kblib.core import db
+    try:
+        if a.op == 'status':
+            st = db.status()
+            print(f"驱动：{st['驱动']}（来源：{st['来源']}）\n连接：{st['连接']}\n表版本：{st['表版本']}\n"
+                  + '　'.join(f'{k} {v}' for k, v in st['行数'].items()))
+            return 0
+        if a.op == 'use':
+            if os.environ.get('KB_DB_URL'):
+                print('！环境变量 KB_DB_URL 已设置，它优先于 kb db use；要改先改环境变量', file=sys.stderr)
+            url = db.use_url(a.url)
+            print(f'之后用：{db.safe_url(url)}（重启 kb web 生效）。原来的数据不会自动搬：先 kb db copy --to <连接串> 再 use')
+            return 0
+        url = a.to or a.url
+        if not url:
+            raise KBError('用法：kb db copy --to <连接串>')
+        n = db.copy_to(url, force=a.force)
+        print(f'已复制到 {db.safe_url(url)}：' + '、'.join(f'{k} {v}' for k, v in n.items() if v) + f'\n切过去：kb db use {db.safe_url(url)}（密码照原样填）')
+        return 0
+    except KBError as x:
+        print(f'✗ {x}', file=sys.stderr)
+        return 1
+
+
+def _move_cmd(a):
+    """kb backup --for-move / kb restore（REQ-034）。"""
+    from kblib.core import migrate
+    import getpass
+    try:
+        if a.cmd == 'backup':
+            if not a.for_move:
+                raise KBError('现在只有搬家备份：kb backup --for-move')
+            pw = a.passphrase or _ask_pw('给机密主密钥设个口令（至少 8 位，恢复时要输）：')
+            print(migrate.backup_for_move(a.out, pw))
+        else:
+            pw = a.passphrase or (getpass.getpass('备份时设的口令（归档里没有加密主密钥就直接回车）：') if sys.stdin.isatty() else '')
+            print(migrate.kb_restore(a.archive, pw))
+        return 0
+    except KBError as x:
+        print(f'✗ {x}', file=sys.stderr)
+        return 1
+
+
+def _doctor_migrate():
+    """kb doctor 末尾：迁移校验（条数一致、每期能打开、机密能读，REQ-027 REQ-034）。"""
+    from kblib.core import migrate
+    try:
+        bad, stats = migrate.migrate_check(True)
+    except Exception as e:      # noqa: BLE001
+        print(f'\n✗ 迁移校验出错：{e!r}')
+        return 1
+    brief = '、'.join(f'{k} {v}' for k, v in stats.items())
+    if bad:
+        print('\n✗ 迁移校验不通过：\n- ' + '\n- '.join(bad) + f'\n（{brief}）')
+        return 1
+    print(f'\n✓ 迁移校验通过：{brief}')
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog='kb', description='本地知识库（需求 / 设计图 / 接口文档 / 其他资料 / 代码）')
     sp = ap.add_subparsers(dest='cmd')
@@ -154,7 +277,7 @@ def main(argv=None):
     x.add_argument('-n', '--count', type=int, default=1)
     sp.add_parser('serve', help='以 MCP（stdio）方式运行')
     x = sp.add_parser('web', help='启动网页（默认 http://127.0.0.1:11555 只给本机；部署在远端：kb web --host 0.0.0.0，要先 kb passwd）')
-    x.add_argument('--port', type=int, default=int(os.environ.get('KB_PORT') or 11555))
+    x.add_argument('--port', type=int, default=None, help='端口（不给就按 KB_PORT > kb port set 的配置 > 11555；被占自动顺延）')
     x.add_argument('--host', default='', help='监听地址，默认 127.0.0.1（或环境变量 KB_HOST）')
     x = sp.add_parser('doctor', help='体检：规矩、管家设置、kb 工具放行、auto 权限模式、角色套件残留、MCP 接入，和团队默认对比；--fix [项,…] 一键修复')
     x.add_argument('--fix', nargs='?', const='all', default='', help='all（默认）或 rules,steward,allow,auto,mcp')
@@ -162,7 +285,63 @@ def main(argv=None):
     x = sp.add_parser('token', help='远处的 Claude Code 连知识库用的访问令牌：kb token add <名称> | list | del <名称>')
     x.add_argument('op', choices=['add', 'list', 'del'])
     x.add_argument('name', nargs='?', default='')
+    x.add_argument('--user', default='', help='令牌绑哪个账号（默认本机管理员）')
+    x = sp.add_parser('user', help='账号：kb user add <用户名> [--admin] [--password …] | list | passwd <用户名>')
+    x.add_argument('op', choices=['add', 'list', 'passwd'])
+    x.add_argument('name', nargs='?', default='')
+    x.add_argument('--admin', action='store_true', help='建成管理员')
+    x.add_argument('--password', default='', help='不给就交互输入')
+    x = sp.add_parser('migrate', help='升级迁移到数据库：kb migrate --dry-run 只列清单；kb migrate 备份 → 导入 → 校验，失败自动回滚')
+    x.add_argument('--dry-run', action='store_true')
+    x = sp.add_parser('backup', help='搬家：kb backup --for-move [--out 文件] [--passphrase 口令]（数据库 + 资料目录 + 机密主密钥）')
+    x.add_argument('--for-move', action='store_true')
+    x.add_argument('--out', default='')
+    x.add_argument('--passphrase', default='')
+    x = sp.add_parser('restore', help='从搬家归档恢复：kb restore <归档> [--passphrase 口令]，之后 kb doctor 校验')
+    x.add_argument('archive')
+    x.add_argument('--passphrase', default='')
+    sp.add_parser('runner', help='执行机：kb runner --server <控制面地址> --token <注册令牌> [--name] [--data] [--ca] [--rebind] [--capacity N]',
+                  add_help=False)
+    x = sp.add_parser('port', help='网页端口：kb port（看）| kb port set <端口> | kb port reset（回到 11555）；重启 kb web 生效')
+    x.add_argument('op', nargs='?', default='show', choices=['show', 'set', 'reset'])
+    x.add_argument('port', nargs='?', default='')
+    x = sp.add_parser('db', help='元数据库驱动：kb db status | use <连接串> | copy --to <连接串> [--force]（sqlite:// postgresql:// mysql://）')
+    x.add_argument('op', choices=['status', 'use', 'copy'])
+    x.add_argument('url', nargs='?', default='')
+    x.add_argument('--to', default='', help='copy 的目标连接串')
+    x.add_argument('--force', action='store_true', help='目标库已有数据也覆盖')
+    x = sp.add_parser('runner-reg-token', help='生成执行机注册令牌（同网页「🖥 执行机 → 生成注册令牌」，24 小时内用一次）：kb runner-reg-token [名称]')
+    x.add_argument('name', nargs='?', default='')
+    sp.add_parser('dev-cluster', help='本机验证多执行机：kb dev-cluster up [--runners N] [--docker] | down [--purge] | status | chaos <kill-runner|kill-control|net-drop|disk-full>',
+                  add_help=False)
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] == 'runner':                # 执行机：独立 KB_ROOT，重新 exec（REQ-011）
+        from kblib.runner import launch
+        return launch(argv[1:])
+    if argv and argv[0] == 'dev-cluster':
+        from kblib import devcluster
+        return devcluster.main(argv[1:])
     a = ap.parse_args(argv)
+    if a.cmd == 'user':
+        return _user_cmd(a)
+    if a.cmd == 'port':
+        return _port_cmd(a)
+    if a.cmd == 'db':
+        return _db_cmd(a)
+    if a.cmd == 'runner-reg-token':                 # 容器 / 脚本里接执行机用（REQ-011 REQ-034）
+        from kblib.infra.deploy import runner_reg_token
+        print(runner_reg_token(a.name, '终端')[0])
+        return 0
+    if a.cmd == 'migrate':
+        from kblib.core.migrate import migrate
+        try:
+            print(migrate(dry_run=a.dry_run))
+        except KBError as x:
+            print(f'✗ {x}', file=sys.stderr)
+            return 1
+        return 0
+    if a.cmd in ('backup', 'restore'):
+        return _move_cmd(a)
     if a.cmd == 'serve':
         return serve()
     if a.cmd == 'web':
@@ -178,7 +357,7 @@ def main(argv=None):
             print(x, file=sys.stderr)
             return 1
         print(doctor_text(items))
-        return 0
+        return _doctor_migrate()
     if a.cmd == 'passwd':
         import getpass
         from kblib.infra.deploy import set_password
@@ -191,7 +370,7 @@ def main(argv=None):
     if a.cmd == 'token':
         from kblib.infra.deploy import token_add, token_del, token_list
         if a.op == 'add':
-            t = token_add(a.name)
+            t = token_add(a.name, a.user or None)
             print(f'令牌「{a.name}」（只显示这一次，丢了就删掉重建）：\n{t}\n\n在要连知识库的电脑上：\n'
                   f'  claude mcp add --transport http kb <网页地址>/mcp --header "Authorization: Bearer {t}"')
         elif a.op == 'list':

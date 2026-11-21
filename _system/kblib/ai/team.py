@@ -475,6 +475,8 @@ def _plist():
 
 def _launchctl(*args):
     import subprocess
+    if sys.platform != 'darwin':          # LaunchAgent 是 Mac 专用：Linux 执行机 / 服务器上跳过（REQ-011）
+        return
     try:
         subprocess.run(['launchctl', *args], capture_output=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
@@ -807,7 +809,7 @@ def team_restore(name=''):
     extra = []
     sd = src / 'schedule'
     pl = sd / f'{SCHED_LABEL}.plist'
-    if pl.is_file():
+    if pl.is_file() and sys.platform == 'darwin':
         _plist().parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(pl, _plist())
         _launchctl('load', str(_plist()))

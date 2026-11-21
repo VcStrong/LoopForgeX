@@ -1,0 +1,96 @@
+# 知识库跑在 Docker 上：控制面（网页 + 任务队列 + MCP）+ PostgreSQL（元数据库，默认）+ 一台 Linux 执行机。详见 DOCKER.md
+# 想用 MySQL：.env 里 KB_DB_URL=mysql://kb:<密码>@mysql:3306/kb，启动加 --profile mysql；想用卷里的 SQLite：KB_DB_URL=sqlite
+#   cp docker.env.example .env && 改 .env 里的 KB_DB_PASSWORD（管理员默认 admin / admin123，首次登录要改密码）
+#   docker compose up -d --build            → 打开 http://localhost:11555 用 admin / admin123 登录（首次要改密码）
+#   docker compose logs -f                  看日志；docker compose down 停（数据在卷里，不会丢）
+# 再加执行机：复制下面 runner-1 整段改成 runner-2（名称、卷名都改），并把名称加进 KB_BOOTSTRAP_RUNNERS。
+# 插 USB 手机的安卓真机、iOS 编译：在 Mac 本机运行 kb runner --server http://localhost:11555 --token <网页生成的注册令牌>。
+name: kb
+
+services:
+  db:
+    image: ${KB_PG_IMAGE:-postgres:16}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kb
+      POSTGRES_DB: kb
+      POSTGRES_PASSWORD: ${KB_DB_PASSWORD:?在 .env 里设 KB_DB_PASSWORD（数据库密码，只在 compose 内网用）}
+    volumes:
+      - kb-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb -d kb"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mysql:
+    profiles: ["mysql"]
+    image: ${KB_MYSQL_IMAGE:-mysql:8.4}
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: kb
+      MYSQL_USER: kb
+      MYSQL_PASSWORD: ${KB_DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${KB_DB_PASSWORD}
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_bin"]
+    volumes:
+      - kb-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -ukb -p$$MYSQL_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  control:
+    build:
+      context: .
+      dockerfile: _system/Dockerfile
+      args: &build_args
+        WITH_ENGINES: ${KB_WITH_ENGINES:-1}
+        BASE_IMAGE: ${KB_BASE_IMAGE:-python:3.12-slim}
+        NODE_IMAGE: ${KB_NODE_IMAGE:-node:22-slim}
+        APT_MIRROR: ${KB_APT_MIRROR:-}
+        NPM_REGISTRY: ${KB_NPM_REGISTRY:-}
+        PIP_INDEX: ${KB_PIP_INDEX:-}
+    image: kb-control
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${KB_PUBLISH:-127.0.0.1:11555}:11555"     # 只给本机；要给局域网同事用改成 0.0.0.0:11555，最好前面再加 HTTPS 反向代理
+    environment:
+      KB_ADMIN_USER: ${KB_ADMIN_USER:-admin}
+      KB_ADMIN_PASSWORD: ${KB_ADMIN_PASSWORD:-admin123}   # 首次建管理员用的初始密码（默认 admin123），首次登录会要求改掉
+      KB_BOOTSTRAP_RUNNERS: ${KB_BOOTSTRAP_RUNNERS:-runner-1}
+      KB_NO_LOCAL_RUNNER: ${KB_NO_LOCAL_RUNNER:-0}   # 1 = 控制面容器里不跑会话，全交给执行机
+      KB_MASTER_KEY_FILE: ${KB_MASTER_KEY_FILE:-/data/home/.config/kb/master.key}
+      KB_DB_URL: ${KB_DB_URL:-postgresql://kb:${KB_DB_PASSWORD}@db:5432/kb}   # 元数据库（默认 PostgreSQL）
+    volumes:
+      - kb-data:/data
+      - kb-shared:/shared
+      - ./backup:/backup                           # kb backup --for-move 的归档放这里，容器里 kb restore /backup/<文件>
+
+  runner-1:
+    build:
+      context: .
+      dockerfile: _system/Dockerfile.runner
+      args: *build_args
+    image: kb-runner
+    restart: unless-stopped
+    depends_on:
+      - control
+    environment:
+      KB_SERVER: http://control:11555
+      KB_RUNNER_NAME: runner-1
+      KB_RUNNER_TOKEN: ${KB_RUNNER_TOKEN:-}          # 留空 = 用控制面在共享卷里预发的令牌；接别处的控制面时填网页生成的注册令牌
+    volumes:
+      - kb-runner-1:/data
+      - kb-shared:/shared
+
+volumes:
+  kb-pg:
+  kb-mysql:
+  kb-data:
+  kb-shared:
+  kb-runner-1:

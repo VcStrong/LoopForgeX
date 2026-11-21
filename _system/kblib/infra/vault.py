@@ -146,3 +146,41 @@ def put_interactive(service, acct, label=''):
     if not pw:
         raise VaultError('没有输入密码')
     put(service, acct, pw, label)
+
+
+# ---------------------------------------------------------------- 会话临时凭据（REQ-017）
+def session_creds(user, project, session=''):
+    """派活时下发给执行机的 Git / Gerrit 凭据，只写进会话私有 HOME，会话结束即删。
+    发起人有个人 Gerrit 凭据 → 用发起人身份；没有 → 项目 bot 账号（提交带 Co-authored-by 发起人）；都没有 → 写明缺什么，
+    执行机不得退回用系统用户身份推送。每次读取写审计。"""
+    from kblib.core import db as _db
+    from kblib.core.users import PERSONAL_SERVICE
+
+    def _aud(obj, ok, detail=''):
+        _db.audit('机密', f'会话 {session or "?"}（发起人 {user}）', obj, project, '成功' if ok else '拒绝', detail)
+    u = _db.user_get(user) or {}
+    g = (u.get('profile') or {}).get('gerrit') or {}
+    if g.get('用户名') and _db.secret_meta(f'U:{user}/gerrit'):
+        key = get(PERSONAL_SERVICE, f'{user}/gerrit')
+        _aud(f'U:{user}/gerrit', key is not None)
+        if key:
+            return {'git': {'方式': '个人', '用户名': g['用户名'], '密钥': key, '作者': user}}
+    bot, _ = _db.kv_get(f'bot:{project}', None)
+    if isinstance(bot, dict) and bot.get('用户名'):
+        sid = bot.get('机密') or f'bot/{project}'
+        key = get('kb-bot', sid)
+        _aud(f'bot:{project}', key is not None)
+        if key:
+            return {'git': {'方式': 'bot', '用户名': bot['用户名'], '密钥': key, 'coauthor': user,
+                            '说明': f'将用 bot 账号推送，提交说明末尾带 Co-authored-by: {user}'}}
+    return {'git': {'方式': '缺', '缺': '没有个人 Gerrit 凭据，项目也没配 bot 账号：到「我的 → Gerrit」填个人凭据，'
+                                     '或请项目负责人配 bot 账号'}}
+
+
+def bot_save(project, username, secret, by=''):
+    """项目 bot 账号（kv bot:<项目> 存用户名，密钥进机密库）。"""
+    from kblib.core import db as _db
+    sid = f'bot/{project}'
+    put('kb-bot', sid, secret, f'{project} bot')
+    _db.secret_meta_put(f'B:{sid}', '项目', '', project)
+    _db.kv_set(f'bot:{project}', {'用户名': username, '机密': sid}, by=by)

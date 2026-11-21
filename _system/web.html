@@ -44,6 +44,8 @@ main{max-width:1280px;width:100%;padding:20px 20px 60px}
   <div class="navh">工作台</div>
   <a class="nav" data-nav="/" href="#/"><span class="t">▦ 总览</span></a>
   <a class="nav" data-nav="/phones" href="#/phones"><span class="t">▯ 手机</span><span class="n" id="navPh"></span></a>
+  <a class="nav" data-nav="/queue" href="#/queue" title="开工、修复、运行到手机等任务：排队位置、等待原因、派到哪台执行机"><span class="t">☰ 任务队列</span></a>
+  <a class="nav" data-nav="/resources" href="#/resources" title="手机、测试账号、AI 引擎名额的占用和排队"><span class="t">📦 资源</span></a>
   <div class="navh">期</div>
   <div class="plist" id="navPs"></div>
   <div class="navh">事项</div>
@@ -57,6 +59,12 @@ main{max-width:1280px;width:100%;padding:20px 20px 60px}
   <a class="nav" data-nav="/base" href="#/base"><span class="t">◈ 基础信息</span></a>
   <a class="nav" data-nav="/archive" href="#/archive" title="做完一段时间的期和事项：不再占列表，在这里搜"><span class="t">📦 归档</span><span class="n" id="navArc"></span></a>
   <div class="navh">系统</div>
+  <a class="nav" data-nav="/admin" href="#/admin" data-plat-admin hidden title="全员执行进度、项目进展、执行机、AI 账号、队列、资源、告警"><span class="t">📊 总览看板</span></a>
+  <a class="nav" data-nav="/me" href="#/me" title="令牌、平台账号、通知、AI 账号"><span class="t">👤 我的</span></a>
+  <a class="nav" data-nav="/project-admin" href="#/project-admin" data-plat-powner hidden><span class="t">🗂 项目</span></a>
+  <a class="nav" data-nav="/members" href="#/members" data-plat-admin hidden><span class="t">👥 成员</span></a>
+  <a class="nav" data-nav="/runners" href="#/runners" data-plat-admin hidden><span class="t">🖥 执行机</span></a>
+  <a class="nav" data-nav="/audit" href="#/audit" data-plat-powner hidden><span class="t">🔐 审计</span></a>
   <a class="nav" data-nav="/settings" href="#/settings"><span class="t">⚙ 设置</span></a>
   <a class="nav" data-nav="/d/" href="#/d/" title="使用说明"><span class="t">? 帮助</span></a>
   <div class="foot"><span id="live" class="live" title="实时连接中…"></span><span>实时连接 · <span id="hostName"></span></span><a id="logout" hidden style="margin-left:auto;color:inherit">退出</a></div>

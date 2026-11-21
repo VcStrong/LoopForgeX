@@ -20,9 +20,17 @@ from kblib.core.common import (
     REPOS_FILE,
     STATUSES,
     SYS,
+    Snap,
+    actor_label,
+    current_ctx,
+    current_project,
+    current_user,
     now,
     safe_name,
+    snap,
+    snap_diff,
 )
+from kblib.core import db as _db
 from kblib import lazy
 _notes = lazy('kblib.core.notes')      # 上层模块：用到时才 import（不形成循环）
 _search = lazy('kblib.core.search')      # 上层模块：用到时才 import（不形成循环）
@@ -30,6 +38,7 @@ _plugins = lazy('kblib.plugins.registry')      # 上层模块：用到时才 imp
 _devprep = lazy('kblib.ai.devprep')      # 上层模块：用到时才 import（不形成循环）
 _devsession = lazy('kblib.ai.devsession')      # 上层模块：用到时才 import（不形成循环）
 _talk = lazy('kblib.ai.talk')      # 上层模块：删期时列出 / 停掉这一期在跑的后台会话
+_users = lazy('kblib.core.users')
 _bug_index = lazy('kblib.bugs.index')      # 上层模块：用到时才 import（不形成循环）
 _anr_store = lazy('kblib.anr.store')      # 上层模块：用到时才 import（不形成循环）
 
@@ -79,12 +88,46 @@ def tomb_sweep():
     return out
 
 
-def period_names():
+def period_names(all_projects=False):
+    """期 / 事项名（按创建时间）。网页请求、AI 会话里只列当前项目的（REQ-003）；后台线程没有用户上下文，列全部。"""
     if not PERIODS.exists():
         return []
     tomb = _tombs()
     ds = [p for p in PERIODS.iterdir() if p.is_dir() and p.name not in tomb]
-    return [p.name for p in sorted(ds, key=lambda p: load_meta(p).get('创建时间', ''))]
+    names = [p.name for p in sorted(ds, key=lambda p: load_meta(p).get('创建时间', ''))]
+    scope = '' if all_projects else period_scope()
+    if scope:
+        proj = {r['name']: r['project'] for r in _db.period_rows()}
+        names = [n for n in names if (proj.get(n) or 'default') in scope]
+    return names
+
+
+def _check_visible(name):
+    """网页登录人 / AI 会话访问不属于自己项目的期：拒绝（REQ-003 REQ-005）。"""
+    c = current_ctx()
+    if c.get('via') not in ('网页', 'AI') or not c.get('user'):
+        return
+    from kblib.core import authz
+    if not authz.can(c, '看', name)[0]:
+        raise authz.Denied(authz.MSG_PROJ)
+
+
+def period_scope():
+    """当前请求能看的项目集合（空 = 不过滤）：网页看当前项目；会话看它的项目；个人令牌看持有者参与的项目。"""
+    c = current_ctx()
+    if c.get('via') not in ('网页', 'AI') or c.get('all_projects'):
+        return set()
+    if c.get('project'):
+        return {c['project']}
+    if c.get('user'):
+        from kblib.core import authz
+        return set(authz.visible_projects(c['user'])) or {'-'}
+    return set()
+
+
+def period_project(name):
+    r = _db.period_row(name)
+    return (r or {}).get('project') or 'default'
 
 
 def period_dir(name):
@@ -94,6 +137,7 @@ def period_dir(name):
     if d.name in _tombs():
         raise KBError(f'「{d.name}」已删除')
     if d.is_dir():
+        _check_visible(d.name)
         return d
     cands = [n for n in period_names() if name in n]
     if len(cands) == 1:
@@ -103,26 +147,116 @@ def period_dir(name):
     raise KBError(f'「{name}」匹配到多期：{"、".join(cands)}，请写全名')
 
 
-def load_meta(d):
-    f = d / '期信息.json'
-    if f.exists():
-        return json.loads(f.read_text('utf-8'))
+_EXPORTED = {}        # 期信息.json 路径 → 本进程最近一次导出后的 mtime（区分「自己导出的」和「有人直接改了文件」）
+
+
+def _meta_default(d):
     return {'名称': d.name, '说明': '', '状态': '收集中', '创建时间': now(), '关联仓库': [], '状态历史': []}
 
 
-def save_meta(d, m):
+def load_meta(d):
+    """期信息在数据库（periods 表），期信息.json 是导出视图（REQ-008）。
+    还没进库的（老数据、别处拷来的期）读文件并导入；有人直接改了文件（比库里新）以文件为准。"""
+    f = d / '期信息.json'
+    r = _db.period_row(d.name)
+    try:
+        fm = f.stat().st_mtime if f.exists() else 0
+    except OSError:
+        fm = 0
+    if fm and (r is None or (fm > _EXPORTED.get(str(f), 0) + 1 and fm > (r.get('updated') or 0) + 1)):
+        try:
+            m = json.loads(f.read_text('utf-8'))
+        except (OSError, ValueError):
+            m = None
+        if isinstance(m, dict):
+            if r is None or m != r['meta']:
+                proj, owner = (None, None) if r else _default_owner()
+                gone = [k for k in r['meta'] if k not in m] if r else []   # 以文件为准：文件里删掉的字段库里也删
+                _db.period_save(d.name, m, list(m), gone, by='期信息.json', project=proj, owner=owner)
+            _EXPORTED[str(f)] = fm
+            return snap(m)
+    if r is not None:
+        return snap(r['meta'])
+    return snap(_meta_default(d))
+
+
+def _default_owner():
+    """新建 / 首次导入的期：归当前项目（没有就默认项目），负责人是当前用户（没有就本机用户）。"""
+    try:
+        return _users.default_project_for(current_project()), current_user() or _users.local_user()
+    except Exception:
+        return '', ''
+
+
+def _export_meta(d, m):
+    f = d / '期信息.json'
+    tmp = f.with_name('.期信息.json.tmp')
+    tmp.write_text(json.dumps(m, ensure_ascii=False, indent=2), 'utf-8')
+    tmp.replace(f)
+    try:
+        _EXPORTED[str(f)] = f.stat().st_mtime
+    except OSError:
+        pass
+
+
+def save_meta(d, m, version=None):
+    """写入走数据库事务、按字段合并（只改这次改过的键）；version 给了就做乐观锁检查（REQ-030）。写完导出 期信息.json。"""
     m['更新时间'] = now()
-    (d / '期信息.json').write_text(json.dumps(m, ensure_ascii=False, indent=2), 'utf-8')
+    changed, removed = snap_diff(m)
+    proj = owner = None
+    if _db.period_row(d.name) is None:
+        proj, owner = _default_owner()
+    merged, _ver = _db.period_save(d.name, m, changed, removed, by=actor_label() or 'AI', version=version,
+                                   project=proj, owner=owner)
+    if d.is_dir():
+        _export_meta(d, merged)
+    if isinstance(m, Snap):
+        m.clear()
+        m.update(merged)
+        m._base = json.loads(json.dumps(merged, ensure_ascii=False, default=str))
+    try:
+        _db.event_add('period', (_db.period_row(d.name) or {}).get('project', ''), {'name': d.name})
+    except Exception:
+        pass
 
 
-def log(d, action, content):
+def period_info(name):
+    """期的平台属性：项目、负责人、版本号（REQ-002 REQ-003 REQ-030）。"""
+    r = _db.period_row(name)
+    if r is None:
+        d = PERIODS / name
+        if d.is_dir():
+            load_meta(d)
+            r = _db.period_row(name)
+    return {'项目': (r or {}).get('project', ''), '负责人': (r or {}).get('owner', ''), '版本号': (r or {}).get('version', 0)}
+
+
+def period_set_owner(name, owner=None, project=None, version=None):
+    d = period_dir(name)
+    _db.period_set_attr(d.name, project=project, owner=owner, version=version, by=actor_label() or '')
+    bits = ([f'负责人 → {owner}'] if owner is not None else []) + ([f'项目 → {project}'] if project is not None else [])
+    log(d, '归属', '，'.join(bits))
+    return f'{d.name}：' + '，'.join(bits)
+
+
+def log(d, action, content, actor=None):
+    """记录：进数据库 records 表，同时追加到 记录.md（导出视图，格式不变）。操作人取当前用户上下文（REQ-004）。"""
     if not d.is_dir():           # 期已删除：后台晚到的记录不写（写了会把目录又建出来）
         return
+    actor = actor or actor_label()
+    c = current_ctx()
+    if actor and c.get('via', '网页') == '网页' and c.get('user'):
+        content = content.replace('用户（网页）', actor)
+    t = now()
+    try:
+        _db.record_add(d.name, t, action, content, actor or '')
+    except Exception:
+        pass
     f = d / '记录.md'
     if not f.exists():
         f.write_text(f'# {d.name} · 记录\n\n> 知识库自动追加：本期所有材料变动、状态变化、开发中的关键决定。\n\n', 'utf-8')
     with f.open('a', encoding='utf-8') as fp:
-        fp.write(f'- {now()} ｜ {action} ｜ {content}\n')
+        fp.write(f'- {t} ｜ {action} ｜ {content}\n')
 
 
 def create_period(name, summary=''):
@@ -135,6 +269,7 @@ def create_period(name, summary=''):
         _save_tombs(t)
     if d.exists():
         raise KBError(f'已存在：{d.name}')
+    _db.period_delete(d.name)            # 库里残留的同名旧行（目录被手工删掉的）不并进来
     for c in CATS:
         (d / c).mkdir(parents=True)
     save_meta(d, {'名称': d.name, '说明': summary, '状态': '收集中', '创建时间': now(), '关联仓库': [],
@@ -239,6 +374,10 @@ def delete_period(name, by='用户（网页）'):
     except OSError:
         shutil.rmtree(d)
         where = '目录已删除'
+    try:
+        _db.period_delete(d.name)
+    except Exception:
+        pass
     try:
         _search.index_docs()
     except Exception:

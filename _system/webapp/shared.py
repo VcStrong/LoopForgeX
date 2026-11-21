@@ -73,14 +73,14 @@ def steward_auto():
         time.sleep(STEWARD_MIN * 60)
 
 
-def api_zentao(period='', owner=''):
-    bugs = kb.zentao_bugs_json(period, owner)
+def api_zentao(period='', owner='', mine_of='', project=''):
+    bugs = kb.zentao_bugs_json(period, owner, mine_of, project)
     names = [n for n in kb.period_names() if not kb.is_archived(kb.load_meta(kb.PERIODS / n))]    # 归属下拉不列归档的
     tasks = [n for n in names if kb.is_task(kb.load_meta(kb.PERIODS / n))]
     return {'status': kb.zentao_status(), 'bugs': bugs, 'periods': [n for n in names if n not in tasks], 'tasks': tasks,
             'sessions': [x for x in reversed(kb.an_sessions()) if x.get('类型') != '修复' and (x.get('状态') == '运行中' or x.get('警告'))][:10],
             'fixq': kb.fix_queue(),
-            'baseEntries': [{'编号': e['编号'], '名称': e['名称']} for e in kb.base_load()['条目']],
+            'baseEntries': [{'编号': e['编号'], '名称': e['名称']} for e in kb.base_visible()],
             'owners': list(kb.ZT_OWNER)}
 
 
@@ -396,8 +396,9 @@ def api_period(name):
 
 def api_base():
     files = [_file_info(p) for p in sorted(kb.BASE.rglob('*')) if p.is_file() and not p.name.startswith('.')
-             and p not in (kb.BASE_FILE, kb.BASE_MD)] if kb.BASE.exists() else []
-    return {**kb.base_load(), 'cats': kb.BASE_CATS, 'templates': kb.BASE_TEMPLATES, 'files': files, 'dir': str(kb.BASE)}
+             and p not in (kb.BASE_FILE, kb.BASE_MD) and not kb.attachment_denied(p)] if kb.BASE.exists() else []
+    return {'条目': kb.base_visible(), 'cats': kb.BASE_CATS, 'templates': kb.BASE_TEMPLATES, 'files': files, 'dir': str(kb.BASE),
+            'visibility': kb.VISIBILITY}
 
 
 DOC_FIRST = ['使用说明']
@@ -425,13 +426,41 @@ LOGIN_PAGE = '''<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta
 :root{--bg:#f3f5f9;--fg:#1c2433;--card:#fff;--line:#e3e7ef;--acc:#3b5bdb;--mut:#667085}
 @media (prefers-color-scheme:dark){:root{--bg:#0f141d;--fg:#e6eaf2;--card:#171e2a;--line:#283245;--acc:#7c97ff;--mut:#98a2b3}}
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,"PingFang SC",system-ui,sans-serif}
-form{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:28px;width:min(340px,calc(100vw - 32px));box-sizing:border-box}
-h1{font-size:18px;margin:0 0 16px}input,button{width:100%;box-sizing:border-box;font:inherit;padding:10px 12px;border-radius:8px}
+form{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:28px;width:min(360px,calc(100vw - 32px));box-sizing:border-box}
+form[hidden]{display:none}h1{font-size:18px;margin:0 0 6px}.sub{color:var(--mut);font-size:13px;margin:0 0 16px}
+label{display:block;font-size:13px;color:var(--mut);margin-bottom:4px}
+input,button{width:100%;box-sizing:border-box;font:inherit;padding:10px 12px;border-radius:8px}
 input{border:1px solid var(--line);background:var(--bg);color:var(--fg);margin-bottom:12px}button{border:0;background:var(--acc);color:#fff;cursor:pointer}
-p{color:#c92a2a;min-height:1.5em;margin:8px 0 0;font-size:13px}</style></head><body>
-<form id="f"><h1>本地知识库</h1><input type="password" id="p" placeholder="访问密码" autofocus autocomplete="current-password"><button>登录</button><p id="e"></p></form>
-<script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
-body:JSON.stringify({password:document.getElementById('p').value})});if(r.ok)location.href='/';else document.getElementById('e').textContent=(await r.json()).error||'登录失败'}</script>
+button:disabled{opacity:.6;cursor:default}
+p.e{color:#c92a2a;min-height:1.5em;margin:8px 0 0;font-size:13px}</style></head><body>
+<form id="f" autocomplete="on"><h1>本地知识库</h1><p class="sub">用管理员给你的账号登录</p>
+<label for="u">用户名</label><input id="u" name="username" autocomplete="username" autofocus required>
+<label for="p">密码</label><input type="password" id="p" name="password" autocomplete="current-password" required>
+<button id="go">登录</button><p class="e" id="e"></p></form>
+<form id="c" hidden><h1>首次登录，请修改密码</h1><p class="sub">初始密码只能用一次，改成只有你知道的密码（至少 8 位）</p>
+<label for="o">当前密码</label><input type="password" id="o" autocomplete="current-password" required>
+<label for="n1">新密码</label><input type="password" id="n1" autocomplete="new-password" minlength="8" required>
+<label for="n2">再输一次</label><input type="password" id="n2" autocomplete="new-password" minlength="8" required>
+<button id="go2">修改并进入</button><p class="e" id="e2"></p></form>
+<script>
+const $=i=>document.getElementById(i);
+async function j(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});let d={};try{d=await r.json()}catch(_){}return [r,d]}
+function changeForm(old){$('f').hidden=true;$('c').hidden=false;$('o').value=old||'';(old?$('n1'):$('o')).focus()}
+$('f').onsubmit=async e=>{e.preventDefault();$('e').textContent='';$('go').disabled=true;
+  try{const [r,d]=await j('/api/login',{username:$('u').value.trim(),password:$('p').value});
+    if(!r.ok){$('e').textContent=d.error||'登录失败';return}
+    if(d.mustChangePassword)changeForm($('p').value);else location.href='/'}
+  catch(_){$('e').textContent='连不上知识库，检查网络后再试'}finally{$('go').disabled=false}};
+$('c').onsubmit=async e=>{e.preventDefault();$('e2').textContent='';
+  if($('n1').value.length<8){$('e2').textContent='新密码至少 8 位';return}
+  if($('n1').value!==$('n2').value){$('e2').textContent='两次输入的新密码不一样';return}
+  if($('n1').value===$('o').value){$('e2').textContent='新密码不能和当前密码一样';return}
+  $('go2').disabled=true;
+  try{const [r,d]=await j('/api/me/password',{old:$('o').value,new:$('n1').value});
+    if(r.ok)location.href='/';else $('e2').textContent=d.error||'修改失败'}
+  catch(_){$('e2').textContent='连不上知识库，检查网络后再试'}finally{$('go2').disabled=false}};
+if(location.hash==='#change')changeForm('');
+</script>
 </body></html>'''
 
 
@@ -448,13 +477,18 @@ FILE_TYPES = {'.md': 'text/markdown; charset=utf-8', '.log': 'text/plain; charse
 SANDBOX_EXT = {'.html', '.htm', '.xhtml', '.svg', '.xml', '.xsl', '.shtml', '.mht', '.mhtml'}
 
 
-def send_file(h, p, q):
-    """h：请求处理器；p：要发的文件（未 resolve 也行）；q：查询参数（js / dl）。"""
+def send_file(h, p, q, trusted=False):
+    """h：请求处理器；p：要发的文件（未 resolve 也行）；q：查询参数（js / dl）。
+    trusted：调用方已按自己的规则鉴过权、路径是库里登记的（产物 / 证据），不再过 kb._allowed 白名单。"""
     try:
         p = Path(p).expanduser().resolve()
     except (OSError, RuntimeError):
         return h._send(404, {'error': '无此文件'})
-    if not p.is_file() or not kb._allowed(p):
+    if not trusted:
+        why = kb.system_denied(p)                  # 先拦系统文件（也不透露它在不在）
+        if why:
+            return h._send(403, {'error': why})
+    if not p.is_file() or (not trusted and not kb._allowed(p)):
         return h._send(404, {'error': '无此文件'})
     ext = p.suffix.lower()
     ctype = FILE_TYPES.get(ext) or mimetypes.guess_type(p.name)[0] or 'application/octet-stream'

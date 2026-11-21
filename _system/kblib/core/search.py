@@ -268,6 +268,8 @@ def search_hits(query, period=None, category=None, scope='all', repo=None, limit
             mode = '任一词'
     hits = []
     for path, kind, per, cat, repo_, start, end, content in rows:
+        if system_denied(path):                # 系统文件（库、连接串、会话、机密）即使进了索引也不出现在检索结果里
+            continue
         line, snip = _snippet(content, shown, start)
         hits.append({'path': path, 'kind': kind, 'period': per, 'cat': cat, 'repo': repo_,
                      'line': line, 'snippet': snip})
@@ -285,10 +287,51 @@ def search(query, period=None, category=None, scope='all', repo=None, limit=10):
     return '\n'.join(out)
 
 
+# 不管在哪个白名单根下面都不给的文件：元数据库、连接串（含数据库密码）、网页会话、机密库、主密钥
+SECRET_NAMES = {'kb.db', 'kb.db-wal', 'kb.db-shm', 'index.db', 'index.db-wal', 'index.db-shm', 'db.url', 'web.json',
+                '.网页会话.json', 'store.enc', 'master.key', '.env'}
+
+
+PROGRAM_DIRS = {'kblib', 'webapp', 'ui', 'tests', 'bin', 'docs', '示例仓库'}
+PROGRAM_EXT = {'.py', '.md', '.txt', '.html', '.js', '.css', '.sh', '.yml', '.yaml', '.dockerignore'}
+
+
+def system_denied(p: Path):
+    """知识库自己的系统文件（REQ-003 REQ-007）：期 / 事项资料全平台开放，但这些任何人都不能经 /fs/、/file、kb_read 拿到。
+    返回原因，空 = 不拦。产物、证据、任务日志在 _system/cache 里，走各自的接口（已按期鉴权），不经这里。"""
+    try:
+        p = Path(p).expanduser().resolve()
+        root, sysd = ROOT.resolve(), SYS.resolve()
+    except (OSError, RuntimeError):
+        return '路径不对'
+    why = '这是知识库的系统文件，不能查看或下载'
+    if p.name in SECRET_NAMES or '.机密' in p.parts:
+        return why
+    try:
+        if p == Path(_baseinfo.BASE_FILE).resolve():   # 基础信息.json 里有私有条目（只给本人和管理员），走 /api/base 按人过滤
+            return why
+        att = _baseinfo.attachment_denied(p)           # 私有条目的附件只给本人和管理员（按当前请求 / 会话的人）
+        if att:
+            return att
+    except (OSError, RuntimeError):
+        pass
+    if p == sysd or sysd in p.parents:
+        rel = p.relative_to(sysd).parts if p != sysd else ()
+        program = rel and (rel[0] in PROGRAM_DIRS or (len(rel) == 1 and (p.suffix.lower() in PROGRAM_EXT or p.name.startswith('Dockerfile'))))
+        if not program:                                 # 程序源码照常可看（知识库自己登记成代码仓库时）；数据、缓存、日志、记录不给
+            return why
+    if root in p.parents:
+        rel = p.relative_to(root).parts
+        if rel[0].startswith('.') or (len(rel) == 1 and p.suffix.lower() in ('.json', '.db', '.url', '.key', '.lock', '.jsonl')):
+            return why                                    # 根目录下的 .网页会话.json、设置 / 代码仓库 / 设备占用 .json 等
+    return ''
+
+
 def _allowed(p: Path):
+    p = Path(p)
     roots = [ROOT.resolve()] + [Path(v['路径']).resolve() for v in load_repos().values()]
     roots += [Path(x).resolve() for x in (load_meta(PERIODS / n).get('SDD目录') for n in period_names()) if x]
-    return any(p == r or r in p.parents for r in roots)
+    return any(p == r or r in p.parents for r in roots) and not system_denied(p)
 
 
 def read_file(path, start=1, max_lines=300):

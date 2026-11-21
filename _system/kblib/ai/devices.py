@@ -68,6 +68,11 @@ def devices(period=''):
     if time.time() - _DEVS['t'] > 3:
         adb = _adb()
         _DEVS.update(t=time.time(), v=devlock.online(adb) if adb else [])
+        try:                                     # 本机手机登记进资源池（REQ-016 REQ-048）
+            from kblib.core import resources
+            resources.sync_runner_phones('local', [{'序列号': sn, '型号': md} for sn, st, md in _DEVS['v'] if st == 'device'])
+        except Exception as e:  # noqa: BLE001
+            print('手机登记资源池出错：', repr(e), flush=True)
     hold, ad = devlock.holders(), _agent_device_claims()
     sns = [x[0] for x in _DEVS['v']]
     out = []
@@ -147,9 +152,26 @@ def case_devices(m):
     return min(need, 10), multi, sorted(allroles)
 
 
-def device_claim(period, count=1, serials=None, reason='', strict=False):
-    """申请手机：本期已占着的优先，其余空闲的按「最近最少用」挑，几期并行时分散到不同手机。
+def _res_attrs(rid):
+    from kblib.core import db as _kdb
+    return (_kdb.get('resources', id=rid) or {}).get('attrs')
+
+
+COND_KEYS = ('系统', '版本范围', '品牌', '机型', '执行机', '提供方')
+
+
+def _cond_text(c):
+    return '、'.join(f'{k} {"–".join(map(str, v)) if isinstance(v, (list, tuple)) else v}' for k, v in c.items() if v not in (None, '', []))
+
+
+def device_claim(period, count=1, serials=None, reason='', strict=False, cond=None, wait=True):
+    """申请手机（走资源池，REQ-044 REQ-045）：只填台数，按条件（系统、版本范围、品牌、机型、执行机、提供方）分配；
+    本期已占着的优先，其余空闲的按「最近最少用」挑；整单分配（要么都拿到，要么都不拿）。
+    有匹配但都被占时排队（先来先到），返回「第 N 位，预计 M 分钟」；一台都不满足条件立即返回「条件无匹配」。
     点名 serials 时点名的能用就用；不能用的自动换成空闲手机凑够台数（strict=True 才严格按点名）。"""
+    from kblib.core import resources
+    from kblib.core.common import current_ctx
+    from kblib.core.periods import period_project
     d = period_dir(period)
     m = load_meta(d)
     serials = [str(x).strip() for x in (serials or []) if str(x).strip()]
@@ -161,51 +183,40 @@ def device_claim(period, count=1, serials=None, reason='', strict=False):
     if not serials and cneed > count:       # 用例要多台（双端 / 多账号协同）时按用例要的台数分配，别只拿一台
         count = cneed
     ds = {x['序列号']: x for x in devices(d.name)}
+    resources.sync_runner_phones('local', [{'序列号': sn, '型号': x.get('型号') or ''} for sn, x in ds.items() if x.get('状态') == '在线'])
+    ctx = current_ctx()
+    cond = {k: v for k, v in (cond or {}).items() if k in COND_KEYS and v not in (None, '', [])}
+    if not cond.get('执行机') and not cond.get('提供方'):
+        cond['执行机'] = ctx.get('runner') or 'local'
     branch = (m.get('开发会话') or {}).get('分支') or m.get('开发分支', '')
-    got, why, swap = [], [], []
-    with devlock.locked() as data:
-        t = time.time()
-        for k in [k for k, v in data.items() if not devlock.valid(v, t)]:
-            data.pop(k)
-        last = devlock.recent()
+    sess, user, proj = f'period:{d.name}', ctx.get('user') or '', period_project(d.name) if d.name else ''
+    info = {'分支': branch, '仓库': m.get('开发仓库', ''), '用途': (reason or '').strip()[:200], '开始': devlock.stamp()}
+    why, swap, r = [], [], None
 
-        def usable(sn):
-            c = data.get(sn)
-            return ds.get(sn, {}).get('状态') == '在线' and (not c or (c.get('期') == d.name and c.get('方式') != '本人'))
-
-        def pick(n, skip):
-            """本期已占着的优先；空闲的按最近最少用，别的期 agent-device 会话挂着的排后面。"""
-            mine = [sn for sn in ds if sn not in skip and usable(sn) and sn in data]
-            other = sorted((sn for sn in ds if sn not in skip and usable(sn) and sn not in data),
-                           key=lambda sn: (bool((ds[sn]['agent-device'] or {}).get('期') not in ('', d.name, None)),
-                                           float(last.get(sn) or 0)))
-            return (mine + other)[:max(0, n)]
-
-        def why_not(sn):
-            return f'{sn} ' + ('没连着' if sn not in ds else _who(ds[sn]['占用']) if ds[sn]['占用'] else ds[sn]['状态'])
-        if serials:
-            bad = []
-            for sn in serials:
-                if usable(sn):
-                    got.append(sn)
-                else:
-                    bad.append(sn)
-                    why.append(why_not(sn))
-            if bad and not strict:
-                sub = pick(count - len(got), set(got) | set(serials))
-                swap = [(bad[i] if i < len(bad) else '', sn) for i, sn in enumerate(sub)]
-                got += sub
+    def ask(c, n, w):
+        return resources.claim('手机', c, n, sess, d.name, user, proj, mode='申请', wait=w, info=info)
+    if serials:
+        for sn in serials:
+            x = ask(dict(cond, 序列号=sn), 1, False)
+            if not x['ok']:
+                why.append(f'{sn} ' + ('没连着或不满足条件' if x['error'].startswith(resources.NO_MATCH) else
+                                       _who(ds[sn]['占用']) if ds.get(sn, {}).get('占用') else x['error']))
+        if strict:
+            r = ask(dict(cond, 序列号=serials), len(serials), False)
         else:
-            got = pick(count, set())
-        for sn in got:
-            old = data.get(sn) or {}
-            data[sn] = {'期': d.name, '方式': '申请', '开始': old.get('开始') or devlock.stamp(), '分支': branch,
-                        '仓库': m.get('开发仓库', ''), '型号': ds[sn]['型号'], '用途': (reason or '').strip()[:200], '最后使用': t}
-        devlock.touch_recent(got, t)
+            r = ask(cond, count, wait)
+            gotsn = [h['资源'].rsplit(':', 1)[-1] for h in r['holds']]
+            bad = [sn for sn in serials if sn not in gotsn]
+            swap = [(bad[i] if i < len(bad) else '', sn) for i, sn in enumerate(x for x in gotsn if x not in serials)]
+    else:
+        r = ask(cond, count, wait)
+    got = [h['资源'].rsplit(':', 1)[-1] for h in r['holds']] if r['ok'] else []
+    attrs = {h['资源'].rsplit(':', 1)[-1]: ((_res_attrs(h['资源'])) or {}) for h in r['holds']}
+    model = lambda sn: (ds.get(sn) or {}).get('型号') or attrs.get(sn, {}).get('型号') or ''
     need = len(serials) if serials and strict else count
     if got:
         log(d, '申请手机', '、'.join(got) + (f'（{reason}）' if reason else ''))
-    msg = (f'已为「{d.name}」占用 {len(got)} 台：' + '、'.join(f'{sn}（{ds[sn]["型号"]}）' for sn in got)
+    msg = (f'已为「{d.name}」占用 {len(got)} 台：' + '、'.join(f'{sn}（{model(sn)}）' for sn in got)
            + '。只在这些手机上装包、操作（adb -s <序列号> / agent-device --serial），测完 kb_device_release。') if got else '没有能用的手机。'
     if got and cmulti and (count > 1 or cneed > 1):
         msg += (f'\n本期 agent-test.json 有 {cmulti} 条 case 要多台手机协同（一条最多 {cneed} 台；device_role 就是账号角色'
@@ -213,28 +224,38 @@ def device_claim(period, count=1, serials=None, reason='', strict=False):
                 + (f'。你只申请了 {asked} 台，已按 {count} 台分配' if count > asked else '') + '。'
                 '跑每条 case 前按它用到的角色把这几台分好（如 B→' + got[0] + (f'、E→{got[1]}' if len(got) > 1 else '') + '），'
                 '调 sdd-agentdevice-agent（或自己跑）时把分工写进 prompt：每个角色的序列号（各自 --serial、各自 --session，如 sdd-task-N-B / sdd-task-N-E）、'
-                '登录的账号（kb_base 查测试账号，第二、第三个账号也在里面；密码用 kb_base_secret 取）；'
+                '登录的账号（kb_account_claim 申请测试账号，密码用 kb_base_secret 取）；'
                 '多台 case 要用这几台一起跑，手机和账号都齐时不要标 ENV_BLOCKED / 记「设备不足」。')
     if swap:
         msg += ('\n点名的手机不可用（' + '；'.join(why) + '），已换成：'
-                + '、'.join(f'{a or "补位"} → {b}（{ds[b]["型号"]}）' for a, b in swap)
+                + '、'.join(f'{a or "补位"} → {b}（{model(b)}）' for a, b in swap)
                 + '。以后申请只填台数（count），不用点名序列号，知识库会分配空闲的手机；确实要某台（如 case 要求特定机型）才填 serials 并设 strict=true。')
-    if len(got) < need:
+    if not got and r['位置'] and r.get('ticket'):
+        msg = (f'{r["error"]}（条件：{_cond_text(cond) or "不限"}）。排到后自动分给你：过一会儿再调 kb_device_claim（同样参数）领取；'
+               f'排队最长 60 分钟。等的时候先做不需要手机的部分。')
+    elif len(got) < need:
+        nomatch = r['error'].startswith(resources.NO_MATCH)
         iid, _ = _add_issue(d, f'需要 {need} 台手机，现在只能用 {len(got)} 台' + (f'：{reason}' if reason else ''),
-                            devices_text(d.name) + (f'\n\n不可用：{"；".join(why)}' if why else ''), '设备不足', f'{need} 台手机',
-                            'kb_device_claim', key=f'设备不足|{need}|{reason}')
-        msg += (f'\n手机不够（需要 {need} 台，能用 {len(got)} 台' + (f'；{"；".join(why)}' if why else '') + f'）：已记为非阻断问题 {iid} 并通知用户。'
+                            devices_text(d.name) + (f'\n\n不可用：{"；".join(why)}' if why else '') + (f'\n\n{r["error"]}' if r['error'] else ''),
+                            '设备不足', f'{need} 台手机', 'kb_device_claim', key=f'设备不足|{need}|{reason}')
+        msg += ((f'\n{resources.NO_MATCH}（{_cond_text(cond)}）。' if nomatch and cond else '\n')
+                + f'手机不够（需要 {need} 台，能用 {len(got)} 台' + (f'；{"；".join(why)}' if why else '')
+                + (f'；{r["error"]}' if r['error'] and not nomatch else '') + f'）：已记为非阻断问题 {iid} 并通知用户。'
                 '能测的先测；测不了的 case 按流程如实记 BLOCKED（ENV_BLOCKED，写明缺几台手机），继续开发，不要等待。'
                 '用户接好手机后会在网页「复测」补测。')
     return msg
 
 
 def device_release(period, serials=None, by='AI'):
+    from kblib.core import resources
+    from kblib.core import db as _kdb
     name = period_dir(period).name
-    with devlock.locked() as data:
-        ks = [k for k, v in data.items() if v.get('期') == name and v.get('方式') != '本人' and (not serials or k in serials)]
-        for k in ks:
-            data.pop(k)
+    ks = []
+    for h in _kdb.rows('holds', {'period': name}):
+        sn = h['resource'].rsplit(':', 1)[-1]
+        if h['resource'].startswith('phone:') and h['mode'] != '本人' and (not serials or sn in serials):
+            resources.release(h['resource'], session=h['session'], by=by)
+            ks.append(sn)
     return f'已释放 {len(ks)} 台手机：{"、".join(ks)}' if ks else '这一期没有占着的手机'
 
 
@@ -763,3 +784,50 @@ def dev_overview(period):
             '非阻断问题': m.get('非阻断问题') or [], '复测': retest_info(d, m),
             '代码基线': timing.baseline_text(m.get('代码基线')), '代码基线详情': (m.get('代码基线') or {}).get('记录', ''),
             '工作副本': m.get('工作副本', '')}
+
+
+# ---------------------------------------------------------------- 测试账号占用（REQ-047）
+def account_claim(period, env='测试', tags=None, project='', count=1, name=''):
+    """会话按项目 / 环境 / 标签申请测试账号：按「允许同时使用数」发放，满了排队（先来先到），返回第 N 位；
+    线上环境默认不给 AI（项目负责人可对单个账号放开）。排队 30 分钟没拿到返回超时。"""
+    from kblib.core import resources
+    from kblib.core.common import current_ctx
+    from kblib.core.periods import period_project
+    from kblib.core.baseinfo import test_accounts_migrate, test_account_get
+    test_accounts_migrate()
+    d = period_dir(period)
+    ctx = current_ctx()
+    proj = project or period_project(d.name)
+    tags = [t for t in (tags or []) if t] if isinstance(tags, (list, tuple)) else [x for x in re.split(r'[,，\s]+', tags or '') if x]
+    cond = {'项目': proj, '环境': env or '测试', '标签': tags, 'AI': ctx.get('via') == 'AI'}
+    if name:
+        cond['id'] = name if name.startswith('TA') else ''
+    sess = f'period:{d.name}'
+    r = resources.claim('测试账号', cond, count, sess, d.name, ctx.get('user') or '', proj, mode='申请', wait=True)
+    if not r['ok']:
+        if r.get('ticket'):
+            return (f'{r["error"]}。排到后自动分给你：过一会儿再调 kb_account_claim（同样参数）领取；排队最长 30 分钟，'
+                    '超时就改条件，或用 kb_issue 记下「缺测试账号」继续。')
+        return f'申请不到测试账号：{r["error"]}（项目 {proj}，环境 {cond["环境"]}' + (f'，标签 {"、".join(tags)}' if tags else '') + \
+            '）。用 kb_issue 记下「缺测试账号」继续，不要等待。'
+    lines = []
+    for h in r['holds']:
+        t = test_account_get(h['资源'].split(':', 1)[1]) or {}
+        sid, _, fld = (t.get('secret') or '').partition('/')
+        lines.append(f'- {t.get("name")}（{t.get("env")}）账号 {t.get("account") or "—"}；'
+                     + (f'密码用 kb_base_secret 取：id={sid if not sid.startswith("TA") else t["id"]} field={fld}' if sid else '没有登记密码'))
+        log(d, '申请测试账号', f'{t.get("name")}（{t.get("env")}）')
+    return '已占用测试账号（用完 kb_account_release；空闲 15 分钟或占满 60 分钟自动释放）：\n' + '\n'.join(lines)
+
+
+def account_release(period, ids=None):
+    from kblib.core import resources
+    from kblib.core import db as _kdb
+    name = period_dir(period).name
+    n = []
+    for h in _kdb.rows('holds', {'period': name}):
+        tid = h['resource'].split(':', 1)[1]
+        if h['resource'].startswith('acct:') and (not ids or tid in ids):
+            resources.release(h['resource'], session=h['session'], by='AI')
+            n.append(tid)
+    return f'已释放 {len(n)} 个测试账号' if n else '这一期没有占着的测试账号'

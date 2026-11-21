@@ -2,7 +2,7 @@
 // 公共 DOM：对话框、toast、交给管家（按钮 + 面板）。页面上没有就自动注入（模板不用自己写）
 (function ensureDom(){
   if(!document.body){console.error('core.js 要放在 <body> 末尾加载');return}
-  const t=document.createElement('template');t.innerHTML=`<dialog id="dlg"><div class="hd"><b id="dlgT"></b><button onclick="dlg.close()">关闭</button></div><div class="bd" id="dlgB"></div></dialog>
+  const t=document.createElement('template');t.innerHTML=`<div id="kbBusy" class="kb-busy" hidden></div><div id="kbBanner" class="kb-banner" role="alert" hidden></div><dialog id="dlg"><div class="hd"><b id="dlgT"></b><button onclick="dlg.close()">关闭</button></div><div class="bd" id="dlgB"></div></dialog>
 <div class="toast" id="toast"></div>
 <button id="askFab" title="交给管家：贴需求、日志、Bug 链接、账号，或拖文件进来；它归好档并接着推动">🤖 交给管家</button>
 <section id="askPanel" hidden><div class="hd"><b>🤖 交给管家</b><span class="mut small" id="askSt"></span><a class="small" id="askNewP" title="手动建一期 / 事项">手动新建</a><a class="small" id="askClr" style="margin-left:0">清空</a><button id="askX" title="收起">✕</button></div>
@@ -45,7 +45,32 @@ function kbAsk(msg,o={}){return new Promise(done=>{
   if(i)i.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();fin()}};
   d.onclose=()=>done(val);d.showModal();if(i){i.focus();i.select()}else d.querySelector('#kbAskOk').focus()})}
 const kbConfirm=(msg,o)=>kbAsk(msg,o), kbPrompt=(msg,def,o)=>kbAsk(msg,{...o,input:true,def});
-async function api(u,opt){const r=await fetch(u,opt);const j=await r.json();if(r.status===401&&j.login){location.href='/login';throw new Error('要先登录')}if(!r.ok){const e=new Error(j.error||r.status);e.need=j.need;throw e}return j}
+// 统一请求（REQ-031）：超过 300ms 顶部出加载条；401 跳登录；待改密码跳改密码；403 / 冲突 / 5xx / 断网在页面顶部提示 error 原文，不整页崩溃。
+// 出错照旧抛 Error（e.status 状态码、e.need 要补的信息），调用方自己 toast 的不受影响
+let kbBusyN=0,kbBusyT=null;
+function kbBusy(on){kbBusyN=Math.max(0,kbBusyN+(on?1:-1));const b=document.getElementById('kbBusy');
+  if(kbBusyN&&!kbBusyT)kbBusyT=setTimeout(()=>{kbBusyT=null;const x=document.getElementById('kbBusy');if(x&&kbBusyN)x.hidden=false},300);
+  if(!kbBusyN){clearTimeout(kbBusyT);kbBusyT=null;if(b)b.hidden=true}}
+function kbBanner(msg,o={}){let b=document.getElementById('kbBanner');if(!b)return;
+  if(!msg){if(!o.kind||b.dataset.kind===o.kind){b.hidden=true;b.dataset.kind=''}return}
+  if(b.dataset.kind==='offline'&&o.kind!=='offline')return;   // 断网提示优先，别被别的报错盖掉
+  b.dataset.kind=o.kind||'err';b.className='kb-banner '+(o.kind||'err');
+  b.innerHTML=`<span>${esc(msg)}</span>${o.kind==='offline'?'':'<button title="关闭">✕</button>'}`;b.hidden=false;
+  const x=b.querySelector('button');if(x)x.onclick=()=>{b.hidden=true;b.dataset.kind=''};
+  clearTimeout(b._t);if(o.kind!=='offline')b._t=setTimeout(()=>{if(b.dataset.kind!=='offline'){b.hidden=true;b.dataset.kind=''}},o.ms||10000)}
+async function api(u,opt){
+  let r,j;kbBusy(true);
+  try{r=await fetch(u,opt)}catch(err){kbBusy(false);kbBanner('连不上知识库：检查网络或知识库是否还在运行');const e=new Error('连不上知识库');e.status=0;throw e}
+  try{j=await r.json()}catch(_){j={error:r.ok?'':`服务返回 ${r.status}`}}finally{kbBusy(false)}
+  if(r.status===401&&j.login){location.href='/login';throw new Error('要先登录')}
+  if(r.status===403&&j.mustChangePassword){location.href='/login#change';throw new Error(j.error||'先修改初始密码')}
+  if(!r.ok){const e=new Error(j.error||r.status);e.need=j.need;e.status=r.status;
+    if(r.status===403)kbBanner('没有权限：'+(j.error||'这个操作'));
+    else if(r.status===409&&!j.need)kbBanner(j.error||'有冲突，刷新后再试');
+    else if(r.status>=500)kbBanner(j.error||'服务出错了（'+r.status+'）');
+    throw e}
+  if(j&&j.task&&j.task.id&&typeof platTaskNotify==='function')platTaskNotify(j.task);   // 开工 / 修复 / 运行到手机 返回了任务（REQ-013）
+  return j}
 const post=(u,b)=>api(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
 // 拖放进来的文件：文件夹展开成里面的文件（名字带相对路径，如 logs/anr/anr_1.txt），跳过 .DS_Store 和隐藏文件；
 // 太多或太大返回 null 并提示压成 zip。直接用 dataTransfer.files 的话，文件夹是个读不了的 File，上传会报 Failed to fetch。

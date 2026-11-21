@@ -1,6 +1,7 @@
 // ==== 全栈：各端仓库、方案、拍板、开工、验收
 // ---------------- 全栈：各端仓库 → AI 出影响分析和接口契约 → 你拍板（拍板 1）
-let stackRepos=null;
+let stackRepos=null;   // 仓库下拉的候选；打开期页面、基础信息保存后清空重取，下拉获得焦点时也后台重取一次（新登记的仓库不用刷新整页）
+async function stackReposFresh(){try{const r=(await api('/api/stack/repos')).items,ch=JSON.stringify(r)!==JSON.stringify(stackRepos);stackRepos=r;return ch}catch(_){return false}}
 async function stackBox(name){
   const box=$('#stackBox');if(!box)return;
   let v;try{v=await api('/api/stack?name='+enc(name))}catch(e){box.innerHTML=`<span class="mut small">${esc(e.message)}</span>`;box._html=null;return}
@@ -177,6 +178,9 @@ async function stackBox(name){
         toast((await post('/api/stack/gitinit',{path:f['路径']})).msg);repo=f['路径']}}}catch(_){}
     try{toast((await post('/api/stack/end',{period:name,end,repo})).msg);stackRepos=null}catch(e){toast(e.message)}stackBox(name)};
   box.querySelectorAll('[data-send]').forEach(sel=>sel.onchange=()=>setEnd(sel.dataset.send,sel.value));
+  const reOpts=(sel,r)=>sel.onfocus=async()=>{if(sel._fresh)return;sel._fresh=1;const val=sel.value;   // 获得焦点时重取仓库列表，有变化就就地换选项
+    if(await stackReposFresh()&&document.contains(sel)){sel.innerHTML=opts(r());if([...sel.options].some(o=>o.value===val))sel.value=val}};
+  box.querySelectorAll('[data-send]').forEach(sel=>reOpts(sel,()=>v['各端'].find(x=>x['端']===sel.dataset.send)||{端:sel.dataset.send}));
   box.querySelectorAll('[data-sdel]').forEach(b=>b.onclick=async()=>{const e=b.dataset.sdel;if(!await kbConfirm(`这一期不涉及 ${e}？会从各端里移除（仓库本身不受影响）。`))return;
     try{toast((await post('/api/stack/end',{period:name,end:e,repo:''})).msg)}catch(x){toast(x.message)}stackBox(name)});
   let addEnd='';
@@ -188,7 +192,8 @@ async function stackBox(name){
     if(dup&&dup['仓库']){toast(`已经有 ${dup['端']} 了`);addSel.value='';return}
     addEnd=dup?dup['端']:e;$('#stAddR').innerHTML=opts({端:addEnd});addRw.hidden=false;
     if(addSel.value==='__other'){const o=document.createElement('option');o.value=addEnd;o.textContent=addEnd;addSel.insertBefore(o,addSel.lastElementChild);addSel.value=addEnd}};
-  const addR=$('#stAddR');if(addR)addR.onchange=()=>{if(addR.value==='__other'&&addEnd)setEnd(addEnd,'__other')};  // 选「填写地址」直接弹框，填完就加
+  const addR=$('#stAddR');if(addR)reOpts(addR,()=>({端:addEnd}));
+  if(addR)addR.onchange=()=>{if(addR.value==='__other'&&addEnd)setEnd(addEnd,'__other')};  // 选「填写地址」直接弹框，填完就加
   if($('#stAddX'))$('#stAddX').onclick=()=>{addSel.value='';addRw.hidden=true};
   if($('#stAddGo'))$('#stAddGo').onclick=()=>{const r=$('#stAddR').value;if(!addEnd)return toast('先选平台');if(!r||r==='__pick')return toast(`给 ${addEnd} 选一个仓库`);setEnd(addEnd,r)};
   box.querySelectorAll('[data-sbr]').forEach(i=>i.onfocus=async()=>{if(i.dataset.loaded)return;i.dataset.loaded='1';

@@ -143,3 +143,37 @@ def bug_test(sid=''):
 
 def zentao_test():
     return bug_test()
+
+
+def user_bug_test(user):
+    """用这个人在「我的 → 平台账号」填的账号 + 个人机密里的密码登录第一个启用的缺陷平台（REQ-006）。返回 (成功, 说明)。"""
+    from kblib.core import users as _u
+    bs = _bsrc()
+    prof = _u.profile_get(user)
+    acc = prof.get('平台账号') or {}
+    srcs = [c for c in bug_sources() if c.get('启用') and c.get('类型') != '崩溃']
+    if not acc:
+        return False, '还没有填 Bug 平台账号'
+    if not srcs:
+        return False, '知识库还没接入 Bug 平台：管理员在「🐞 Bug → 平台」接入'
+    for c in srcs:
+        a = acc.get(c['ID']) or acc.get(c.get('适配器', ''))
+        if not a:
+            continue
+        e = dict(_src_entry(c))
+        keep = [f for f in e.get('字段') or [] if f['名'] not in ('用户名', '账号', '帐号', '密码')]
+        pw = _u.personal_secret_get(user, f'平台/{c["ID"]}') or _u.personal_secret_get(user, f'平台/{c.get("适配器", "")}')
+        if not pw:
+            return False, f'{c["ID"]}：还没有填密码'
+        e['字段'] = keep + [{'名': '账号', '值': a}, {'名': '密码', '值': '', '机密': True}]
+        cred = bs.Cred(e, lambda f, pw=pw, e=e: pw if f == '密码' else base_secret(e['编号'], f, by=user, purpose='测试平台账号'))
+        try:
+            src = bs.ADAPTERS[c['适配器']](c, cred) if c.get('适配器') in bs.ADAPTERS else None
+            if src is None:
+                return False, f'{c["ID"]} 的适配器不支持按人测试'
+            return True, _src_call(src.test)
+        except KBError as ex:
+            return False, str(ex)
+        except Exception as ex:
+            return False, f'{type(ex).__name__}: {ex}'
+    return False, '填的账号对不上已接入的平台（按平台 ID 或类型填，如 禅道）'

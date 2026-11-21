@@ -1,6 +1,7 @@
 """接口 · Bug 平台：同步、分析、审核、修复、忽略、平台接入。每个接口一个函数，用 @get / @post 注册（见 webapp/router.py）。"""
 from webapp.router import get, post  # noqa: F401
 from webapp.shared import *  # noqa: F401,F403
+from kblib.core import queue as _q
 
 
 @get('/api/zentao/analysis')
@@ -15,7 +16,15 @@ def _get_api_zentao_sessions(self, u, q):
 
 @get('/api/zentao')
 def _get_api_zentao(self, u, q):
-    return self._guard(lambda: api_zentao(q.get('period', ''), q.get('owner', '')))
+    def run():
+        single = bool(self.ident.get('single'))
+        mine = q.get('mine', '0' if single else '1') == '1'          # 团队模式默认只看所属人是自己的（REQ-006）
+        me = self.ident.get('user', '')
+        v = api_zentao(q.get('period', ''), q.get('owner', ''), me if mine else '', q.get('project') or self.ident.get('project', ''))
+        v['mine'] = mine
+        v['needAccount'] = not single and not (kb.profile_get(me).get('平台账号'))
+        return v
+    return self._guard(run)
 
 
 @post('/api/zentao/sync')
@@ -31,8 +40,15 @@ def _post_api_zentao_sync(self, u, n, body):
 @post('/api/zentao/analyze', page_only=True)
 def _post_api_zentao_analyze(self, u, n, body):
     force = bool(body.get('force'))          # 网页上确认过「会移出修复队列」才带
-    return self._guard(lambda: {'msg': kb.bug_analyze_in(body.get('ids') or [], body['repo'], force=force) if body.get('repo')
-                                else kb.bug_analyze(body.get('ids') or [], force=force)})
+
+    def local():
+        return (kb.bug_analyze_in(body.get('ids') or [], body['repo'], force=force) if body.get('repo')
+                else kb.bug_analyze(body.get('ids') or [], force=force))
+
+    def run():
+        r = _q.launch('Bug分析', body.get('period', ''), local, check={'kind': 'bug'}, payload={'Bug': body.get('ids') or []})
+        return {'msg': _q.launch_msg(r), 'task': r['task']}
+    return self._guard(run)
 
 
 @get('/api/zentao/fixblock')
@@ -52,7 +68,11 @@ def _post_api_zentao_fixblock_commit(self, u, n, body):
 
 @post('/api/zentao/fix', page_only=True)
 def _post_api_zentao_fix(self, u, n, body):
-    return self._guard(lambda: {'msg': kb.bug_fix(body.get('ids') or [], note=body.get('note'))})
+    def run():
+        r = _q.launch('Bug修复', body.get('period', ''), lambda: kb.bug_fix(body.get('ids') or [], note=body.get('note')),
+                      check={'kind': 'bug'}, payload={'Bug': body.get('ids') or []})
+        return {'msg': _q.launch_msg(r), 'task': r['task']}
+    return self._guard(run)
 
 
 @post('/api/zentao/fixed', page_only=True)

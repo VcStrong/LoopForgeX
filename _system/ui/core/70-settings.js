@@ -83,7 +83,7 @@ async function settingsPage(){
   let pl=null;try{pl=await api('/api/pool')}catch(_){}
   let up=null;try{up=await api('/api/update')}catch(_){}
   const sws=sw?sw['设置']:null;
-  app.innerHTML=`<h1>⚙ 设置</h1>
+  app.innerHTML=`<h1>⚙ 设置</h1><div id="platSet"></div>
     ${(()=>{const L=uiList.length?uiList:[{名称:'经典',说明:'',目录:'classic'}],cur=uiSaved||'经典',sel=setPrevTpl||cur,dir=(uiList.find(x=>x['名称']===sel)||{})['目录'];
       return `<h2>界面</h2><div class="bcard"><div class="small mut" style="margin-bottom:8px">同一份数据，不同的摆法；随时能换，也随时能回「经典总览」。下面是示例数据的预览，可以切换阶段看它怎么变。</div>
         <div class="row" style="gap:6px;flex-wrap:wrap">${L.map(x=>`<button class="${x.名称===sel?'pri':''}" data-uit="${esc(x.名称)}" title="${esc(x.说明)}">${esc(x.名称)}${x.名称===cur?' ✓':''}</button>`).join('')}</div>
@@ -179,6 +179,7 @@ async function settingsPage(){
     <p class="mut">插件不属于知识库本身（如公司定制的多语言拉取），挂载后在选定的时机自动运行：能挂的时机有 ${d.timings.filter(t=>t['插件']).map(t=>`<b>${esc(t['名称'])}</b>`).join('、')}，在上面「⏱ 时机」表里勾选，或点插件的「时机与配置」。
     把插件文件夹（含 <code>plugin.json</code>）放进 <code>${esc(d.pluginDir.replace(/^\/Users\/[^/]+/,'~'))}</code>，或添加其他目录；运行失败会记成「需要你处理的问题」，不会拦住开发。详见 <a href="#/d/使用说明">使用说明</a>。</p>
     <div class="bgrid">${d.plugins.map(pcard).join('')||'<div class="mut">还没有插件</div>'}</div>`;
+  platSettingsBox();
   const byId=id=>d.flows.find(f=>f.id===id),eById=id=>d.engines.find(e=>e.id===id),pById=id=>d.plugins.find(p=>p.id===id);
   if($('#rtSave'))$('#rtSave').onclick=async()=>{
     try{toast((await post('/api/team',{on:$('#rtOn').checked,tier:(app.querySelector('[name=rtTier]:checked')||{}).value})).msg)}catch(e){return toast(e.message)}

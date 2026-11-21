@@ -27,7 +27,52 @@ def with_sess_env(env, fn, *a, **kw):
         return fn(*a, **kw)
     finally:
         _SESS_ENV.reset(tok)
-_flows = lazy('kblib.ai.flows')      # 上层模块：用到时才 import（不形成循环）
+_flows = lazy('kblib.ai.flows')
+
+# 当前用户上下文（REQ-003 REQ-005 REQ-022）：网页请求、/mcp、执行机回调、管家各自设置；身份解析集中在 webapp/server.py 的 _identity。
+#   {'user': 用户名, 'project': 当前项目, 'session': 会话 / 任务编号, 'via': 网页 | AI | 管家 | 终端 | 执行机, 'engine': 引擎名}
+_USER_CTX = contextvars.ContextVar('kb_user_ctx', default=None)
+
+
+def current_ctx():
+    return _USER_CTX.get() or {}
+
+
+def current_user():
+    return current_ctx().get('user', '')
+
+
+def current_project():
+    return current_ctx().get('project', '')
+
+
+def with_user(ctx, fn, *a, **kw):
+    tok = _USER_CTX.set(dict(ctx or {}))
+    try:
+        return fn(*a, **kw)
+    finally:
+        _USER_CTX.reset(tok)
+
+
+def set_user_ctx(ctx):
+    """线程入口（请求处理器）直接设置；返回 token 供 reset。"""
+    return _USER_CTX.set(dict(ctx or {}))
+
+
+def actor_label(ctx=None):
+    """记录里的操作人（REQ-004）：网页「甲（网页）」、AI「AI·claude（发起人 甲）」、管家「管家」。没有上下文返回空串。"""
+    c = ctx if ctx is not None else current_ctx()
+    via, u = c.get('via', ''), c.get('user', '')
+    if via == '管家':
+        return '管家'
+    if via == 'AI':
+        return f'AI·{c.get("engine") or "引擎"}（发起人 {u or "未知"}）'
+    if via == '执行机':
+        return f'执行机 {c.get("runner", "")}'.strip()
+    if u:
+        return f'{u}（{via or "网页"}）'
+    return ''
+      # 上层模块：用到时才 import（不形成循环）
 
 
 #!/usr/bin/env python3
@@ -160,20 +205,85 @@ def _merge_team(s, t):
     return s
 
 
-def load_settings():
+class Snap(dict):
+    """带「读出时快照」的字典：保存时只把改过的顶层键合并进库里的最新值，两个请求同时改不同字段都保留（REQ-008）。"""
+    __slots__ = ('_base',)
+
+
+def snap(d):
+    o = Snap(d)
+    o._base = json.loads(json.dumps(d, ensure_ascii=False, default=str))
+    return o
+
+
+def snap_diff(d):
+    """(改过或新增的键, 删掉的键)。不是 Snap 的字典当作整份替换。"""
+    base = getattr(d, '_base', None)
+    if base is None:
+        return list(d), None
+    cur = json.loads(json.dumps(dict(d), ensure_ascii=False, default=str))
+    changed = [k for k in cur if k not in base or base[k] != cur[k]]
+    removed = [k for k in base if k not in cur]
+    return changed, removed
+
+
+def _settings_raw():
+    """设置存在数据库（kv「设置」）；设置.json 是导出视图。有人直接改了文件（比库里新）就以文件为准导入一次。"""
+    from kblib.core import db
+    s, ver = db.kv_get('设置', None)
     try:
-        s = json.loads(read_text(SETTINGS_FILE)) if SETTINGS_FILE.exists() else {}
-    except ValueError:
-        s = {}
-    if not isinstance(s, dict):
-        s = {}
-    _merge_team(s, team_defaults())
-    s.setdefault('默认流程', _flows.DEFAULT_FLOW)
-    s.setdefault('流程', {})       # id → 自定义流程，或对内置流程的修改
-    return s
+        fm = SETTINGS_FILE.stat().st_mtime if SETTINGS_FILE.exists() else 0
+    except OSError:
+        fm = 0
+    if s is None or (fm and fm > _settings_exported.get(str(SETTINGS_FILE), 0) + 1 and fm > _kv_updated()):
+        try:
+            f = json.loads(read_text(SETTINGS_FILE)) if SETTINGS_FILE.exists() else {}
+        except ValueError:
+            f = {}
+        if not isinstance(f, dict):
+            f = {}
+        if s is None or f != s:
+            db.kv_set('设置', f, by='设置.json')
+        _settings_exported[str(SETTINGS_FILE)] = fm
+        s = f
+    return s if isinstance(s, dict) else {}
+
+
+_settings_exported = {}
+
+
+def _kv_updated():
+    from kblib.core import db
+    r = db.q1('SELECT updated FROM kv WHERE k=?', ('设置',))
+    return (r[0] or 0) if r else 0
+
+
+def load_settings():
+    s = _settings_raw()
+    o = snap(s)
+    _merge_team(o, team_defaults())
+    o.setdefault('默认流程', _flows.DEFAULT_FLOW)
+    o.setdefault('流程', {})       # id → 自定义流程，或对内置流程的修改
+    return o
 
 
 def save_settings(s):
+    from kblib.core import db
+    changed, removed = snap_diff(s)
+    with db.tx():
+        cur = _settings_raw() if removed is not None else {}
+        out = dict(cur)
+        for k in changed:
+            out[k] = s[k]
+        for k in removed or []:
+            out.pop(k, None)
+        db.kv_set('设置', out, by=current_user() or '')
+    if isinstance(s, Snap):
+        s._base = json.loads(json.dumps(dict(s), ensure_ascii=False, default=str))
     tmp = SETTINGS_FILE.with_suffix('.tmp')
-    tmp.write_text(json.dumps(s, ensure_ascii=False, indent=1), 'utf-8')
+    tmp.write_text(json.dumps(out, ensure_ascii=False, indent=1), 'utf-8')
     tmp.replace(SETTINGS_FILE)
+    try:
+        _settings_exported[str(SETTINGS_FILE)] = SETTINGS_FILE.stat().st_mtime
+    except OSError:
+        pass

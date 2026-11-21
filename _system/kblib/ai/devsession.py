@@ -690,7 +690,23 @@ def session_flow(m):
     return period_flow(m)
 
 
-def _dev_env(name, branch, root):
+def _initiator(name, recorded=''):
+    """会话发起人：当前登录人（网页点的）> 这次会话记下的 > 期负责人。本机 stdio MCP 没有登录上下文，靠 KB_USER 知道是谁发起的
+    （私有基础信息归发起人，REQ-054）。"""
+    from kblib.core.common import current_ctx
+    c = current_ctx()
+    if c.get('via') and c.get('user'):
+        return c['user']
+    if recorded:
+        return recorded
+    try:
+        from kblib.core.periods import period_info
+        return period_info(name).get('负责人') or ''
+    except Exception:       # noqa: BLE001  拿不到就不带，stdio 退回本机用户
+        return ''
+
+
+def _dev_env(name, branch, root, initiator=None):
     """后台会话的环境：PATH 最前面是 adb 守卫（不往别的期占着的手机装包），再补上 adb 所在目录。
     网页服务由 launchd 启动，PATH 里没有 ~/.zshrc 加的 Android SDK，后台会话的 shell 也不读 .zshrc，
     不补的话会话里找不到 adb，手机插着也会报「没有设备」。"""
@@ -700,6 +716,9 @@ def _dev_env(name, branch, root):
         path.append(str(Path(adb).parent))
     env = {'PATH': os.pathsep.join(path + [os.environ.get('PATH', '')]), 'KB_ROOT': str(ROOT), 'KB_PERIOD': name,
            'KB_BRANCH': branch, 'KB_REPO': str(root)}
+    who = _initiator(name) if initiator is None else initiator
+    if who:
+        env['KB_USER'] = who
     sdk = Path(adb).parent.parent if adb and Path(adb).parent.name == 'platform-tools' else None
     if sdk and not os.environ.get('ANDROID_HOME'):
         env['ANDROID_HOME'] = env['ANDROID_SDK_ROOT'] = str(sdk)
@@ -720,7 +739,8 @@ def _dev_spawn(d, root, branch, prompt, resume_id='', **extra):
                    + '。不要去找 Android Studio 的多语言插件，也不要让用户在 AS 里拉：知识库的插件就是同一套逻辑。')
     typ = extra.get('类型', (m0.get('开发会话') or {}).get('类型', '') if resume_id else '')
     scene = {'跟进': '跟进', '复测': ''}.get(typ, '开发')
-    proc = engine_popen(eng, prompt, f'kb·{d.name}', logf, root, resume_id, dict(_dev_env(d.name, branch, root), KB_SESSION='dev'),
+    who = _initiator(d.name, (m0.get('开发会话') or {}).get('发起人', ''))
+    proc = engine_popen(eng, prompt, f'kb·{d.name}', logf, root, resume_id, dict(_dev_env(d.name, branch, root, who), KB_SESSION='dev'),
                         scene=scene, period=m0)
     _PROCS[d.name] = proc
     _sup.settle(d.name, 'dev')          # 又起了一轮（续跑、你发了消息、重新开始）：台账里等着的就算接上了
@@ -728,7 +748,8 @@ def _dev_spawn(d, root, branch, prompt, resume_id='', **extra):
     old = m.get('开发会话') or {}
     s = {'pid': proc.pid, '状态': '运行中', '开始时间': old.get('开始时间') if resume_id else now(), '本轮开始': now(),
          '仓库': str(root), '分支': branch, '日志': str(logf), '权限': eng['名称'], '备注': old.get('备注', ''),
-         '流程': old.get('流程', ''), '引擎': eng['id'], '类型': old.get('类型', ''), '范围': old.get('范围', ''), **extra}
+         '流程': old.get('流程', ''), '引擎': eng['id'], '类型': old.get('类型', ''), '范围': old.get('范围', ''),
+         **({'发起人': who} if who else {}), **extra}
     if scene:
         s['场景'] = scene
     # 自动推送判断「这次有没有新提交」用的起点：同一次会话的续跑 / 中断后接着做沿用，新的一次（开发、跟进）重新记
@@ -780,13 +801,18 @@ def _watch_dev(d, pid, proc=None, known=None):
 
 
 def dev_reattach():
-    """网页服务启动时接管还在跑的后台会话（服务重启过，原来盯着它的线程没了）。"""
+    """网页服务启动时接管还在跑的后台会话（服务重启过，原来盯着它的线程没了），再按任务表恢复本机任务的状态（REQ-013）。"""
     for name in period_names():
         d = period_dir(name)
         s = load_meta(d).get('开发会话') or {}
         if s.get('状态') == '运行中' and name not in _WATCH and _alive(s.get('pid', 0)):
             known = {int(k): v for k, v in (s.get('子进程') or {}).items()}
             threading.Thread(target=_watch_dev, args=(d, s['pid'], None, known), daemon=True).start()
+    try:
+        from kblib.core import queue as _queue
+        _queue.recover()
+    except Exception as e:  # noqa: BLE001 恢复失败不影响网页启动
+        print('任务表恢复出错：', repr(e), flush=True)
 
 
 def pull_rebase(root):

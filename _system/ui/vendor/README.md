@@ -1,4 +1,4 @@
-# 第三方库（文件预览用）
+# 第三方库（文件预览、图表用）
 
 放在仓库里、不走 CDN：服务器 / 内网部署可能不能上网。core 第一次用到时才加载（`loadVendor`，见 `ui/core/62-preview.js`），不拖慢首屏。
 许可证原文在 `licenses/`。升级：换掉对应文件、改下表版本号即可。
@@ -12,3 +12,4 @@
 | mammoth.min.js | [mammoth.js](https://github.com/mwilliamson/mammoth.js)（mammoth.browser.min.js） | 1.13.0 | BSD-2-Clause | Word（docx）转 HTML |
 | xlsx.full.min.js | [SheetJS CE](https://git.sheetjs.com/sheetjs/sheetjs)（cdn.sheetjs.com 官方包，npm 上的 0.18.5 有已知漏洞） | 0.20.3 | Apache-2.0 | Excel / csv 转表格 |
 | idiomorph.min.js | [idiomorph](https://github.com/bigskysoftware/idiomorph)（dist/idiomorph.min.js，htmx / Turbo 8 用的 DOM morph） | 0.8.0 | 0BSD | 局部刷新：期页面实时更新、全栈块重画时只改变了的节点，保住滚动、展开、焦点（morphHTML，见 ui/core/10-base.js） |
+| echarts.min.js | [Apache ECharts](https://github.com/apache/echarts)（npm echarts dist/echarts.min.js，sha512 校验过） | 6.1.0 | Apache-2.0 | 管理员「📊 总览」看板的趋势、占比、仪表图（只在打开看板时加载） |

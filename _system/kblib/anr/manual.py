@@ -132,9 +132,10 @@ def repo_choices():
         rid = load_meta(PERIODS / n).get('远程仓库')
         if rid:
             use.setdefault(rid, []).append(n)
+    from kblib.stack.plan import end_guess     # 用到时才 import（stack 是上层模块）
     for e in _pool.remote_entries():
         out.append({'路径': _pool.REMOTE + e['编号'], '名称': _pool.remote_label(e) + '　开工时自动分配副本',
-                    '端': [e['平台类型']] if e.get('平台类型') else [], '分支': e.get('基线分支', ''), '改动': 0, '在用': use.get(e['编号'], [])})
+                    '端': end_guess(e.get('平台类型')), '分支': e.get('基线分支', ''), '改动': 0, '在用': use.get(e['编号'], [])})
     return sorted(out, key=lambda x: (bool(x['在用']) or x['改动'] > 0, x['名称']))
 
 

@@ -21,7 +21,9 @@ async function route(h){
 }
 async function render(){
   const h=curHash();if(h!==render._h){render._h=h;if(app)app._pgKey=null}   // 换了页面：期页面下次整块写，不和别的页 morph
-  try{await route(h)}catch(e){if(app)app.innerHTML=`<p>出错：${esc(e.message)}</p><p><a href="#/">返回首页</a></p>`;else console.error(e)}
+  try{await route(h)}catch(e){   // 页面出错只在页面里提示（顶部也有提示条），不整页崩溃（REQ-031）
+    if(app)app.innerHTML=e.status===403?`<div class="kb-state"><b>没有权限</b><p class="mut">${esc(e.message)}</p><p><a href="#/">返回首页</a></p></div>`
+      :`<div class="kb-state"><b>出错了</b><p class="mut">${esc(e.message)}</p><p><button onclick="KB.render()">重试</button>　<a href="#/">返回首页</a></p></div>`;else console.error(e)}
   sideNav();
   if(KB.hooks.afterRender){try{KB.hooks.afterRender(h)}catch(e){console.error(e)}}
 }
@@ -33,6 +35,8 @@ function softRender(){if(!canRender()){pagePending=true;return}pagePending=false
   render().then(()=>{if(!(app&&app._morphed))scrollTo(0,y)})}   // morph 刷新时浏览器的滚动锚定已经保住位置，再 scrollTo 反而会错位；整块重写的才拉回
 function onEvt(ev){
   const h=decodeURIComponent(location.hash.slice(1)||'/'), p=curPeriod();
+  if(typeof adminOnEvt==='function')adminOnEvt(ev,h);   // 管理员总览：任务 / 执行机 / 告警 / 资源有变化就刷新（T002）
+  if(typeof platOnEvt==='function'&&platOnEvt(ev,h,p))return;   // 任务 / 执行机 / 资源事件（REQ-013 REQ-020）
   if(ev.kind==='dev'&&p===ev.period){if($('#pushBox')){pushBox(p);if($('#tkMsg'))talkBox(p)}else{devBox(p);talkBox(p);liveBox(p)}}
   if(ev.kind==='overview'&&p&&$('#tkMsg'))talkBox(p);
   else if(ev.kind==='page'&&p===ev.period)softRender();
@@ -40,11 +44,16 @@ function onEvt(ev){
   if(ev.kind==='overview'&&(h!=='/'||KB.hooks.nav))navRefresh();   // 经典总览自己会刷侧栏；模板的首页不一定，总是刷
   else if(ev.kind==='adds'){if(dlg.open&&$('#adList'))addList();else if(h==='/')softRender()}
 }
+let offT=null,offShown=false;
 function connectEvents(){
   const es=new EventSource('/api/events'),dot=()=>$('#live')||{};
-  es.onopen=()=>{const d=dot();d.className='live on';d.title='实时连接中：有变化会自动更新';emit({kind:'live',on:true})};
+  // 断开超过 10 秒顶部常驻「与知识库断开连接，正在重连」，连上后自动消失并刷新当前页（REQ-031）
+  es.onopen=()=>{const d=dot();d.className='live on';d.title='实时连接中：有变化会自动更新';clearTimeout(offT);offT=null;
+    if(offShown){offShown=false;kbBanner('',{kind:'offline'});softRender();navRefresh()}emit({kind:'live',on:true})};
   es.onmessage=e=>{let ev;try{ev=JSON.parse(e.data)}catch(_){return}try{onEvt(ev)}catch(x){console.error(x)}emit(ev)};
-  es.onerror=()=>{const d=dot();d.className='live';d.title='实时连接断开，正在重连…';emit({kind:'live',on:false})};   // EventSource 会自动重连
+  es.onerror=()=>{const d=dot();d.className='live';d.title='实时连接断开，正在重连…';emit({kind:'live',on:false});   // EventSource 会自动重连
+    if(!offT&&!offShown)offT=setTimeout(()=>{offT=null;offShown=true;kbBanner('与知识库断开连接，正在重连…',{kind:'offline'})},10000);
+    if(es.readyState===2)setTimeout(connectEvents,3000)};   // 401 等让浏览器放弃重连时自己再连
 }
 // 刚才因为在输入 / 弹窗开着而推迟的刷新，空下来再补上
 function startLate(){
@@ -111,7 +120,7 @@ const KB={
     if($('#sf'))$('#sf').onsubmit=e=>{e.preventDefault();const q=$('#q').value.trim();if(q)location.hash='#/s/'+enc(q+'\u0001'+($('#scope')?$('#scope').value:'all'))};
     if($('#addBtn'))$('#addBtn').onclick=()=>askOpen(true);   // 「＋ 添加」= 交给管家（新建一期 / 事项在总览和侧栏里）
     window.addEventListener('hashchange',render);render();navRefresh();
-    connectEvents();startLate();engInit();loadVendor('idiomorph').catch(()=>{});   // 局部刷新（morphHTML）用
+    connectEvents();startLate();if(typeof platStart==='function')platStart();engInit();loadVendor('idiomorph').catch(()=>{});   // 局部刷新（morphHTML）用
     // Markdown 渲染库（marked + DOMPurify）启动后再拉，不拖慢首屏；拉到后当前页重画一次，换成完整渲染
     setTimeout(()=>loadVendor('marked','purify').then(()=>{mdEngine();softRender()}).catch(()=>{}),300);
   }

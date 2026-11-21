@@ -57,6 +57,20 @@ def end_name(end):
     return e
 
 
+def end_guess(text):
+    """自由文本的平台类型（基础信息里手填的，如「其他（Python + Web）」「Android 客户端」）→ 认出的端列表，认不出返回 []，不抛错。
+    合法端名原样归一；否则按常用平台名在文本里出现找（含 Android → Android），都没有就留空。"""
+    t = (text or '').strip()
+    if not t:
+        return []
+    try:
+        return [end_name(t)]
+    except KBError:
+        pass
+    low = t.lower()
+    return [x for x in ENDS if x.lower() in low]
+
+
 def end_key(end):
     """端的排序：常用平台按 ENDS 的顺序，自定义端排在后面（按名字）。"""
     return (ENDS.index(end), '') if end in ENDS else (len(ENDS), end or '')
@@ -117,7 +131,7 @@ def stack_repos():
         out.append({'路径': pth, '名称': nm, '端': detect_ends(pth), '版本库': kind, '分支': '' if kind == '本地' else hosts.branch_of(pth, kind)})
     out = [x for x in out if not _pool.copy_of(x['路径'])]      # 池里的副本不单列，按基础信息的远程仓库条目列
     for e in _pool.remote_entries():
-        out.append({'路径': _pool.REMOTE + e['编号'], '名称': _pool.remote_label(e), '端': [end_name(e['平台类型'])] if e.get('平台类型') else [],
+        out.append({'路径': _pool.REMOTE + e['编号'], '名称': _pool.remote_label(e), '端': end_guess(e.get('平台类型')),
                     '版本库': 'git', '分支': e.get('基线分支', ''), '远程仓库': e['编号']})
     return sorted(out, key=lambda x: (end_key(x['端'][0]) if x['端'] else (99, ''), x['名称']))
 
@@ -318,6 +332,7 @@ def repo_settings():
     for nm, r in _pool.pool_repos().items():     # 远程仓库：各份副本共用一套（按第 1 份记）；运行模块 / 变体在基础信息条目里填
         p = repo_pref(r['路径'])
         out.append({'路径': r['路径'], '名称': '🌐 ' + ('、'.join(names.get(r['克隆地址']) or []) or nm), '分支': '', '远程': False, '远程仓库': nm,
+                    '有条目': bool(names.get(r['克隆地址'])), '状态': r.get('状态', ''),
                     '识别端': _detect_ends_files(r['路径']) if Path(r['路径']).is_dir() else [],
                     '端': p.get('端', ''), '默认流程': p.get('默认流程', ''), '代码更新': p.get('代码更新', ''),
                     '运行模块': '', '运行变体': '', '运行参数': p.get('运行参数', '')})

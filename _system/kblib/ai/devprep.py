@@ -10,7 +10,7 @@ from kblib.core.common import CATS, DEV_OK, HIST, KBError, KBNeed, NOTE_SUFFIX, 
 from kblib.core.periods import load_meta, log, period_dir, save_meta
 from kblib.core.notes import BRANCH_RE, NOTES_FILE, URL_RE, note_md, note_title, notes_of
 from kblib.core.repos import load_repos
-from kblib.core.baseinfo import BASE_MD, base_load
+from kblib.core.baseinfo import BASE_MD, base_load, base_visible
 from kblib.infra import pool as _pool
 from kblib.ai.flows import flow_docs, flow_for, flow_text, flows, get_flow
 from kblib import lazy
@@ -96,7 +96,7 @@ def repo_candidates(d, m):
                                + [f'{x.get("标题", "")} {x.get("编号", "")}' for x in m.get('外部来源') or []]
                                + [note_title(n) for n in notes_of(d, m=m)]))
     try:
-        bes = base_load()['条目']
+        bes = base_visible()              # 私有基础信息只给本人发起的会话
     except Exception:
         bes = []
     for e in bes:
