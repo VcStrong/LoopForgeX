@@ -37,6 +37,11 @@
 /tools/*
 !/tools/make-public.py
 !/tools/check-arch.py
+!/docs/
+/docs/*
+!/docs/README.md
+!/docs/README.zh-CN.md
+!/docs/assets/
 __pycache__/
 
 # Docker 部署：本地密码（.env）不进仓库

@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from kblib.core.common import DEV_OK, KBError, ROOT, now, sess_env
 from kblib.core.periods import load_meta, log, period_dir, period_names, save_meta, set_status
-from kblib.ai.flows import flow_done, flow_for, flow_text, get_flow, period_flow
+from kblib.ai.flows import cmd_warning, flow_done, flow_for, flow_text, get_flow, period_flow
 from kblib.ai.engines import engine_bin, engine_popen, period_engine
 from kblib.ai import team
 from kblib.ai import supervise as _sup
@@ -948,6 +948,9 @@ def dev_start(period, note='', repo='', branch='', keep_branch=False):
     proc = _dev_spawn(d, root, branch, prompt, '', 续跑次数=0)
     _pool.pool_release(root, d.name)              # 会话起来了，占用按会话算
     log(d, '开始开发', f'后台会话 pid {proc.pid}（{eng["名称"]} · {f["名称"]} · {root.name} · {branch}）' + (f'；{note}' if note else ''))
+    warn = cmd_warning(f, eng)
+    if warn:                                        # 只提示、不拦截：换到非 Claude 引擎时这套流程的 /xxx 可能不认
+        log(d, '开发流程', '⚠ ' + warn)
     return (f'已开始开发「{d.name}」：后台会话 pid {proc.pid}，{eng["名称"]}，流程「{f["名称"]}」，仓库 {root.name}（{branch}）'
             + (''.join(f'\n{x}' for x in steps) if steps else '') + (f'\n\n{plug}' if plug else ''))
 

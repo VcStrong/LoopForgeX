@@ -19,7 +19,7 @@ from kblib import lazy
 _devsession = lazy('kblib.ai.devsession')      # 上层模块：用到时才 import（不形成循环）
 
 
-# 后台会话用哪个编程 AI 跑：Claude Code / Codex CLI / Hermes Agent，或自定义命令。
+# 后台会话用哪个编程 AI 跑：Claude Code / Codex CLI / Hermes Agent / WorkBuddy（CodeBuddy Code），或自定义命令。
 # 开发会话按这一期选的引擎（不选用默认），模糊添加、来源更新、生成流程用默认引擎。
 # 引擎要能无人值守运行、并接入知识库 MCP（kb_ask 等工具），否则没法在网页上确认。
 # 内置预设只用各引擎的常规权限模式，不默认跳过审批或沙箱；要放宽由用户在设置里自己改参数。
@@ -39,7 +39,7 @@ ENGINE_FIELDS = [
      '子agent 只适合支持 Claude 同款 Agent 工具的引擎；关 = 这个引擎的会话不挂角色团'),
     ('专家目录', '角色套件专家目录（可空）', 'text',
      '在「⚙ 设置 → 角色团」给这个引擎装适配时，每个专家生成一个 <目录>/<角色>/SKILL.md；'
-     '空 = 按命令名：codex → ~/.codex/skills、gemini → ~/.gemini/skills、hermes → ~/.hermes/skills'),
+     '空 = 按命令名：codex → ~/.codex/skills、gemini → ~/.gemini/skills、hermes → ~/.hermes/skills、codebuddy → ~/.codebuddy/skills'),
 ]
 BUILTIN_ENGINES = {
     'claude': {
@@ -68,8 +68,22 @@ BUILTIN_ENGINES = {
         '接入配置': '在 ~/.hermes/config.yaml 里加上（已有 mcp_servers: 就只加 kb 这一段），然后重启 hermes：\n'
                     'mcp_servers:\n  kb:\n    command: "{python}"\n    args: ["{kbpy}", "serve"]\n    timeout: 900',
     },
+    'codebuddy': {
+        '名称': 'WorkBuddy', '说明': '腾讯 WorkBuddy 自带的 CodeBuddy Code（codebuddy -p 无人值守，auto 权限模式，模型 Hy4 flash）。'
+                                   '没单独装 codebuddy 时自动用 WorkBuddy.app 里带的；建议单独装 npm i -g @tencent-ai/codebuddy-code 并在终端运行 codebuddy 用 /login 登录一次（自带的那份登录不了）。'
+                                   '换模型改启动参数里 --model 后面那一行（如 hy4std、deepseek-v4-pro、glm-5.3）',
+        '命令': 'codebuddy',
+        '启动参数': ['-p', '{提示词}', '--model', 'hy4flash', '--permission-mode', 'auto', '--output-format', 'stream-json'],
+        '续跑参数': ['-p', '{提示词}', '--model', 'hy4flash', '--permission-mode', 'auto', '--output-format', 'stream-json',
+                    '--resume', '{会话ID}'],
+        '输出格式': 'Claude stream-json', '接入命令': 'codebuddy mcp add kb -s user -- {kb}', '接入配置': '',
+    },
 }
 DEFAULT_ENGINE = 'claude'
+# WorkBuddy 安装包自带的 CodeBuddy Code：只带精简包，要设这个环境变量才能跑（不设会报找不到 ../dist/codebuddy）
+WORKBUDDY_CLI = ('/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy',
+                 str(Path.home() / 'Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy'))
+WORKBUDDY_ENV = {'CODEBUDDY_FORCE_LITE_WB_BUNDLE': '1'}
 
 
 def _kb_cmd():
@@ -103,9 +117,16 @@ def engine_bin(e):
     if not found and c and '/' not in c:
         found = next((x for x in (f'/opt/homebrew/bin/{c}', f'/usr/local/bin/{c}', str(Path.home() / '.local/bin' / c),
                                   str(Path.home() / '.npm-global/bin' / c)) if Path(x).exists()), '')
+    if not found and c == 'codebuddy':
+        found = next((x for x in WORKBUDDY_CLI if os.access(x, os.X_OK)), '')
     if not found:
         raise KBError(f'找不到 {e["名称"]} 的命令「{e.get("命令")}」：请先安装，或在「⚙ 设置 · AI 引擎」里填可执行文件的绝对路径')
     return found
+
+
+def engine_env(cmd0):
+    """运行引擎要额外带的环境变量（按实际可执行文件判断）。"""
+    return dict(WORKBUDDY_ENV) if 'WorkBuddy.app/' in str(cmd0) else {}
 
 
 def rules_text():
@@ -136,7 +157,7 @@ def engine_status(e):
     except KBError:
         return {'已安装': False, '版本': '', '已接入': None}
     try:
-        r = subprocess.run([b, '--version'], capture_output=True, text=True, timeout=15)
+        r = subprocess.run([b, '--version'], capture_output=True, text=True, timeout=15, env=dict(os.environ, **engine_env(b)))
         out = (r.stdout or r.stderr).strip()
         ver = out.splitlines()[0][:80] if out else ''
     except (OSError, subprocess.TimeoutExpired):
@@ -151,8 +172,11 @@ def engine_status(e):
         elif name == 'hermes':
             t = read_text(Path.home() / '.hermes' / 'config.yaml')
             linked = bool(re.search(r'^mcp_servers:\s*\n(?:[ \t].*\n)*?[ \t]+kb:', t + '\n', re.M))
-    except (OSError, ValueError):
-        linked = False if name in ('claude', 'codex', 'hermes') else None
+        elif name == 'codebuddy':
+            r = subprocess.run([b, 'mcp', 'get', 'kb'], capture_output=True, text=True, timeout=30, env=dict(os.environ, **engine_env(b)))
+            linked = r.returncode == 0 and 'not found' not in (r.stdout + r.stderr).lower()
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        linked = False if name in ('claude', 'codex', 'hermes', 'codebuddy') else None
     return {'已安装': True, '版本': ver, '已接入': linked}
 
 
@@ -166,7 +190,7 @@ def engine_link(eid):
     argv = shlex.split(e['接入命令'].replace('{kb}', f'"{py}" "{kbpy}" serve'))
     if argv and argv[0] == e.get('命令'):
         argv[0] = engine_bin(e)
-    r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=60, env=dict(os.environ, **engine_env(argv[0] if argv else '')))
     if r.returncode and 'already' not in (r.stderr + r.stdout).lower():
         raise KBError(f'接入失败：{(r.stderr or r.stdout).strip()[:500]}')
     return f'已把知识库接入 {e["名称"]}' + (f'：{r.stdout.strip()[:200]}' if r.stdout.strip() else '')
@@ -334,6 +358,7 @@ def engine_popen(e, prompt, title, logf, cwd, resume_id='', env_extra=None, extr
     home：会话私有 HOME（执行机上每个会话一个，只放该账号的登录态）；account：引擎账号编号（健康按账号记）。"""
     cmd = engine_cmd(e, prompt, title, resume_id, scene, period, auto, end) + list(extra_args or [])
     env = session_env(home, account)
+    env.update(engine_env(cmd[0]))
     env.update(env_extra or {})
     with open(logf, 'ab') as fh:
         fh.write((json.dumps({'type': 'kb.engine', 'engine': e['id'], 'format': e.get('输出格式')}, ensure_ascii=False)
@@ -348,10 +373,12 @@ def engine_popen(e, prompt, title, logf, cwd, resume_id='', env_extra=None, extr
 def engine_run(e, prompt, cwd, timeout=300, extra_args=None, title='kb·单次', scene='', period=None, env_extra=None, auto=False, end='',
                home='', account=''):
     """前台跑一次，返回 (退出码, 解析出的结果)；结果里带「角色」（这次派过的角色团专家，没派不带）。"""
+    cmd = engine_cmd(e, prompt, title, '', scene, period, auto, end) + list(extra_args or [])
     env = session_env(home, account)
+    env.update(engine_env(cmd[0]))
     env.update(env_extra or {})
     try:
-        r = subprocess.run(engine_cmd(e, prompt, title, '', scene, period, auto, end) + list(extra_args or []), cwd=cwd, capture_output=True, text=True, errors='replace', timeout=timeout,
+        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, errors='replace', timeout=timeout,
                            env=env, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         raise KBError(f'{e["名称"]} {timeout // 60} 分钟没有返回')
@@ -568,8 +595,10 @@ def engine_probe(eid, src='自检', account='', home=''):
     t0 = time.time()
     try:
         engine_bin(e)
+        cmd = engine_cmd(e, '这是连通性自检。不要调用任何工具，只回复两个字母：OK', 'kb·自检')
         env = session_env(home, account)
-        r = subprocess.run(engine_cmd(e, '这是连通性自检。不要调用任何工具，只回复两个字母：OK', 'kb·自检'), cwd=str(ROOT),
+        env.update(engine_env(cmd[0]))
+        r = subprocess.run(cmd, cwd=str(ROOT),
                            capture_output=True, text=True, errors='replace', timeout=120, env=env, stdin=subprocess.DEVNULL)
         res = _devsession._result_of(r.stdout, e.get('输出格式'))
         txt = (r.stdout or '') + '\n' + (r.stderr or '')
@@ -767,4 +796,7 @@ def flow_draft(path, use_ai=False):
             v = str(v)
         draft[k] = v
     draft['名称'] = draft.get('名称') or c['名称']
+    # 从命令 / 技能生成的流程要能被认出依赖 Claude 专有命令：AI 改写的步骤里没带 /xxx 时补一句到开发约定
+    if not any(c['名称'] in (draft.get(k) or '') for k in ('开发步骤', '续跑提示', '复测步骤', '开发约定', '需求变更提示')):
+        draft['开发约定'] = ((draft.get('开发约定') or '') + f'\n- 这套流程从 {c["名称"]} 命令/技能生成，开发时用 {c["名称"]} 推进').strip()
     return draft

@@ -21,7 +21,7 @@ from kblib.core.repos import REPO_ENDS, load_repos, repo_pref, save_repo_pref
 from kblib.ai.devsession import _alive, _dev_result, _notify, auto_decide_on
 from kblib.ai.engines import engine_popen, role_engine
 from kblib.ai import team
-from kblib.ai.flows import flow_for, flows, get_flow
+from kblib.ai.flows import cmd_warning, flow_for, flows, get_flow
 from kblib.plugins.run import base_repo_paths
 from kblib import lazy
 _stackdev = lazy('kblib.stack.dev')      # 上层模块：用到时才 import
@@ -905,7 +905,8 @@ def stack_get(name):
                          '版本库': kind, '远端': end_remote(v['仓库']) if kind == 'git' else '',
                          '流程': ('（远程：开工时在那台机器上匹配）' if not v.get('流程') else _flow_name(v['流程']) + '（远程）') if remote
                          else f['名称'] if f else '（没有匹配的流程：按仓库现有约定）',
-                         '流程id': v.get('流程', ''), '自动流程': auto['名称'] if auto else '没有匹配的流程：按仓库现有约定', '来自': v.get('来自', '')})
+                         '流程id': v.get('流程', ''), '自动流程': auto['名称'] if auto else '没有匹配的流程：按仓库现有约定', '来自': v.get('来自', ''),
+                         '命令告警': cmd_warning(f, role_engine('开发', m, e)) if f else ''})
         else:
             rows.append({'端': e, '待添加': True})
     return {'各端': rows, '常用平台': list(ENDS), '流程列表': [{'id': x['id'], '名称': x['名称']} for x in flows()],

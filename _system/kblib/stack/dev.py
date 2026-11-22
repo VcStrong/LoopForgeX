@@ -30,7 +30,7 @@ from kblib.ai.devsession import DEV_DIR, _NO_BG, _alive, _dev_env, _dev_result, 
 from kblib.ai.engines import engine_cmd, engine_popen, role_engine
 from kblib.ai import team
 from kblib.ai import supervise as _sup
-from kblib.ai.flows import flow_for, flow_text
+from kblib.ai.flows import cmd_warning, flow_for, flow_text
 from kblib.stack.plan import EMPTY_TREE, _sdir, period_ends, refresh_vcs, sort_ends
 from kblib import lazy
 _launch = lazy('kblib.stack.launch')     # 新产品：脚手架还在生成的端先不开工；验收后进入发布
@@ -321,6 +321,9 @@ def _start_dev(d, end):
     m['各端开发'][end].update(pid=proc.pid, 日志=str(logf), 引擎=eng['名称'])
     save_meta(d, m)
     log(d, '各端开发', f'{end} 开始{"按审查意见修改（第 " + str(x["轮次"]) + " 轮）" if issues is not None else "开发"}（{eng["名称"]}，{root}）')
+    warn = cmd_warning(flow_for(m, root) if not hosts.is_remote(root) else None, eng)
+    if warn:                                        # 只提示、不拦截：非 Claude 引擎没有这套流程写死的 /xxx 命令
+        log(d, '开发流程', f'{end}：⚠ {warn}')
 
 
 # ---------------------------------------------------------------- 审查会话（只读）

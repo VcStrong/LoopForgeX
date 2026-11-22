@@ -836,7 +836,8 @@ def team_restore(name=''):
 # 内联模式不依赖适配：提示词里给的完整角色说明路径优先用适配目录里的 SKILL.md，没有就用 ~/.claude/agents/<角色>.md。
 ADAPT_MANIFEST = '.kb-role-agents.json'
 ADAPT_MARK = '由知识库从角色套件生成'
-DEFAULT_ROLE_DIRS = {'codex': '~/.codex/skills', 'gemini': '~/.gemini/skills', 'hermes': '~/.hermes/skills'}
+DEFAULT_ROLE_DIRS = {'codex': '~/.codex/skills', 'gemini': '~/.gemini/skills', 'hermes': '~/.hermes/skills',
+                     'codebuddy': '~/.codebuddy/skills'}
 ADAPT_ROLES = EXPERTS                      # orchestrator / tech-scout 依赖 Claude 的 Agent / 定时任务，不生成
 
 

@@ -268,6 +268,32 @@ def flow_text(f, key, **v):
         return f.get(key) or ''
 
 
+# 流程写死的 Claude 专有 slash 命令：昨天多引擎适配只覆盖了角色团专家，技能库 skills/commands 仍是 Claude 专有。
+# 只用于提示（不拦截执行），所以「像命令的 /xxx」按命令算即可；路径里的 / 前面是单词字符或另一个 /，不会被匹配。
+_CMD_FIELDS = ('开发步骤', '续跑提示', '复测步骤', '开发约定', '需求变更提示')
+_SLASH = re.compile(r'(?<![\w/}])/([a-z][\w-]*+)(?![./])')
+
+
+def claude_cmds(f):
+    """这套流程依赖的 Claude 专有命令（上面几个文本字段里写死的 /xxx），按字母序去重。"""
+    if not f:
+        return []
+    out = set()
+    for k in _CMD_FIELDS:
+        out.update(_SLASH.findall(f.get(k) or ''))
+    return sorted(out)
+
+
+def cmd_warning(f, eng):
+    """流程靠 Claude 命令推进、而当前引擎不是 Claude 时，返回网页/期记录用的告警（含建议）；否则返回空串。"""
+    cmds = claude_cmds(f)
+    from kblib.ai.team import is_claude      # 局部 import：避免和 team 形成模块头部循环
+    if not cmds or is_claude(eng):
+        return ''
+    return (f'这套流程用的 /{"、/".join(cmds)} 是 Claude 专有命令/技能，{eng["名称"]} 没有，可能走不下去；'
+            f'建议：换回 Claude / 把步骤改成不依赖 slash command 的通用写法 / 给 {eng["名称"]} 装等价技能')
+
+
 def flow_docs(f, root, branch, period, store=''):
     """按流程算文档目录。"""
     root = Path(root)

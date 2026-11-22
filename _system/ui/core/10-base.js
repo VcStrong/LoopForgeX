@@ -45,7 +45,7 @@ function kbAsk(msg,o={}){return new Promise(done=>{
   if(i)i.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();fin()}};
   d.onclose=()=>done(val);d.showModal();if(i){i.focus();i.select()}else d.querySelector('#kbAskOk').focus()})}
 const kbConfirm=(msg,o)=>kbAsk(msg,o), kbPrompt=(msg,def,o)=>kbAsk(msg,{...o,input:true,def});
-// 统一请求（REQ-031）：超过 300ms 顶部出加载条；401 跳登录；待改密码跳改密码；403 / 冲突 / 5xx / 断网在页面顶部提示 error 原文，不整页崩溃。
+// 统一请求：模拟层（05-mock.js，?mock=1）/ 超过 300ms 顶部加载条 / 401 跳登录 / 待改密码跳改密码 / 403·冲突·5xx·断网顶部提示 error 原文（REQ-031）
 // 出错照旧抛 Error（e.status 状态码、e.need 要补的信息），调用方自己 toast 的不受影响
 let kbBusyN=0,kbBusyT=null;
 function kbBusy(on){kbBusyN=Math.max(0,kbBusyN+(on?1:-1));const b=document.getElementById('kbBusy');
@@ -59,9 +59,11 @@ function kbBanner(msg,o={}){let b=document.getElementById('kbBanner');if(!b)retu
   const x=b.querySelector('button');if(x)x.onclick=()=>{b.hidden=true;b.dataset.kind=''};
   clearTimeout(b._t);if(o.kind!=='offline')b._t=setTimeout(()=>{if(b.dataset.kind!=='offline'){b.hidden=true;b.dataset.kind=''}},o.ms||10000)}
 async function api(u,opt){
+  const mk=KBMock.handle(u,opt);if(mk)return mk;
   let r,j;kbBusy(true);
-  try{r=await fetch(u,opt)}catch(err){kbBusy(false);kbBanner('连不上知识库：检查网络或知识库是否还在运行');const e=new Error('连不上知识库');e.status=0;throw e}
+  try{r=await fetch(u,opt)}catch(err){kbBusy(false);typeof netDown==='function'&&netDown(true);kbBanner('连不上知识库：检查网络或知识库是否还在运行',{kind:'offline'});const e=new Error('连不上知识库');e.status=0;e.net=true;throw e}
   try{j=await r.json()}catch(_){j={error:r.ok?'':`服务返回 ${r.status}`}}finally{kbBusy(false)}
+  typeof netDown==='function'&&netDown(false);
   if(r.status===401&&j.login){location.href='/login';throw new Error('要先登录')}
   if(r.status===403&&j.mustChangePassword){location.href='/login#change';throw new Error(j.error||'先修改初始密码')}
   if(!r.ok){const e=new Error(j.error||r.status);e.need=j.need;e.status=r.status;

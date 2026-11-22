@@ -150,6 +150,7 @@ async function devBox(name){
   const acts=v['动作'];
   const barHtml=`<div class="top"><b>会话</b>${sess}<span class="sp"></span>
  <label class="small mut" title="这一期 AI 开发用的引擎（全栈各端没单独指定时也用它）；在「⚙ 设置」里管理">AI <select id="dvEng" ${run?'disabled':''}><option value="">默认（${esc(v['默认引擎'])}）</option>${v['引擎列表'].map(x=>`<option value="${esc(x.id)}" ${x.id===v['引擎']?'selected':''}>${esc(x['名称'])}</option>`).join('')}</select></label>
+ ${v['命令告警']?`<span class="small" style="color:var(--warn)" title="${esc(v['命令告警'])}">⚠ 流程用的 /${esc((v['流程依赖命令']||[]).slice(0,3).join('、/'))}${(v['流程依赖命令']||[]).length>3?'…':''} 是 Claude 专有，当前引擎没有，可能走不下去（悬停看建议）</span>`:''}
  ${(u=>`<label class="small mut" title="角色团：后台会话按场景请专家子 agent（产品经理、架构师…）出意见；Claude 用子 agent，其他引擎用内联专家意见。全局开关、安装 / 移除在「⚙ 设置 → 角色团」">🧑‍🤝‍🧑 <select id="dvTeam"><option value="跟随" ${v['角色团']!=='关'?'selected':''}>跟随全局（${v['角色团全局']?'开':'关'}）</option><option value="关" ${v['角色团']==='关'?'selected':''}>关</option></select>${
    v['角色团']!=='关'&&v['角色团全局']&&!v['角色团引擎支持']?' <span style="color:var(--warn)">这一期的引擎把角色团关了</span>':''}${
    u['合计']?` <span title="${esc(Object.entries(u['按角色']||{}).map(([k,n])=>k+' '+n).join('、'))}">本期已派 ${u['合计']} 次</span>`:''}</label>`)(v['角色调用']||{合计:0})}
@@ -200,8 +201,12 @@ async function devBox(name){
       try{if($('#dvD').checked!==v['免打扰'])await post('/api/dnd',{period:name,on:$('#dvD').checked});
         await devStart({period:name,confirm:$('#dvC').value,note:$('#dvN').value})}
       catch(e){toast(e.message);b.disabled=false;b.textContent='▶ 确认开始'}};$('#dvC').focus()};
-  const tg=$('#dvTeam');if(tg)tg.onchange=async()=>{try{const r=await post('/api/period/team',{period:name,mode:tg.value});toast(r.msg);devBox(name)}catch(e){toast(e.message)}};
-  const eg=$('#dvEng');if(eg)eg.onchange=async()=>{try{const r=await post('/api/period/engine',{period:name,id:eg.value});toast(r.msg);devBox(name)}catch(e){toast(e.message)}};
+  const tg=$('#dvTeam');if(tg)tg.onchange=async()=>{try{const r=await post('/api/period/team',{period:name,mode:tg.value});toast(r.msg);
+    tg.blur();devPending='';await devBox(name)}catch(e){toast(e.message)}};
+  const eg=$('#dvEng');if(eg)eg.onchange=async()=>{try{const r=await post('/api/period/engine',{period:name,id:eg.value});toast(r.msg);
+    // 下拉还聚焦时 devBox 会把刷新推迟到 focusout，告警会停留在旧引擎上；这里主动收起焦点、清掉挂起的刷新，
+    // 并按本期新引擎重画开发面板和全栈各端（各端的告警用 role_engine，也会跟本期引擎走）。
+    eg.blur();devPending='';await devBox(name);if($('#stackBox'))stackBox(name)}catch(e){toast(e.message)}};
   const fe=$('#dvFlowEnd');if(fe)fe.onclick=async()=>{if(!await kbConfirm('取消这一期统一指定的流程？之后每个端按「全栈 → 各端」里选的流程（没选就自动匹配）。'))return;
     try{const r=await post('/api/period/flow',{period:name,id:''});toast(r.msg);devBox(name);stackBox(name)}catch(e){toast(e.message)}};
   const fg=$('#dvFlowGo');if(fg)fg.onclick=()=>{const t=document.querySelector('[data-tab="stack"]');if(t)t.click();const p=document.querySelector('[data-pane="stack"]');if(p)p.scrollIntoView({block:'start'})};

@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from kblib.core.common import KBError, PERIODS, now, read_text
 from kblib.core.periods import load_meta, log, period_dir, period_names, save_meta
-from kblib.ai.flows import BUILTIN_FLOWS, flow_for, flow_progress, flow_text, flows, get_flow
+from kblib.ai.flows import BUILTIN_FLOWS, claude_cmds, cmd_warning, flow_for, flow_progress, flow_text, flows, get_flow
 from kblib.ai.engines import engine_bin, engines, get_engine, period_engine
 from kblib.ai import team
 from kblib.ai.devprep import _git
@@ -780,6 +780,9 @@ def dev_overview(period):
             '引擎列表': [{'id': x['id'], '名称': x['名称']} for x in engines()],
             '角色团': m.get('角色团') or '跟随', '角色调用': team.team_usage(m), '角色团全局': team.team_settings()['开启'],
             '角色团引擎支持': bool(team.team_mode(period_engine(m))), '角色团方式': team.team_mode(period_engine(m)),
+            # 告警要按「现在改了引擎后、下一次开始开发会用哪个引擎」算，和 dev_start 一致：
+            # 不能用 period_engine(m)——它优先取上次会话记下的 开发会话.引擎，换引擎后还是旧的，告警永远不变。
+            '流程依赖命令': claude_cmds(session_flow(m)), '命令告警': cmd_warning(session_flow(m), period_engine(dict(m, 开发会话={}))),
             '待确认': m.get('待确认') or [], '对话': (m.get('对话') or [])[-8:], '设备': devices(d.name) if _adb() else None,
             '非阻断问题': m.get('非阻断问题') or [], '复测': retest_info(d, m),
             '代码基线': timing.baseline_text(m.get('代码基线')), '代码基线详情': (m.get('代码基线') or {}).get('记录', ''),

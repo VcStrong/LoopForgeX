@@ -205,13 +205,24 @@ def api_overview():
             'entries': kb.plugin_entries(), 'auth': kb.auth_required()}
 
 
+def _core_js_version():
+    """core.js 由 ui/core/*.js 现拼；拿这些文件的修改时间做脚本版本号，改了 JS 浏览器一定重新拉。
+    页面是哈希路由的 SPA，用户常开着一个标签页很久；没有 ?v= 时它可能一直跑旧 JS，改了功能像没生效。"""
+    h = hashlib.sha1()
+    for p in sorted((UI_DIR / 'core').glob('*.js')):
+        h.update(p.name.encode('utf-8'))
+        h.update(str(p.stat().st_mtime_ns).encode('ascii'))
+    return h.hexdigest()[:10]
+
+
 def ui_page(want=''):
     """首页按界面模板给整站：经典 → web.html；其他 → ui/<目录>/index.html（没有就退回 web.html）。
     want：?ui= 临时指定（目录名或模板名，如 command / 指挥台 / classic），不改设置。"""
     t = (kb.ui_dir(want) if want else None) or kb.ui_dir(kb.ui_template()) or kb.CLASSIC
     d = t['目录']
     f = UI_DIR / d / 'index.html'
-    return f.read_bytes() if d != 'classic' and f.is_file() else PAGE.read_bytes()
+    body = f.read_bytes() if d != 'classic' and f.is_file() else PAGE.read_bytes()
+    return body.replace(b'/ui/core.js', f'/ui/core.js?v={_core_js_version()}'.encode('ascii'))
 
 
 def ui_file(rel):
