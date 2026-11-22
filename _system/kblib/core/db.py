@@ -20,6 +20,7 @@ import re
 import sqlite3
 import threading
 import time
+import weakref
 from contextlib import contextmanager
 from decimal import Decimal
 from functools import lru_cache
@@ -32,6 +33,8 @@ URL_FILE = SYS / 'db.url'
 _LOCAL = threading.local()
 _INIT_LOCK = threading.Lock()
 _READY = set()
+_CONNS = {}                 # id(conn) -> (线程弱引用, conn)
+_CONNS_LOCK = threading.Lock()
 
 
 class DBBusy(Exception):
@@ -467,14 +470,29 @@ def _open(url):
     return _Conn(url)
 
 
+def _sweep_dead():
+    """关掉已结束线程留下的连接。sqlite 连接自带引用环，线程结束后要等垃圾回收才释放，
+    网页每个请求一个线程，攒多了会把文件句柄用光（launchd 默认上限 256）。"""
+    with _CONNS_LOCK:
+        dead = [k for k, (t, _) in _CONNS.items() if not (t() and t().is_alive())]
+        olds = [_CONNS.pop(k)[1] for k in dead]
+    for c in olds:
+        c.close()
+
+
 def conn():
     key = db_url()
     c = getattr(_LOCAL, 'c', None)
     if c is None or getattr(_LOCAL, 'key', None) != key:
+        _sweep_dead()
         if c is not None:
+            with _CONNS_LOCK:
+                _CONNS.pop(id(c), None)
             c.close()
         c = _open(key)
         _LOCAL.c, _LOCAL.key = c, key
+        with _CONNS_LOCK:
+            _CONNS[id(c)] = (weakref.ref(threading.current_thread()), c)
     if key not in _READY:
         with _INIT_LOCK:
             if key not in _READY:
@@ -487,6 +505,8 @@ def reset_conn():
     """KB_ROOT / 数据库换了（测试、kb restore、kb db use）：丢掉本线程连接。"""
     c = getattr(_LOCAL, 'c', None)
     if c is not None:
+        with _CONNS_LOCK:
+            _CONNS.pop(id(c), None)
         c.close()
     _LOCAL.c = None
     _READY.discard(db_url())
